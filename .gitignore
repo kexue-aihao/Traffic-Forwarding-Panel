@@ -1,0 +1,6 @@
+.agents/
+.codex/
+bin/
+dist/
+tmp/
+*.log

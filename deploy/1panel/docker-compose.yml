@@ -1,0 +1,36 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${PANEL_DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${PANEL_DB_NAME}
+      MYSQL_USER: ${PANEL_DB_USER}
+      MYSQL_PASSWORD: ${PANEL_DB_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+
+  trafficpanel:
+    image: ${PANEL_IMAGE:-trafficpanel:latest}
+    restart: always
+    depends_on:
+      - mysql
+    environment:
+      TP_MODE: server
+      TP_HTTP_ADDR: :8080
+      TP_BASE_URL: ${PANEL_BASE_URL}
+      TP_DATABASE_DSN: ${PANEL_DB_USER}:${PANEL_DB_PASSWORD}@tcp(mysql:3306)/${PANEL_DB_NAME}?parseTime=true&charset=utf8mb4&loc=Local
+      TP_MASTER_SECRET: ${PANEL_MASTER_SECRET}
+      TP_BOOTSTRAP_ADMIN_USER: ${PANEL_ADMIN_USER}
+      TP_BOOTSTRAP_ADMIN_PASS: ${PANEL_ADMIN_PASSWORD}
+      TP_EPAY_API_URL: ${PANEL_EPAY_API_URL}
+      TP_EPAY_PID: ${PANEL_EPAY_PID}
+      TP_EPAY_KEY: ${PANEL_EPAY_KEY}
+      TP_EPAY_TYPE: ${PANEL_EPAY_TYPE}
+      TP_BEPUSDT_API_URL: ${PANEL_BEPUSDT_API_URL}
+      TP_BEPUSDT_PID: ${PANEL_BEPUSDT_PID}
+      TP_BEPUSDT_KEY: ${PANEL_BEPUSDT_KEY}
+      TP_BEPUSDT_TYPE: ${PANEL_BEPUSDT_TYPE}
+    ports:
+      - ${PANEL_HTTP_PORT}:8080

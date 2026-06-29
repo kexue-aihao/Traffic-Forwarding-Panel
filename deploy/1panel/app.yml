@@ -1,0 +1,21 @@
+name: trafficpanel
+tags:
+  - Network
+  - Proxy
+title: Traffic Panel
+description: MySQL-backed high-performance traffic forwarding panel with admin/user portals and node agent.
+additionalProperties:
+  key: trafficpanel
+  name: Traffic Panel
+  tags:
+    - WebSite
+    - Tool
+  shortDescZh: 流量转发面板
+  shortDescEn: Traffic forwarding panel
+  type: tool
+  crossVersionUpdate: true
+  limit: 0
+  website: https://github.com/bqlpfy/flux-panel
+  github: https://github.com/bqlpfy/flux-panel
+  document: https://github.com/bqlpfy/flux-panel
+
