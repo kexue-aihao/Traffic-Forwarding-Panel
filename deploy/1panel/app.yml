@@ -15,7 +15,6 @@ additionalProperties:
   type: tool
   crossVersionUpdate: true
   limit: 0
-  website: https://github.com/bqlpfy/flux-panel
-  github: https://github.com/bqlpfy/flux-panel
-  document: https://github.com/bqlpfy/flux-panel
-
+  website: https://github.com/kexue-aihao/Traffic-Forwarding-Panel
+  github: https://github.com/kexue-aihao/Traffic-Forwarding-Panel
+  document: https://github.com/kexue-aihao/Traffic-Forwarding-Panel/blob/master/deploy/1panel/README.md

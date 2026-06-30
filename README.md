@@ -181,16 +181,27 @@ MYSQL_PASSWORD=trafficpanel_pass
 
 - `deploy/1panel/app.yml`
 - `deploy/1panel/docker-compose.yml`
+- `deploy/1panel/README.md`
+
+GitHub Actions 在 `master` 推送后会自动构建并推送 Docker 镜像。1Panel 可以直接拉取镜像并通过容器编排启动。
+
+默认镜像：
+
+```text
+ghcr.io/kexue-aihao/traffic-forwarding-panel:latest
+```
 
 部署步骤：
 
-1. 构建或推送 `linux/amd64,linux/arm64` 的 `trafficpanel:latest` 镜像。
-2. 在 1Panel 中创建本地应用或自定义 Compose 应用。
-3. 使用 `deploy/1panel/docker-compose.yml`。
-4. 配置以下变量：
+1. 登录 1Panel。
+2. 打开「容器」->「镜像」->「拉取镜像」。
+3. 拉取 `ghcr.io/kexue-aihao/traffic-forwarding-panel:latest`。
+4. 打开「容器」->「编排」，新建 `trafficpanel` 编排。
+5. 使用 `deploy/1panel/docker-compose.yml`。
+6. 配置以下变量：
 
 ```sh
-PANEL_IMAGE=trafficpanel:latest
+PANEL_IMAGE=ghcr.io/kexue-aihao/traffic-forwarding-panel:latest
 PANEL_HTTP_PORT=8080
 PANEL_BASE_URL=https://panel.example.com
 PANEL_MASTER_SECRET=replace-with-long-random-secret
@@ -203,7 +214,17 @@ PANEL_DB_USER=trafficpanel
 PANEL_DB_PASSWORD=replace-db-password
 ```
 
-5. 在 1Panel 网站中配置反向代理到 `127.0.0.1:8080`，并绑定 HTTPS。
+7. 启动编排，确认 `trafficpanel-trafficpanel` 和 `trafficpanel-mysql` 容器都在运行。
+8. 打开「网站」-> 新建「反向代理」网站。
+9. 主域名填写 `panel.example.com`，代理地址填写：
+
+```text
+http://127.0.0.1:8080
+```
+
+10. 绑定 SSL 证书，并确保 `PANEL_BASE_URL` 与最终访问地址一致。
+
+后续升级时，推送代码到 `master` 后等待 GHCR 镜像构建完成，在 1Panel 重新拉取 `latest` 镜像，然后重建/重启编排即可。
 
 该部署方式与 1Panel 官方 Docker Compose 应用模型一致。官方仓库：[1Panel-dev/1Panel](https://github.com/1Panel-dev/1Panel)。
 
@@ -621,16 +642,27 @@ The repository includes 1Panel custom app files:
 
 - `deploy/1panel/app.yml`
 - `deploy/1panel/docker-compose.yml`
+- `deploy/1panel/README.md`
+
+GitHub Actions builds and pushes the Docker image after every `master` push. 1Panel can pull that image directly and start it with Compose.
+
+Default image:
+
+```text
+ghcr.io/kexue-aihao/traffic-forwarding-panel:latest
+```
 
 Steps:
 
-1. Build or publish a `trafficpanel:latest` image for `linux/amd64,linux/arm64`.
-2. Create a local app or custom Compose app in 1Panel.
-3. Use `deploy/1panel/docker-compose.yml`.
-4. Configure these variables:
+1. Sign in to 1Panel.
+2. Open `Container` -> `Images` -> `Pull Image`.
+3. Pull `ghcr.io/kexue-aihao/traffic-forwarding-panel:latest`.
+4. Open `Container` -> `Compose` and create a `trafficpanel` project.
+5. Use `deploy/1panel/docker-compose.yml`.
+6. Configure these variables:
 
 ```sh
-PANEL_IMAGE=trafficpanel:latest
+PANEL_IMAGE=ghcr.io/kexue-aihao/traffic-forwarding-panel:latest
 PANEL_HTTP_PORT=8080
 PANEL_BASE_URL=https://panel.example.com
 PANEL_MASTER_SECRET=replace-with-long-random-secret
@@ -643,7 +675,17 @@ PANEL_DB_USER=trafficpanel
 PANEL_DB_PASSWORD=replace-db-password
 ```
 
-5. Configure a 1Panel website reverse proxy to `127.0.0.1:8080` and enable HTTPS.
+7. Start the Compose project and confirm both `trafficpanel-trafficpanel` and `trafficpanel-mysql` are running.
+8. Open `Websites` and create a reverse proxy website.
+9. Set the domain to `panel.example.com` and the proxy target to:
+
+```text
+http://127.0.0.1:8080
+```
+
+10. Bind an SSL certificate and make sure `PANEL_BASE_URL` matches the public URL.
+
+For upgrades, push to `master`, wait for the GHCR image build, pull `latest` again in 1Panel, then recreate or restart the Compose project.
 
 This follows the Docker Compose application model used by the official 1Panel project. Official repository: [1Panel-dev/1Panel](https://github.com/1Panel-dev/1Panel).
 

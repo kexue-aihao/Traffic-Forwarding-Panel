@@ -12,7 +12,7 @@ services:
       - ./data/mysql:/var/lib/mysql
 
   trafficpanel:
-    image: ${PANEL_IMAGE:-trafficpanel:latest}
+    image: ${PANEL_IMAGE:-ghcr.io/kexue-aihao/traffic-forwarding-panel:latest}
     restart: always
     depends_on:
       - mysql
