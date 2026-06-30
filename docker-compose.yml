@@ -31,9 +31,10 @@ services:
       TP_APP_NAME: Traffic Panel
       TP_BASE_URL: ${TP_BASE_URL:-http://127.0.0.1:8080}
       TP_DATABASE_DSN: ${MYSQL_USER:-trafficpanel}:${MYSQL_PASSWORD:-trafficpanel_pass}@tcp(mysql:3306)/${MYSQL_DATABASE:-traffic_panel}?parseTime=true&charset=utf8mb4&loc=Local
-      TP_MASTER_SECRET: ${TP_MASTER_SECRET:-change-me}
+      TP_MASTER_SECRET: ${TP_MASTER_SECRET:?set TP_MASTER_SECRET to a long random value}
+      TP_ALLOW_INSECURE_DEFAULTS: ${TP_ALLOW_INSECURE_DEFAULTS:-false}
       TP_BOOTSTRAP_ADMIN_USER: ${TP_BOOTSTRAP_ADMIN_USER:-admin}
-      TP_BOOTSTRAP_ADMIN_PASS: ${TP_BOOTSTRAP_ADMIN_PASS:-admin123456}
+      TP_BOOTSTRAP_ADMIN_PASS: ${TP_BOOTSTRAP_ADMIN_PASS:?set TP_BOOTSTRAP_ADMIN_PASS to a strong password}
       TP_EPAY_API_URL: ${TP_EPAY_API_URL:-}
       TP_EPAY_PID: ${TP_EPAY_PID:-}
       TP_EPAY_KEY: ${TP_EPAY_KEY:-}

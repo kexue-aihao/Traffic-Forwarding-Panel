@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"trafficpanel/internal/domain"
@@ -120,7 +122,7 @@ func (p *GenericRedirectProvider) ParseNotify(_ context.Context, body []byte, fo
 	return ProviderNotify{
 		OrderNo:     orderNo,
 		TradeNo:     tradeNo,
-		AmountCents: 0,
+		AmountCents: amountCentsFromForm(form),
 		Status:      status,
 		Raw:         raw.String(),
 	}, nil
@@ -180,8 +182,13 @@ func (p *SignedFormProvider) CreateOrder(_ context.Context, order PaymentOrderIn
 }
 
 func (p *SignedFormProvider) ParseNotify(_ context.Context, body []byte, form url.Values) (ProviderNotify, error) {
-	if p.key != "" && form.Get("sign") != "" && !strings.EqualFold(form.Get("sign"), md5Sign(form, p.key)) {
-		return ProviderNotify{}, errors.New("invalid payment signature")
+	if p.key != "" {
+		if form.Get("sign") == "" {
+			return ProviderNotify{}, errors.New("missing payment signature")
+		}
+		if !strings.EqualFold(form.Get("sign"), md5Sign(form, p.key)) {
+			return ProviderNotify{}, errors.New("invalid payment signature")
+		}
 	}
 	status := domain.PaymentPending
 	if strings.EqualFold(form.Get("trade_status"), "TRADE_SUCCESS") || strings.EqualFold(form.Get("trade_status"), "success") || strings.EqualFold(form.Get("status"), "success") {
@@ -195,7 +202,7 @@ func (p *SignedFormProvider) ParseNotify(_ context.Context, body []byte, form ur
 	return ProviderNotify{
 		OrderNo:     firstNonEmpty(form.Get("out_trade_no"), form.Get("order_no")),
 		TradeNo:     firstNonEmpty(form.Get("trade_no"), form.Get("transaction_id")),
-		AmountCents: 0,
+		AmountCents: amountCentsFromForm(form),
 		Status:      status,
 		Raw:         raw,
 	}, nil
@@ -216,6 +223,27 @@ func md5Sign(values url.Values, key string) string {
 	}
 	sum := md5.Sum([]byte(strings.Join(parts, "&") + key))
 	return fmt.Sprintf("%x", sum)
+}
+
+func amountCentsFromForm(form url.Values) int64 {
+	for _, key := range []string{"amount_cents", "amount", "money", "total_fee"} {
+		value := strings.TrimSpace(form.Get(key))
+		if value == "" {
+			continue
+		}
+		if key == "amount_cents" {
+			cents, err := strconv.ParseInt(value, 10, 64)
+			if err == nil && cents > 0 {
+				return cents
+			}
+			continue
+		}
+		amount, err := strconv.ParseFloat(value, 64)
+		if err == nil && amount > 0 {
+			return int64(math.Round(amount * 100))
+		}
+	}
+	return 0
 }
 
 func firstNonEmpty(values ...string) string {

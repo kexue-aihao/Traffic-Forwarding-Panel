@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -76,6 +77,70 @@ func TestUDPForwarderRelaysDatagrams(t *testing.T) {
 	}
 	if active.Load() != 1 {
 		t.Fatalf("expected one active udp session, got %d", active.Load())
+	}
+}
+
+func TestTCPForwarderHonorsMaxConn(t *testing.T) {
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen target tcp: %v", err)
+	}
+	defer target.Close()
+
+	hold := make(chan struct{})
+	defer close(hold)
+	go func() {
+		for {
+			conn, err := target.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				<-hold
+			}(conn)
+		}
+	}()
+
+	forwarder := newLocalForwarder(nil, config.Config{})
+	service := domain.ForwardService{
+		ServiceKey: "tcp-max-test",
+		Protocol:   domain.ProtocolTCP,
+		ListenAddr: "127.0.0.1:0",
+		TargetAddr: target.Addr().String(),
+		MaxConn:    1,
+	}
+	if err := forwarder.startService(service); err != nil {
+		t.Fatalf("start tcp service: %v", err)
+	}
+	defer forwarder.stopService(service.ServiceKey)
+
+	forwarder.mu.Lock()
+	listenAddr := forwarder.tcpListeners[service.ServiceKey].Addr().String()
+	forwarder.mu.Unlock()
+
+	first, err := net.Dial("tcp", listenAddr)
+	if err != nil {
+		t.Fatalf("dial first tcp client: %v", err)
+	}
+	defer first.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	second, err := net.Dial("tcp", listenAddr)
+	if err != nil {
+		t.Fatalf("dial second tcp client: %v", err)
+	}
+	defer second.Close()
+	if err := second.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	buf := make([]byte, 1)
+	_, err = second.Read(buf)
+	if err == nil || err == io.EOF {
+		return
+	}
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		t.Fatal("second tcp connection stayed open despite max_conn=1")
 	}
 }
 

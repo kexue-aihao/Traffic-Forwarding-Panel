@@ -32,10 +32,26 @@ func (a *App) EnsureSchema(ctx context.Context) error {
 }
 
 func (a *App) Bootstrap(ctx context.Context) error {
+	if err := a.validateStartupSecurity(); err != nil {
+		return err
+	}
 	if err := a.store.BootstrapAdmin(ctx, a.cfg.BootstrapAdminUser, a.cfg.BootstrapAdminPass); err != nil {
 		return err
 	}
 	return a.ensureDefaultPaymentChannels(ctx)
+}
+
+func (a *App) validateStartupSecurity() error {
+	if a.cfg.AllowInsecureDefaults {
+		return nil
+	}
+	if a.cfg.MasterSecret == "change-me-in-production" || a.cfg.MasterSecret == "change-me" {
+		return errors.New("TP_MASTER_SECRET must be changed or TP_ALLOW_INSECURE_DEFAULTS=true must be set for development")
+	}
+	if a.cfg.BootstrapAdminPass == "admin123456" {
+		return errors.New("TP_BOOTSTRAP_ADMIN_PASS must be changed or TP_ALLOW_INSECURE_DEFAULTS=true must be set for development")
+	}
+	return nil
 }
 
 func (a *App) ResolveSession(ctx context.Context, token string) (*domain.Session, error) {
@@ -249,6 +265,13 @@ func (a *App) ListPaymentOrdersByUser(ctx context.Context, userID int64) ([]doma
 }
 
 func (a *App) CreateUser(ctx context.Context, username, password string, quotaMB int64, expiresAt *time.Time) (int64, error) {
+	username = strings.TrimSpace(username)
+	if username == "" || password == "" {
+		return 0, errors.New("username and password are required")
+	}
+	if quotaMB < 0 {
+		return 0, errors.New("flow quota cannot be negative")
+	}
 	hash, err := security.HashPassword(password)
 	if err != nil {
 		return 0, err
@@ -263,6 +286,14 @@ func (a *App) CreateUser(ctx context.Context, username, password string, quotaMB
 }
 
 func (a *App) CreateNode(ctx context.Context, name, host string, port int, secret string) (*domain.Node, error) {
+	name = strings.TrimSpace(name)
+	host = strings.TrimSpace(host)
+	if name == "" || host == "" {
+		return nil, errors.New("node name and host are required")
+	}
+	if port < 0 || port > 65535 {
+		return nil, errors.New("invalid node port")
+	}
 	if strings.TrimSpace(secret) == "" {
 		token, err := security.RandomToken(24)
 		if err != nil {
@@ -293,6 +324,21 @@ func (a *App) CreateNode(ctx context.Context, name, host string, port int, secre
 }
 
 func (a *App) CreateTunnel(ctx context.Context, userID, nodeID int64, name string, protocol domain.Protocol, listenAddr, targetAddr string, maxConn, speedLimitKB int, quotaBytes int64, expiresAt *time.Time, autoPause bool) (int64, string, error) {
+	name = strings.TrimSpace(name)
+	listenAddr = strings.TrimSpace(listenAddr)
+	targetAddr = strings.TrimSpace(targetAddr)
+	if userID <= 0 || nodeID <= 0 {
+		return 0, "", errors.New("user_id and node_id are required")
+	}
+	if name == "" || listenAddr == "" || targetAddr == "" {
+		return 0, "", errors.New("tunnel name, listen_addr and target_addr are required")
+	}
+	if protocol != domain.ProtocolTCP && protocol != domain.ProtocolUDP {
+		return 0, "", errors.New("unsupported protocol")
+	}
+	if maxConn < 0 || speedLimitKB < 0 || quotaBytes < 0 {
+		return 0, "", errors.New("limits cannot be negative")
+	}
 	now := time.Now().UTC()
 	tx, err := a.store.DB().BeginTx(ctx, nil)
 	if err != nil {
@@ -564,9 +610,12 @@ func (a *App) PauseService(ctx context.Context, serviceKey string, reason string
 	if _, err = tx.ExecContext(ctx, `UPDATE tunnels SET status = ?, updated_at = ? WHERE id = ?`, domain.ServicePaused, now, service.TunnelID); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO node_commands(node_id, type, payload_json, status, available_at, created_at) VALUES(?,?,?,?,?,?)`,
-		service.NodeID, domain.CommandPauseService, fmt.Sprintf(`{"service":{"service_key":"%s","tunnel_id":%d,"user_id":%d,"node_id":%d,"protocol":"%s","listen_addr":"%s","target_addr":"%s","status":"%s","max_conn":%d,"speed_limit_kb":%d,"quota_bytes":%d},"reason":%q}`,
-			service.ServiceKey, service.TunnelID, service.UserID, service.NodeID, service.Protocol, service.ListenAddr, service.TargetAddr, domain.ServicePaused, service.MaxConn, service.SpeedLimitKB, service.QuotaBytes, reason), "pending", now, now); err != nil {
+	service.Status = domain.ServicePaused
+	service.PausedReason = reason
+	if err = enqueueNodeCommandTx(ctx, tx, service.NodeID, domain.CommandPauseService, domain.NodeCommandPayload{
+		Service: service,
+		Reason:  reason,
+	}, now); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -594,9 +643,9 @@ func (a *App) ResumeService(ctx context.Context, serviceKey string) error {
 	if _, err = tx.ExecContext(ctx, `UPDATE tunnels SET status = ?, updated_at = ? WHERE id = ?`, domain.ServiceActive, now, service.TunnelID); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO node_commands(node_id, type, payload_json, status, available_at, created_at) VALUES(?,?,?,?,?,?)`,
-		service.NodeID, domain.CommandResumeService, fmt.Sprintf(`{"service":{"service_key":"%s","tunnel_id":%d,"user_id":%d,"node_id":%d,"protocol":"%s","listen_addr":"%s","target_addr":"%s","status":"%s","max_conn":%d,"speed_limit_kb":%d,"quota_bytes":%d}}`,
-			service.ServiceKey, service.TunnelID, service.UserID, service.NodeID, service.Protocol, service.ListenAddr, service.TargetAddr, domain.ServiceActive, service.MaxConn, service.SpeedLimitKB, service.QuotaBytes), "pending", now, now); err != nil {
+	service.Status = domain.ServiceActive
+	service.PausedReason = ""
+	if err = enqueueNodeCommandTx(ctx, tx, service.NodeID, domain.CommandResumeService, domain.NodeCommandPayload{Service: service}, now); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -624,9 +673,8 @@ func (a *App) DeleteService(ctx context.Context, serviceKey string) error {
 	if _, err = tx.ExecContext(ctx, `UPDATE tunnels SET status = ?, updated_at = ? WHERE id = ?`, domain.ServiceClosed, now, service.TunnelID); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO node_commands(node_id, type, payload_json, status, available_at, created_at) VALUES(?,?,?,?,?,?)`,
-		service.NodeID, domain.CommandDeleteService, fmt.Sprintf(`{"service":{"service_key":"%s","tunnel_id":%d,"user_id":%d,"node_id":%d,"protocol":"%s","listen_addr":"%s","target_addr":"%s","status":"%s","max_conn":%d,"speed_limit_kb":%d,"quota_bytes":%d}}`,
-			service.ServiceKey, service.TunnelID, service.UserID, service.NodeID, service.Protocol, service.ListenAddr, service.TargetAddr, domain.ServiceClosed, service.MaxConn, service.SpeedLimitKB, service.QuotaBytes), "pending", now, now); err != nil {
+	service.Status = domain.ServiceClosed
+	if err = enqueueNodeCommandTx(ctx, tx, service.NodeID, domain.CommandDeleteService, domain.NodeCommandPayload{Service: service}, now); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -673,7 +721,7 @@ func (a *App) HandlePaymentNotify(ctx context.Context, channelCode string, body 
 		}
 	}()
 	var order domain.PaymentOrder
-	row := tx.QueryRowContext(ctx, `SELECT id, order_no, user_id, channel, amount_cents, status, pay_url, trade_no, raw_request, raw_notify, paid_at, created_at, updated_at FROM payment_orders WHERE order_no = ?`, notify.OrderNo)
+	row := tx.QueryRowContext(ctx, `SELECT id, order_no, user_id, channel, amount_cents, status, pay_url, trade_no, raw_request, raw_notify, paid_at, created_at, updated_at FROM payment_orders WHERE order_no = ? FOR UPDATE`, notify.OrderNo)
 	var paidAtValue sql.NullTime
 	if scanErr := row.Scan(&order.ID, &order.OrderNo, &order.UserID, &order.Channel, &order.AmountCents, &order.Status, &order.PayURL, &order.TradeNo, &order.RawRequest, &order.RawNotify, &paidAtValue, &order.CreatedAt, &order.UpdatedAt); scanErr != nil {
 		return nil, scanErr
@@ -681,18 +729,27 @@ func (a *App) HandlePaymentNotify(ctx context.Context, channelCode string, body 
 	if paidAtValue.Valid {
 		order.PaidAt = &paidAtValue.Time
 	}
+	if !strings.EqualFold(order.Channel, provider.Code()) {
+		return nil, errors.New("payment channel mismatch")
+	}
+	if notify.AmountCents > 0 && notify.AmountCents != order.AmountCents {
+		return nil, errors.New("payment amount mismatch")
+	}
 	now := time.Now().UTC()
 	paidAt := now
 	if notify.Status == domain.PaymentPaid {
-		if _, err = tx.ExecContext(ctx, `UPDATE payment_orders SET status = ?, trade_no = COALESCE(NULLIF(?, ''), trade_no), raw_notify = ?, paid_at = ?, updated_at = ? WHERE order_no = ?`,
-			domain.PaymentPaid, notify.TradeNo, notify.Raw, paidAt, now, notify.OrderNo); err != nil {
+		if order.Status == domain.PaymentPaid {
+			return &order, tx.Commit()
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE payment_orders SET status = ?, trade_no = COALESCE(NULLIF(?, ''), trade_no), raw_notify = ?, paid_at = ?, updated_at = ? WHERE order_no = ? AND status <> ?`,
+			domain.PaymentPaid, notify.TradeNo, notify.Raw, paidAt, now, notify.OrderNo, domain.PaymentPaid); err != nil {
 			return nil, err
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE users SET balance_cents = balance_cents + ? , updated_at = ? WHERE id = ?`, order.AmountCents, now, order.UserID); err != nil {
 			return nil, err
 		}
 		order.Status = domain.PaymentPaid
-		order.TradeNo = notify.TradeNo
+		order.TradeNo = firstNonEmpty(notify.TradeNo, order.TradeNo)
 		order.RawNotify = notify.Raw
 		order.PaidAt = &paidAt
 	}
@@ -713,6 +770,25 @@ func (a *App) GetUserByID(ctx context.Context, userID int64) (*domain.User, erro
 		user.ExpiresAt = &expires.Time
 	}
 	return &user, nil
+}
+
+func enqueueNodeCommandTx(ctx context.Context, tx *sql.Tx, nodeID int64, typ domain.CommandType, payload any, availableAt time.Time) error {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO node_commands(node_id, type, payload_json, status, available_at, created_at) VALUES(?,?,?,?,?,?)`,
+		nodeID, typ, string(raw), "pending", availableAt, time.Now().UTC())
+	return err
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func serviceKey(userID, nodeID int64, now time.Time) (string, error) {

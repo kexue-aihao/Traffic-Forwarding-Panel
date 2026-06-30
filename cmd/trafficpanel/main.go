@@ -65,6 +65,11 @@ type udpSession struct {
 	once       sync.Once
 }
 
+const (
+	maxJSONBodyBytes          = 1 << 20
+	maxPaymentNotifyBodyBytes = 64 << 10
+)
+
 func main() {
 	cfg := config.Load()
 	if cfg.Mode == "node" {
@@ -386,7 +391,11 @@ func (s *apiServer) handlePayNotify(w http.ResponseWriter, r *http.Request) {
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/pay/")
 	channel := strings.TrimSuffix(path, "/notify")
-	body, _ := io.ReadAll(r.Body)
+	body, err := readLimitedBody(r, maxPaymentNotifyBodyBytes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+		return
+	}
 	form := r.URL.Query()
 	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
 		if parsed, err := url.ParseQuery(string(body)); err == nil {
@@ -488,7 +497,7 @@ func (s *apiServer) readAndAuthNode(w http.ResponseWriter, r *http.Request) ([]b
 		http.Error(w, "invalid node id", http.StatusUnauthorized)
 		return nil, 0, false
 	}
-	body, err := io.ReadAll(r.Body)
+	body, err := readLimitedBody(r, maxJSONBodyBytes)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return nil, 0, false
@@ -724,17 +733,23 @@ func (f *localForwarder) acceptLoop(service domain.ForwardService, ln net.Listen
 
 func (f *localForwarder) handleConn(service domain.ForwardService, inbound net.Conn) {
 	defer inbound.Close()
+	_, _, counter := f.counters(service.ServiceKey)
+	if counter != nil {
+		current := counter.Add(1)
+		if service.MaxConn > 0 && int(current) > service.MaxConn {
+			counter.Add(-1)
+			log.Printf("tcp service %s max connections reached: %d", service.ServiceKey, service.MaxConn)
+			return
+		}
+		defer counter.Add(-1)
+	}
 	outbound, err := net.DialTimeout("tcp", service.TargetAddr, 10*time.Second)
 	if err != nil {
 		log.Printf("dial target failed: %v", err)
 		return
 	}
 	defer outbound.Close()
-	bytesIn, bytesOut, counter := f.counters(service.ServiceKey)
-	if counter != nil {
-		counter.Add(1)
-		defer counter.Add(-1)
-	}
+	bytesIn, bytesOut, _ := f.counters(service.ServiceKey)
 	done := make(chan struct{}, 2)
 	go func() {
 		n, _ := io.Copy(outbound, inbound)
@@ -968,11 +983,24 @@ func bearerToken(r *http.Request) string {
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 	defer r.Body.Close()
-	if err := json.NewDecoder(r.Body).Decode(out); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes))
+	if err := decoder.Decode(out); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return false
 	}
 	return true
+}
+
+func readLimitedBody(r *http.Request, maxBytes int64) ([]byte, error) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("request body too large")
+	}
+	return body, nil
 }
 
 func writeResult(w http.ResponseWriter, value any, err error) {
