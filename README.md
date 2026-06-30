@@ -203,11 +203,12 @@ docker compose down -v
 
 ## 1Panel 部署
 
-仓库提供了 1Panel Compose 文件：
+仓库提供了两份 1Panel Compose 文件：
 
-- `deploy/1panel/docker-compose.yml`
-- `deploy/1panel/app.yml`
-- `deploy/1panel/README.md`
+- `deploy/1panel/docker-compose.yml`：编排内自带 MySQL 容器，数据在当前编排目录的 `./data/mysql`。
+- `deploy/1panel/docker-compose.external-mysql.yml`：不启动 MySQL，连接 1Panel「数据库」功能里创建和管理的 MySQL。
+- `deploy/1panel/app.yml`：1Panel 应用元信息。
+- `deploy/1panel/README.md`：1Panel 简版说明。
 
 默认镜像：
 
@@ -215,7 +216,94 @@ docker compose down -v
 ghcr.io/kexue-aihao/traffic-forwarding-panel:latest
 ```
 
-### 方式一：使用 1Panel 容器编排
+如果你希望 1Panel 能直接备份、查看和管理转发面板数据库，推荐使用 `docker-compose.external-mysql.yml`。
+
+### 方式一：使用 1Panel 托管 MySQL，推荐
+
+这个方式只启动 Traffic Panel 容器，数据库由 1Panel 的「数据库」页面创建和管理。
+
+1. 登录 1Panel。
+2. 打开「数据库」->「MySQL」。
+3. 创建数据库和用户：
+
+```text
+数据库名：traffic_panel
+用户名：trafficpanel
+密码：请替换为强数据库密码
+权限：允许 Traffic Panel 容器访问
+```
+
+4. 记录 MySQL 连接信息：
+
+```text
+主机：PANEL_DB_HOST
+端口：PANEL_DB_PORT，通常是 3306
+数据库名：PANEL_DB_NAME
+用户名：PANEL_DB_USER
+密码：PANEL_DB_PASSWORD
+```
+
+`PANEL_DB_HOST` 取决于 1Panel 的 MySQL 部署方式：
+
+- 如果 1Panel MySQL 和应用容器在同一个 Docker 网络，通常填写 MySQL 容器名或服务名。
+- 如果 MySQL 暴露在宿主机端口，填写宿主机内网 IP，不建议盲目使用 `127.0.0.1`，因为容器内的 `127.0.0.1` 指向容器自身。
+- 如果不确定，优先在 1Panel 的数据库连接信息里查看主机和端口，并确保应用容器能访问该地址。
+
+5. 打开「容器」->「镜像」->「拉取镜像」。
+6. 镜像名填写：
+
+```text
+ghcr.io/kexue-aihao/traffic-forwarding-panel:latest
+```
+
+7. 打开「容器」->「编排」。
+8. 新建编排，名称建议为 `trafficpanel`。
+9. 将 `deploy/1panel/docker-compose.external-mysql.yml` 内容复制进去。
+10. 在编排环境变量中填写：
+
+```env
+PANEL_IMAGE=ghcr.io/kexue-aihao/traffic-forwarding-panel:latest
+PANEL_HTTP_PORT=8080
+PANEL_BASE_URL=http://你的服务器IP:8080
+PANEL_MASTER_SECRET=请替换为至少32位随机字符串
+PANEL_ADMIN_USER=admin
+PANEL_ADMIN_PASSWORD=请替换为强密码
+
+PANEL_DB_HOST=1Panel里的MySQL连接主机
+PANEL_DB_PORT=3306
+PANEL_DB_NAME=traffic_panel
+PANEL_DB_USER=trafficpanel
+PANEL_DB_PASSWORD=请替换为强数据库密码
+
+PANEL_EPAY_API_URL=
+PANEL_EPAY_PID=
+PANEL_EPAY_KEY=
+PANEL_EPAY_TYPE=alipay
+
+PANEL_BEPUSDT_API_URL=
+PANEL_BEPUSDT_PID=
+PANEL_BEPUSDT_KEY=
+PANEL_BEPUSDT_TYPE=usdt
+```
+
+11. 启动编排。
+12. 查看 Traffic Panel 容器日志，确认出现：
+
+```text
+trafficpanel server listening on :8080
+```
+
+13. 浏览器访问：
+
+```text
+http://服务器IP:8080
+```
+
+如果启动时报数据库连接失败，优先检查 `PANEL_DB_HOST` 是否能从容器内部访问。
+
+### 方式二：编排内自带 MySQL
+
+这个方式会额外启动一个 MySQL 容器。数据库数据在编排目录的 `./data/mysql`，不一定会出现在 1Panel「数据库」管理页面中。
 
 1. 登录 1Panel。
 2. 打开「容器」->「镜像」->「拉取镜像」。
