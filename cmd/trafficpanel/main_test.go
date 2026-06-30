@@ -124,7 +124,7 @@ func TestTCPForwarderHonorsMaxConn(t *testing.T) {
 		t.Fatalf("dial first tcp client: %v", err)
 	}
 	defer first.Close()
-	time.Sleep(50 * time.Millisecond)
+	waitForActiveConns(t, forwarder, service.ServiceKey, 1)
 
 	second, err := net.Dial("tcp", listenAddr)
 	if err != nil {
@@ -142,6 +142,23 @@ func TestTCPForwarderHonorsMaxConn(t *testing.T) {
 	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 		t.Fatal("second tcp connection stayed open despite max_conn=1")
 	}
+}
+
+func waitForActiveConns(t *testing.T, forwarder *localForwarder, serviceKey string, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_, _, active := forwarder.counters(serviceKey)
+		if active != nil && active.Load() == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, _, active := forwarder.counters(serviceKey)
+	if active == nil {
+		t.Fatalf("missing active connection counter for %s", serviceKey)
+	}
+	t.Fatalf("active connections = %d, want %d", active.Load(), want)
 }
 
 func mustResolveUDPAddr(t *testing.T, addr string) *net.UDPAddr {
