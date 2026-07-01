@@ -140,6 +140,7 @@ func (s *apiServer) routes() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/api/v1/", s.handleAPIV1)
 	mux.HandleFunc("/", s.handlePage)
 	mux.HandleFunc("/api/admin/login", s.handleAdminLogin)
 	mux.HandleFunc("/api/user/login", s.handleUserLogin)

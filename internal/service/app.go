@@ -27,6 +27,10 @@ func New(cfg config.Config, store *mysql.Store, payments *payment.Registry) *App
 	return &App{cfg: cfg, store: store, payments: payments}
 }
 
+func (a *App) DB() *sql.DB {
+	return a.store.DB()
+}
+
 func (a *App) EnsureSchema(ctx context.Context) error {
 	return a.store.EnsureSchema(ctx)
 }
@@ -118,7 +122,7 @@ func (a *App) DashboardStats(ctx context.Context) (mysql.Summary, error) {
 }
 
 func (a *App) ListUsers(ctx context.Context) ([]domain.User, error) {
-	rows, err := a.store.DB().QueryContext(ctx, `SELECT id, username, password_hash, status, balance_cents, flow_quota_mb, traffic_used_bytes, expires_at, created_at, updated_at FROM users ORDER BY id DESC`)
+	rows, err := a.store.DB().QueryContext(ctx, `SELECT id, username, password_hash, status, balance_cents, flow_quota_mb, traffic_used_bytes, aff_balance_cents, plan_id, user_group_id, max_rules, traffic_enable, auto_renew, telegram_id, invite_code, invited_by_user_id, allow_device, notification_settings_json, expires_at, created_at, updated_at FROM users ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -127,8 +131,24 @@ func (a *App) ListUsers(ctx context.Context) ([]domain.User, error) {
 	for rows.Next() {
 		var item domain.User
 		var expires sql.NullTime
-		if err := rows.Scan(&item.ID, &item.Username, &item.PasswordHash, &item.Status, &item.BalanceCents, &item.FlowQuotaMB, &item.TrafficUsedBytes, &expires, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var planID sql.NullInt64
+		var groupID sql.NullInt64
+		var inviterID sql.NullInt64
+		var trafficEnable bool
+		var autoRenew bool
+		var allowDevice bool
+		var notification sql.NullString
+		if err := rows.Scan(&item.ID, &item.Username, &item.PasswordHash, &item.Status, &item.BalanceCents, &item.FlowQuotaMB, &item.TrafficUsedBytes, &item.AffBalanceCents, &planID, &groupID, &item.MaxRules, &trafficEnable, &autoRenew, &item.TelegramID, &item.InviteCode, &inviterID, &allowDevice, &notification, &expires, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
+		}
+		item.PlanID = sqlNullInt64Ptr(planID)
+		item.UserGroupID = sqlNullInt64Ptr(groupID)
+		item.InvitedByUserID = sqlNullInt64Ptr(inviterID)
+		item.TrafficEnable = trafficEnable
+		item.AutoRenew = autoRenew
+		item.AllowDevice = allowDevice
+		if notification.Valid {
+			item.NotificationSettingsJSON = notification.String
 		}
 		if expires.Valid {
 			item.ExpiresAt = &expires.Time
@@ -160,7 +180,7 @@ func (a *App) ListNodes(ctx context.Context) ([]domain.Node, error) {
 }
 
 func (a *App) ListTunnels(ctx context.Context) ([]domain.Tunnel, error) {
-	rows, err := a.store.DB().QueryContext(ctx, `SELECT id, user_id, node_id, name, protocol, listen_addr, target_addr, max_conn, speed_limit_kb, quota_bytes, used_bytes, expires_at, auto_pause_on_limit, status, created_at, updated_at FROM tunnels ORDER BY id DESC`)
+	rows, err := a.store.DB().QueryContext(ctx, `SELECT id, user_id, node_id, name, protocol, listen_addr, target_addr, listen_host, listen_port, target_host, target_port, device_group_in_id, device_group_out_id, COALESCE(CAST(config_json AS CHAR), ''), folder, show_order, max_conn, speed_limit_kb, quota_bytes, used_bytes, expires_at, auto_pause_on_limit, status, created_at, updated_at FROM tunnels ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -170,9 +190,17 @@ func (a *App) ListTunnels(ctx context.Context) ([]domain.Tunnel, error) {
 		var item domain.Tunnel
 		var expires sql.NullTime
 		var autoPause bool
-		if err := rows.Scan(&item.ID, &item.UserID, &item.NodeID, &item.Name, &item.Protocol, &item.ListenAddr, &item.TargetAddr, &item.MaxConn, &item.SpeedLimitKB, &item.QuotaBytes, &item.UsedBytes, &expires, &autoPause, &item.Status, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var listenPort sql.NullInt64
+		var targetPort sql.NullInt64
+		var deviceGroupIn sql.NullInt64
+		var deviceGroupOut sql.NullInt64
+		if err := rows.Scan(&item.ID, &item.UserID, &item.NodeID, &item.Name, &item.Protocol, &item.ListenAddr, &item.TargetAddr, &item.ListenHost, &listenPort, &item.TargetHost, &targetPort, &deviceGroupIn, &deviceGroupOut, &item.ConfigJSON, &item.Folder, &item.ShowOrder, &item.MaxConn, &item.SpeedLimitKB, &item.QuotaBytes, &item.UsedBytes, &expires, &autoPause, &item.Status, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
+		item.ListenPort = sqlNullIntPtr(listenPort)
+		item.TargetPort = sqlNullIntPtr(targetPort)
+		item.DeviceGroupInID = sqlNullInt64Ptr(deviceGroupIn)
+		item.DeviceGroupOutID = sqlNullInt64Ptr(deviceGroupOut)
 		item.AutoPauseOnLimit = autoPause
 		if expires.Valid {
 			item.ExpiresAt = &expires.Time
@@ -183,7 +211,7 @@ func (a *App) ListTunnels(ctx context.Context) ([]domain.Tunnel, error) {
 }
 
 func (a *App) ListTunnelsByUser(ctx context.Context, userID int64) ([]domain.Tunnel, error) {
-	rows, err := a.store.DB().QueryContext(ctx, `SELECT id, user_id, node_id, name, protocol, listen_addr, target_addr, max_conn, speed_limit_kb, quota_bytes, used_bytes, expires_at, auto_pause_on_limit, status, created_at, updated_at FROM tunnels WHERE user_id = ? ORDER BY id DESC`, userID)
+	rows, err := a.store.DB().QueryContext(ctx, `SELECT id, user_id, node_id, name, protocol, listen_addr, target_addr, listen_host, listen_port, target_host, target_port, device_group_in_id, device_group_out_id, COALESCE(CAST(config_json AS CHAR), ''), folder, show_order, max_conn, speed_limit_kb, quota_bytes, used_bytes, expires_at, auto_pause_on_limit, status, created_at, updated_at FROM tunnels WHERE user_id = ? ORDER BY id DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -193,9 +221,17 @@ func (a *App) ListTunnelsByUser(ctx context.Context, userID int64) ([]domain.Tun
 		var item domain.Tunnel
 		var expires sql.NullTime
 		var autoPause bool
-		if err := rows.Scan(&item.ID, &item.UserID, &item.NodeID, &item.Name, &item.Protocol, &item.ListenAddr, &item.TargetAddr, &item.MaxConn, &item.SpeedLimitKB, &item.QuotaBytes, &item.UsedBytes, &expires, &autoPause, &item.Status, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var listenPort sql.NullInt64
+		var targetPort sql.NullInt64
+		var deviceGroupIn sql.NullInt64
+		var deviceGroupOut sql.NullInt64
+		if err := rows.Scan(&item.ID, &item.UserID, &item.NodeID, &item.Name, &item.Protocol, &item.ListenAddr, &item.TargetAddr, &item.ListenHost, &listenPort, &item.TargetHost, &targetPort, &deviceGroupIn, &deviceGroupOut, &item.ConfigJSON, &item.Folder, &item.ShowOrder, &item.MaxConn, &item.SpeedLimitKB, &item.QuotaBytes, &item.UsedBytes, &expires, &autoPause, &item.Status, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
+		item.ListenPort = sqlNullIntPtr(listenPort)
+		item.TargetPort = sqlNullIntPtr(targetPort)
+		item.DeviceGroupInID = sqlNullInt64Ptr(deviceGroupIn)
+		item.DeviceGroupOutID = sqlNullInt64Ptr(deviceGroupOut)
 		item.AutoPauseOnLimit = autoPause
 		if expires.Valid {
 			item.ExpiresAt = &expires.Time
@@ -760,11 +796,27 @@ func (a *App) HandlePaymentNotify(ctx context.Context, channelCode string, body 
 }
 
 func (a *App) GetUserByID(ctx context.Context, userID int64) (*domain.User, error) {
-	row := a.store.DB().QueryRowContext(ctx, `SELECT id, username, password_hash, status, balance_cents, flow_quota_mb, traffic_used_bytes, expires_at, created_at, updated_at FROM users WHERE id = ?`, userID)
+	row := a.store.DB().QueryRowContext(ctx, `SELECT id, username, password_hash, status, balance_cents, flow_quota_mb, traffic_used_bytes, aff_balance_cents, plan_id, user_group_id, max_rules, traffic_enable, auto_renew, telegram_id, invite_code, invited_by_user_id, allow_device, notification_settings_json, expires_at, created_at, updated_at FROM users WHERE id = ?`, userID)
 	var user domain.User
 	var expires sql.NullTime
-	if err := row.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Status, &user.BalanceCents, &user.FlowQuotaMB, &user.TrafficUsedBytes, &expires, &user.CreatedAt, &user.UpdatedAt); err != nil {
+	var planID sql.NullInt64
+	var groupID sql.NullInt64
+	var inviterID sql.NullInt64
+	var trafficEnable bool
+	var autoRenew bool
+	var allowDevice bool
+	var notification sql.NullString
+	if err := row.Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Status, &user.BalanceCents, &user.FlowQuotaMB, &user.TrafficUsedBytes, &user.AffBalanceCents, &planID, &groupID, &user.MaxRules, &trafficEnable, &autoRenew, &user.TelegramID, &user.InviteCode, &inviterID, &allowDevice, &notification, &expires, &user.CreatedAt, &user.UpdatedAt); err != nil {
 		return nil, err
+	}
+	user.PlanID = sqlNullInt64Ptr(planID)
+	user.UserGroupID = sqlNullInt64Ptr(groupID)
+	user.InvitedByUserID = sqlNullInt64Ptr(inviterID)
+	user.TrafficEnable = trafficEnable
+	user.AutoRenew = autoRenew
+	user.AllowDevice = allowDevice
+	if notification.Valid {
+		user.NotificationSettingsJSON = notification.String
 	}
 	if expires.Valid {
 		user.ExpiresAt = &expires.Time
@@ -780,6 +832,21 @@ func enqueueNodeCommandTx(ctx context.Context, tx *sql.Tx, nodeID int64, typ dom
 	_, err = tx.ExecContext(ctx, `INSERT INTO node_commands(node_id, type, payload_json, status, available_at, created_at) VALUES(?,?,?,?,?,?)`,
 		nodeID, typ, string(raw), "pending", availableAt, time.Now().UTC())
 	return err
+}
+
+func sqlNullInt64Ptr(v sql.NullInt64) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	return &v.Int64
+}
+
+func sqlNullIntPtr(v sql.NullInt64) *int {
+	if !v.Valid {
+		return nil
+	}
+	value := int(v.Int64)
+	return &value
 }
 
 func firstNonEmpty(values ...string) string {

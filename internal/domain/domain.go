@@ -76,16 +76,27 @@ type Admin struct {
 }
 
 type User struct {
-	ID               int64      `json:"id"`
-	Username         string     `json:"username"`
-	PasswordHash     string     `json:"-"`
-	Status           Status     `json:"status"`
-	BalanceCents     int64      `json:"balance_cents"`
-	FlowQuotaMB      int64      `json:"flow_quota_mb"`
-	TrafficUsedBytes int64      `json:"traffic_used_bytes"`
-	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID                       int64      `json:"id"`
+	Username                 string     `json:"username"`
+	PasswordHash             string     `json:"-"`
+	Status                   Status     `json:"status"`
+	BalanceCents             int64      `json:"balance_cents"`
+	FlowQuotaMB              int64      `json:"flow_quota_mb"`
+	TrafficUsedBytes         int64      `json:"traffic_used_bytes"`
+	AffBalanceCents          int64      `json:"aff_balance_cents"`
+	PlanID                   *int64     `json:"plan_id,omitempty"`
+	UserGroupID              *int64     `json:"user_group_id,omitempty"`
+	MaxRules                 int        `json:"max_rules"`
+	TrafficEnable            bool       `json:"traffic_enable"`
+	AutoRenew                bool       `json:"auto_renew"`
+	TelegramID               string     `json:"telegram_id"`
+	InviteCode               string     `json:"invite_code"`
+	InvitedByUserID          *int64     `json:"invited_by_user_id,omitempty"`
+	AllowDevice              bool       `json:"allow_device"`
+	NotificationSettingsJSON string     `json:"notification_settings_json,omitempty"`
+	ExpiresAt                *time.Time `json:"expires_at,omitempty"`
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
 }
 
 type Node struct {
@@ -108,6 +119,15 @@ type Tunnel struct {
 	Protocol         Protocol      `json:"protocol"`
 	ListenAddr       string        `json:"listen_addr"`
 	TargetAddr       string        `json:"target_addr"`
+	ListenHost       string        `json:"listen_host"`
+	ListenPort       *int          `json:"listen_port,omitempty"`
+	TargetHost       string        `json:"target_host"`
+	TargetPort       *int          `json:"target_port,omitempty"`
+	DeviceGroupInID  *int64        `json:"device_group_in_id,omitempty"`
+	DeviceGroupOutID *int64        `json:"device_group_out_id,omitempty"`
+	ConfigJSON       string        `json:"config_json,omitempty"`
+	Folder           string        `json:"folder"`
+	ShowOrder        int           `json:"show_order"`
 	MaxConn          int           `json:"max_conn"`
 	SpeedLimitKB     int           `json:"speed_limit_kb"`
 	QuotaBytes       int64         `json:"quota_bytes"`
@@ -139,6 +159,56 @@ type ForwardService struct {
 	PausedReason string        `json:"paused_reason"`
 	CreatedAt    time.Time     `json:"created_at"`
 	UpdatedAt    time.Time     `json:"updated_at"`
+}
+
+type DeviceGroup struct {
+	ID             int64      `json:"id"`
+	Name           string     `json:"name"`
+	Type           string     `json:"type"`
+	NodeID         *int64     `json:"node_id,omitempty"`
+	Ratio          float64    `json:"ratio"`
+	ConnectHost    string     `json:"connect_host"`
+	PortRangeStart *int       `json:"port_range_start,omitempty"`
+	PortRangeEnd   *int       `json:"port_range_end,omitempty"`
+	ConfigJSON     string     `json:"config_json,omitempty"`
+	ShowOrder      int        `json:"show_order"`
+	DisplayNum     int        `json:"display_num"`
+	HideStatus     bool       `json:"hide_status"`
+	Status         Status     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	DeletedAt      *time.Time `json:"deleted_at,omitempty"`
+}
+
+type Plan struct {
+	ID           int64      `json:"id"`
+	Name         string     `json:"name"`
+	Description  string     `json:"description"`
+	PriceCents   int64      `json:"price_cents"`
+	TrafficMB    int64      `json:"traffic_mb"`
+	DurationDays int        `json:"duration_days"`
+	MaxRules     int        `json:"max_rules"`
+	AllowDevice  bool       `json:"allow_device"`
+	UserGroupID  *int64     `json:"user_group_id,omitempty"`
+	Status       Status     `json:"status"`
+	ShowOrder    int        `json:"show_order"`
+	ConfigJSON   string     `json:"config_json,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	DeletedAt    *time.Time `json:"deleted_at,omitempty"`
+}
+
+type UserGroup struct {
+	ID                int64     `json:"id"`
+	Name              string    `json:"name"`
+	Description       string    `json:"description"`
+	MaxRules          int       `json:"max_rules"`
+	TrafficMultiplier float64   `json:"traffic_multiplier"`
+	PermissionsJSON   string    `json:"permissions_json,omitempty"`
+	ShowOrder         int       `json:"show_order"`
+	Status            Status    `json:"status"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type PaymentChannel struct {

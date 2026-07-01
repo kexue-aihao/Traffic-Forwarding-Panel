@@ -18,6 +18,47 @@ type Store struct {
 	db *sql.DB
 }
 
+type columnMigration struct {
+	Table      string
+	Column     string
+	Definition string
+}
+
+var columnMigrations = []columnMigration{
+	{Table: "users", Column: "aff_balance_cents", Definition: "BIGINT NOT NULL DEFAULT 0"},
+	{Table: "users", Column: "plan_id", Definition: "BIGINT NULL"},
+	{Table: "users", Column: "user_group_id", Definition: "BIGINT NULL"},
+	{Table: "users", Column: "max_rules", Definition: "INT NOT NULL DEFAULT 0"},
+	{Table: "users", Column: "traffic_enable", Definition: "TINYINT(1) NOT NULL DEFAULT 1"},
+	{Table: "users", Column: "auto_renew", Definition: "TINYINT(1) NOT NULL DEFAULT 0"},
+	{Table: "users", Column: "telegram_id", Definition: "VARCHAR(128) NOT NULL DEFAULT ''"},
+	{Table: "users", Column: "invite_code", Definition: "VARCHAR(64) NOT NULL DEFAULT ''"},
+	{Table: "users", Column: "invited_by_user_id", Definition: "BIGINT NULL"},
+	{Table: "users", Column: "allow_device", Definition: "TINYINT(1) NOT NULL DEFAULT 1"},
+	{Table: "users", Column: "notification_settings_json", Definition: "JSON NULL"},
+	{Table: "tunnels", Column: "listen_port", Definition: "INT NULL"},
+	{Table: "tunnels", Column: "listen_host", Definition: "VARCHAR(255) NOT NULL DEFAULT ''"},
+	{Table: "tunnels", Column: "target_host", Definition: "VARCHAR(255) NOT NULL DEFAULT ''"},
+	{Table: "tunnels", Column: "target_port", Definition: "INT NULL"},
+	{Table: "tunnels", Column: "device_group_in_id", Definition: "BIGINT NULL"},
+	{Table: "tunnels", Column: "device_group_out_id", Definition: "BIGINT NULL"},
+	{Table: "tunnels", Column: "config_json", Definition: "JSON NULL"},
+	{Table: "tunnels", Column: "folder", Definition: "VARCHAR(128) NOT NULL DEFAULT ''"},
+	{Table: "tunnels", Column: "show_order", Definition: "INT NOT NULL DEFAULT 0"},
+	{Table: "tunnels", Column: "traffic_reset_at", Definition: "DATETIME(6) NULL"},
+	{Table: "forward_services", Column: "config_json", Definition: "JSON NULL"},
+	{Table: "forward_services", Column: "device_group_in_id", Definition: "BIGINT NULL"},
+	{Table: "forward_services", Column: "device_group_out_id", Definition: "BIGINT NULL"},
+	{Table: "forward_services", Column: "listen_port", Definition: "INT NULL"},
+	{Table: "forward_services", Column: "last_report_at", Definition: "DATETIME(6) NULL"},
+	{Table: "payment_orders", Column: "type", Definition: "VARCHAR(32) NOT NULL DEFAULT 'deposit'"},
+	{Table: "payment_orders", Column: "plan_id", Definition: "BIGINT NULL"},
+	{Table: "payment_orders", Column: "quantity", Definition: "INT NOT NULL DEFAULT 1"},
+	{Table: "payment_orders", Column: "metadata_json", Definition: "JSON NULL"},
+	{Table: "payment_orders", Column: "expired_at", Definition: "DATETIME(6) NULL"},
+	{Table: "payment_orders", Column: "closed_at", Definition: "DATETIME(6) NULL"},
+}
+
 type Summary struct {
 	Admins       int64 `json:"admins"`
 	Users        int64 `json:"users"`
@@ -118,6 +159,32 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("schema statement failed: %w", err)
 		}
+	}
+	for _, migration := range columnMigrations {
+		if err := s.ensureColumn(ctx, migration); err != nil {
+			return err
+		}
+	}
+	for _, stmt := range migrationStatements {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("migration statement failed: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureColumn(ctx context.Context, migration columnMigration) error {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, migration.Table, migration.Column).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check column %s.%s: %w", migration.Table, migration.Column, err)
+	}
+	if count > 0 {
+		return nil
+	}
+	stmt := fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s", migration.Table, migration.Column, migration.Definition)
+	if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", migration.Table, migration.Column, err)
 	}
 	return nil
 }

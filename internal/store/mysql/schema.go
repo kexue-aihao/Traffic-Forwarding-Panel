@@ -155,3 +155,127 @@ var schemaStatements = []string{
 		INDEX idx_audit_logs_action (action)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 }
+
+var migrationStatements = []string{
+	`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version VARCHAR(64) PRIMARY KEY,
+		description VARCHAR(255) NOT NULL,
+		applied_at DATETIME(6) NOT NULL
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	`CREATE TABLE IF NOT EXISTS device_groups (
+		id BIGINT PRIMARY KEY AUTO_INCREMENT,
+		name VARCHAR(128) NOT NULL,
+		type VARCHAR(32) NOT NULL DEFAULT 'node',
+		node_id BIGINT NULL,
+		ratio DECIMAL(10,4) NOT NULL DEFAULT 1.0000,
+		connect_host VARCHAR(255) NOT NULL DEFAULT '',
+		port_range_start INT NULL,
+		port_range_end INT NULL,
+		config_json JSON NULL,
+		show_order INT NOT NULL DEFAULT 0,
+		display_num INT NOT NULL DEFAULT 0,
+		hide_status TINYINT(1) NOT NULL DEFAULT 0,
+		status VARCHAR(16) NOT NULL DEFAULT 'enabled',
+		created_at DATETIME(6) NOT NULL,
+		updated_at DATETIME(6) NOT NULL,
+		deleted_at DATETIME(6) NULL,
+		INDEX idx_device_groups_type (type),
+		INDEX idx_device_groups_node_id (node_id),
+		INDEX idx_device_groups_status (status)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	`CREATE TABLE IF NOT EXISTS plans (
+		id BIGINT PRIMARY KEY AUTO_INCREMENT,
+		name VARCHAR(128) NOT NULL,
+		description TEXT NULL,
+		price_cents BIGINT NOT NULL DEFAULT 0,
+		traffic_mb BIGINT NOT NULL DEFAULT 0,
+		duration_days INT NOT NULL DEFAULT 0,
+		max_rules INT NOT NULL DEFAULT 0,
+		allow_device TINYINT(1) NOT NULL DEFAULT 1,
+		user_group_id BIGINT NULL,
+		status VARCHAR(16) NOT NULL DEFAULT 'enabled',
+		show_order INT NOT NULL DEFAULT 0,
+		config_json JSON NULL,
+		created_at DATETIME(6) NOT NULL,
+		updated_at DATETIME(6) NOT NULL,
+		deleted_at DATETIME(6) NULL,
+		INDEX idx_plans_status (status),
+		INDEX idx_plans_show_order (show_order)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	`CREATE TABLE IF NOT EXISTS user_groups (
+		id BIGINT PRIMARY KEY AUTO_INCREMENT,
+		name VARCHAR(128) NOT NULL,
+		description TEXT NULL,
+		max_rules INT NOT NULL DEFAULT 0,
+		traffic_multiplier DECIMAL(10,4) NOT NULL DEFAULT 1.0000,
+		permissions_json JSON NULL,
+		show_order INT NOT NULL DEFAULT 0,
+		status VARCHAR(16) NOT NULL DEFAULT 'enabled',
+		created_at DATETIME(6) NOT NULL,
+		updated_at DATETIME(6) NOT NULL,
+		INDEX idx_user_groups_status (status)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	`CREATE TABLE IF NOT EXISTS redeem_codes (
+		id BIGINT PRIMARY KEY AUTO_INCREMENT,
+		code VARCHAR(64) NOT NULL UNIQUE,
+		type VARCHAR(32) NOT NULL DEFAULT 'balance',
+		amount_cents BIGINT NOT NULL DEFAULT 0,
+		plan_id BIGINT NULL,
+		traffic_mb BIGINT NOT NULL DEFAULT 0,
+		duration_days INT NOT NULL DEFAULT 0,
+		max_use INT NOT NULL DEFAULT 1,
+		used_count INT NOT NULL DEFAULT 0,
+		status VARCHAR(16) NOT NULL DEFAULT 'enabled',
+		expires_at DATETIME(6) NULL,
+		created_by_admin_id BIGINT NULL,
+		created_at DATETIME(6) NOT NULL,
+		updated_at DATETIME(6) NOT NULL,
+		INDEX idx_redeem_codes_status (status)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	`CREATE TABLE IF NOT EXISTS redeem_logs (
+		id BIGINT PRIMARY KEY AUTO_INCREMENT,
+		redeem_code_id BIGINT NOT NULL,
+		user_id BIGINT NOT NULL,
+		order_id BIGINT NULL,
+		created_at DATETIME(6) NOT NULL,
+		UNIQUE KEY uniq_redeem_user_code (redeem_code_id, user_id)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	`CREATE TABLE IF NOT EXISTS aff_logs (
+		id BIGINT PRIMARY KEY AUTO_INCREMENT,
+		user_id BIGINT NOT NULL,
+		from_user_id BIGINT NULL,
+		order_id BIGINT NULL,
+		type VARCHAR(32) NOT NULL,
+		amount_cents BIGINT NOT NULL DEFAULT 0,
+		rate DECIMAL(10,4) NOT NULL DEFAULT 0,
+		status VARCHAR(16) NOT NULL DEFAULT 'pending',
+		detail_json JSON NULL,
+		created_at DATETIME(6) NOT NULL,
+		accounted_at DATETIME(6) NULL,
+		INDEX idx_aff_logs_user_id (user_id),
+		INDEX idx_aff_logs_status (status)
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	`CREATE TABLE IF NOT EXISTS system_kv (
+		key_name VARCHAR(128) PRIMARY KEY,
+		value_json JSON NULL,
+		value_text LONGTEXT NULL,
+		scope VARCHAR(32) NOT NULL DEFAULT 'global',
+		updated_by_admin_id BIGINT NULL,
+		created_at DATETIME(6) NOT NULL,
+		updated_at DATETIME(6) NOT NULL
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	`CREATE TABLE IF NOT EXISTS notification_logs (
+		id BIGINT PRIMARY KEY AUTO_INCREMENT,
+		user_id BIGINT NULL,
+		channel VARCHAR(32) NOT NULL,
+		type VARCHAR(64) NOT NULL,
+		title VARCHAR(255) NOT NULL DEFAULT '',
+		content TEXT NULL,
+		status VARCHAR(16) NOT NULL DEFAULT 'pending',
+		raw_response TEXT NULL,
+		created_at DATETIME(6) NOT NULL,
+		sent_at DATETIME(6) NULL
+	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+	`INSERT IGNORE INTO device_groups(name, type, node_id, connect_host, status, created_at, updated_at)
+		SELECT name, 'node', id, host, 'enabled', created_at, updated_at FROM nodes`,
+}
