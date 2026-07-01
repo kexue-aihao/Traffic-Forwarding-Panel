@@ -1029,36 +1029,3 @@ func renderTemplate(w http.ResponseWriter, body string, data any) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
-
-const homeTemplate = `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.AppName}}</title>
-<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#101820;color:#eef2f6}.wrap{max-width:1080px;margin:auto;padding:28px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}.card{background:#182430;border:1px solid #2b3b4b;border-radius:8px;padding:18px}.muted{color:#9fb0c0}.btn{display:inline-block;padding:10px 14px;border-radius:6px;background:#2f80ed;color:#fff;text-decoration:none;margin-right:8px}</style></head>
-<body><main class="wrap"><h1>{{.AppName}}</h1><p class="muted">MySQL-backed traffic forwarding panel with admin console, user portal, node agent, and Epay/BEpusdt payment plugins.</p><p><a class="btn" href="/admin">Admin</a><a class="btn" href="/user">User</a></p><section class="grid"><div class="card"><strong>Control plane</strong><p class="muted">Users, nodes, tunnels, payment orders, and usage accounting.</p></div><div class="card"><strong>Data plane</strong><p class="muted">Node agent pulls commands and runs TCP/UDP forwarding locally.</p></div><div class="card"><strong>Deployable</strong><p class="muted">Docker, 1Panel, aaPanel, AcePanel, amd64 and arm64.</p></div></section></main></body></html>`
-
-const adminTemplate = `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.AppName}} Admin</title>
-<style>body{font-family:system-ui;margin:0;background:#f7f9fb;color:#17202a}.wrap{max-width:1180px;margin:auto;padding:22px}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}input,button,select{padding:9px;border:1px solid #cbd5e1;border-radius:6px}button{background:#1d4ed8;color:white;border:0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.card{background:white;border:1px solid #dbe3eb;border-radius:8px;padding:14px}pre{white-space:pre-wrap;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;overflow:auto}</style></head>
-<body><main class="wrap"><h1>Admin Console</h1><div class="toolbar"><input id="u" placeholder="admin" value="admin"><input id="p" type="password" placeholder="password" value="admin123456"><button onclick="login()">Login</button><button onclick="loadAll()">Refresh</button></div><section class="grid"><div class="card"><h3>Create User</h3><input id="cu" placeholder="username"><input id="cp" placeholder="password"><input id="cq" placeholder="quota MB" value="10240"><button onclick="createUser()">Create</button></div><div class="card"><h3>Create Node</h3><input id="nn" placeholder="name"><input id="nh" placeholder="host"><input id="np" placeholder="port" value="0"><button onclick="createNode()">Create</button></div><div class="card"><h3>Create Tunnel</h3><input id="tu" placeholder="user id"><input id="tn" placeholder="node id"><select id="tp"><option value="tcp">TCP</option><option value="udp">UDP</option></select><input id="tl" placeholder="listen addr, e.g. :9000"><input id="tt" placeholder="target addr, e.g. 127.0.0.1:80"><button onclick="createTunnel()">Create</button></div></section><pre id="out"></pre></main>
-<script>
-let token=localStorage.tp_admin||"";
-const out=x=>document.getElementById("out").textContent=typeof x==="string"?x:JSON.stringify(x,null,2);
-async function api(path, opt={}){opt.headers=Object.assign({"Content-Type":"application/json","Authorization":"Bearer "+token},opt.headers||{});let r=await fetch(path,opt);let t=await r.text();try{return JSON.parse(t)}catch{return t}}
-async function login(){let r=await api("/api/admin/login",{method:"POST",body:JSON.stringify({username:u.value,password:p.value})});token=r.token||"";localStorage.tp_admin=token;out(r)}
-async function loadAll(){out({summary:await api("/api/admin/summary"),users:await api("/api/admin/users"),nodes:await api("/api/admin/nodes"),tunnels:await api("/api/admin/tunnels"),services:await api("/api/admin/services"),channels:await api("/api/admin/payments/channels")})}
-async function createUser(){out(await api("/api/admin/users",{method:"POST",body:JSON.stringify({username:cu.value,password:cp.value,flow_quota_mb:Number(cq.value)})}))}
-async function createNode(){out(await api("/api/admin/nodes",{method:"POST",body:JSON.stringify({name:nn.value,host:nh.value,port:Number(np.value)})}))}
-async function createTunnel(){out(await api("/api/admin/tunnels",{method:"POST",body:JSON.stringify({user_id:Number(tu.value),node_id:Number(tn.value),name:tp.value,protocol:tp.value,listen_addr:tl.value,target_addr:tt.value,auto_pause_on_limit:true})}))}
-</script></body></html>`
-
-const userTemplate = `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.AppName}} User</title>
-<style>body{font-family:system-ui;margin:0;background:#f7f9fb;color:#17202a}.wrap{max-width:980px;margin:auto;padding:22px}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}input,button,select{padding:9px;border:1px solid #cbd5e1;border-radius:6px}button{background:#087f5b;color:white;border:0}.card{background:white;border:1px solid #dbe3eb;border-radius:8px;padding:14px;margin:12px 0}pre{white-space:pre-wrap;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;overflow:auto}</style></head>
-<body><main class="wrap"><h1>User Portal</h1><div class="toolbar"><input id="u" placeholder="username"><input id="p" type="password" placeholder="password"><button onclick="login()">Login</button><button onclick="loadAll()">Refresh</button></div><div class="card"><h3>Recharge</h3><select id="ch"><option value="epay">Epay</option><option value="bepusdt">BEpusdt</option></select><input id="amt" value="1000" placeholder="amount cents"><button onclick="pay()">Create Order</button></div><pre id="out"></pre></main>
-<script>
-let token=localStorage.tp_user||"";
-const out=x=>document.getElementById("out").textContent=typeof x==="string"?x:JSON.stringify(x,null,2);
-async function api(path,opt={}){opt.headers=Object.assign({"Content-Type":"application/json","Authorization":"Bearer "+token},opt.headers||{});let r=await fetch(path,opt);let t=await r.text();try{return JSON.parse(t)}catch{return t}}
-async function login(){let r=await api("/api/user/login",{method:"POST",body:JSON.stringify({username:u.value,password:p.value})});token=r.token||"";localStorage.tp_user=token;out(r)}
-async function loadAll(){out({me:await api("/api/user/me"),tunnels:await api("/api/user/tunnels"),orders:await api("/api/user/orders")})}
-async function pay(){out(await api("/api/user/pay",{method:"POST",body:JSON.stringify({channel:ch.value,amount_cents:Number(amt.value),subject:"Recharge"})}))}
-</script></body></html>`
