@@ -12,10 +12,12 @@ import (
 	"trafficpanel/internal/security"
 
 	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
 }
 
 type columnMigration struct {
@@ -78,14 +80,32 @@ type UsageResult struct {
 }
 
 func Open(dsn string) (*Store, error) {
-	db, err := sql.Open("mysql", dsn)
+	driver := "mysql"
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(dsn)), "sqlite:") {
+		driver = "sqlite3"
+		dsn = strings.TrimPrefix(dsn, "sqlite:")
+		dsn = strings.TrimPrefix(dsn, "SQLite:")
+		if dsn == "" {
+			dsn = "/data/trafficpanel.db"
+		}
+		dsn += "?_foreign_keys=on&_busy_timeout=5000"
+	}
+	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		return nil, err
 	}
-	db.SetConnMaxLifetime(2 * time.Hour)
-	db.SetMaxIdleConns(10)
-	db.SetMaxOpenConns(50)
-	return &Store{db: db}, nil
+	if driver == "sqlite3" {
+		db.SetMaxOpenConns(1)
+		if _, err := db.Exec(`PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000`); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	} else {
+		db.SetConnMaxLifetime(2 * time.Hour)
+		db.SetMaxIdleConns(10)
+		db.SetMaxOpenConns(50)
+	}
+	return &Store{db: db, driver: driver}, nil
 }
 
 func (s *Store) Close() error {
@@ -155,6 +175,14 @@ func (s *Store) ConsumeNodeCommands(ctx context.Context, nodeID int64, ids []int
 }
 
 func (s *Store) EnsureSchema(ctx context.Context) error {
+	if s.driver == "sqlite3" {
+		for _, stmt := range sqliteSchemaStatements {
+			if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("sqlite schema statement failed: %w", err)
+			}
+		}
+		return nil
+	}
 	for _, stmt := range schemaStatements {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("schema statement failed: %w", err)

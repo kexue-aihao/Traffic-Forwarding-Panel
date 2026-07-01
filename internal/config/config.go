@@ -43,7 +43,7 @@ func Load() Config {
 	cfg := Config{
 		Mode:                  envOr("TP_MODE", "server"),
 		HTTPAddr:              envOr("TP_HTTP_ADDR", ":8080"),
-		DatabaseDSN:           envOr("TP_DATABASE_DSN", "root:root@tcp(127.0.0.1:3306)/traffic_panel?parseTime=true&charset=utf8mb4&loc=Local"),
+		DatabaseDSN:           envOr("TP_DATABASE_DSN", "sqlite:/data/trafficpanel.db"),
 		AppName:               envOr("TP_APP_NAME", "Traffic Panel"),
 		BaseURL:               envOr("TP_BASE_URL", "http://127.0.0.1:8080"),
 		MasterSecret:          envOr("TP_MASTER_SECRET", "change-me-in-production"),

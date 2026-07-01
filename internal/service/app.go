@@ -180,7 +180,7 @@ func (a *App) ListNodes(ctx context.Context) ([]domain.Node, error) {
 }
 
 func (a *App) ListTunnels(ctx context.Context) ([]domain.Tunnel, error) {
-	rows, err := a.store.DB().QueryContext(ctx, `SELECT id, user_id, node_id, name, protocol, listen_addr, target_addr, listen_host, listen_port, target_host, target_port, device_group_in_id, device_group_out_id, COALESCE(CAST(config_json AS CHAR), ''), folder, show_order, max_conn, speed_limit_kb, quota_bytes, used_bytes, expires_at, auto_pause_on_limit, status, created_at, updated_at FROM tunnels ORDER BY id DESC`)
+	rows, err := a.store.DB().QueryContext(ctx, `SELECT id, user_id, node_id, name, protocol, listen_addr, target_addr, listen_host, listen_port, target_host, target_port, device_group_in_id, device_group_out_id, COALESCE(config_json, ''), folder, show_order, max_conn, speed_limit_kb, quota_bytes, used_bytes, expires_at, auto_pause_on_limit, status, created_at, updated_at FROM tunnels ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +211,7 @@ func (a *App) ListTunnels(ctx context.Context) ([]domain.Tunnel, error) {
 }
 
 func (a *App) ListTunnelsByUser(ctx context.Context, userID int64) ([]domain.Tunnel, error) {
-	rows, err := a.store.DB().QueryContext(ctx, `SELECT id, user_id, node_id, name, protocol, listen_addr, target_addr, listen_host, listen_port, target_host, target_port, device_group_in_id, device_group_out_id, COALESCE(CAST(config_json AS CHAR), ''), folder, show_order, max_conn, speed_limit_kb, quota_bytes, used_bytes, expires_at, auto_pause_on_limit, status, created_at, updated_at FROM tunnels WHERE user_id = ? ORDER BY id DESC`, userID)
+	rows, err := a.store.DB().QueryContext(ctx, `SELECT id, user_id, node_id, name, protocol, listen_addr, target_addr, listen_host, listen_port, target_host, target_port, device_group_in_id, device_group_out_id, COALESCE(config_json, ''), folder, show_order, max_conn, speed_limit_kb, quota_bytes, used_bytes, expires_at, auto_pause_on_limit, status, created_at, updated_at FROM tunnels WHERE user_id = ? ORDER BY id DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -445,21 +445,22 @@ func (a *App) ListForwardServices(ctx context.Context) ([]domain.ForwardService,
 
 func (a *App) UpsertNode(ctx context.Context, node domain.Node) (int64, error) {
 	now := time.Now().UTC()
+	var id int64
+	err := a.store.DB().QueryRowContext(ctx, `SELECT id FROM nodes WHERE name = ?`, node.Name).Scan(&id)
+	if err == nil {
+		_, err = a.store.DB().ExecContext(ctx, `UPDATE nodes SET host=?, port=?, secret=?, status=?, last_seen_at=?, updated_at=? WHERE id=?`, node.Host, node.Port, node.Secret, node.Status, node.LastSeenAt, now, id)
+		return id, err
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
 	res, err := a.store.DB().ExecContext(ctx, `INSERT INTO nodes(name, host, port, secret, status, last_seen_at, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?)
-		ON DUPLICATE KEY UPDATE host=VALUES(host), port=VALUES(port), secret=VALUES(secret), status=VALUES(status), last_seen_at=VALUES(last_seen_at), updated_at=VALUES(updated_at)`,
+		VALUES(?,?,?,?,?,?,?,?)`,
 		node.Name, node.Host, node.Port, node.Secret, node.Status, node.LastSeenAt, now, now)
 	if err != nil {
 		return 0, err
 	}
-	id, err := res.LastInsertId()
-	if err != nil || id == 0 {
-		row := a.store.DB().QueryRowContext(ctx, `SELECT id FROM nodes WHERE name = ?`, node.Name)
-		if scanErr := row.Scan(&id); scanErr != nil {
-			return 0, scanErr
-		}
-	}
-	return id, nil
+	return res.LastInsertId()
 }
 
 func (a *App) AuthenticateNodeRequest(ctx context.Context, nodeID int64, payload []byte, signature string) (*domain.Node, error) {
@@ -724,9 +725,8 @@ func (a *App) ensureDefaultPaymentChannels(ctx context.Context) error {
 	}
 	for _, channel := range channels {
 		payload, _ := json.Marshal(map[string]any{"provider": channel.Provider, "mode": "plugin"})
-		_, err := a.store.DB().ExecContext(ctx, `INSERT INTO payment_channels(code, name, enabled, provider, config_json, created_at, updated_at)
-			VALUES(?,?,?,?,?,?,?)
-			ON DUPLICATE KEY UPDATE name = VALUES(name), enabled = VALUES(enabled), provider = VALUES(provider), config_json = VALUES(config_json), updated_at = VALUES(updated_at)`,
+		_, err := a.store.DB().ExecContext(ctx, `REPLACE INTO payment_channels(code, name, enabled, provider, config_json, created_at, updated_at)
+			VALUES(?,?,?,?,?,?,?)`,
 			channel.Code, channel.Name, channel.Enabled, channel.Provider, string(payload), now, now)
 		if err != nil {
 			return err
@@ -757,7 +757,7 @@ func (a *App) HandlePaymentNotify(ctx context.Context, channelCode string, body 
 		}
 	}()
 	var order domain.PaymentOrder
-	row := tx.QueryRowContext(ctx, `SELECT id, order_no, user_id, channel, amount_cents, status, pay_url, trade_no, raw_request, raw_notify, paid_at, created_at, updated_at FROM payment_orders WHERE order_no = ? FOR UPDATE`, notify.OrderNo)
+	row := tx.QueryRowContext(ctx, `SELECT id, order_no, user_id, channel, amount_cents, status, pay_url, trade_no, raw_request, raw_notify, paid_at, created_at, updated_at FROM payment_orders WHERE order_no = ?`, notify.OrderNo)
 	var paidAtValue sql.NullTime
 	if scanErr := row.Scan(&order.ID, &order.OrderNo, &order.UserID, &order.Channel, &order.AmountCents, &order.Status, &order.PayURL, &order.TradeNo, &order.RawRequest, &order.RawNotify, &paidAtValue, &order.CreatedAt, &order.UpdatedAt); scanErr != nil {
 		return nil, scanErr

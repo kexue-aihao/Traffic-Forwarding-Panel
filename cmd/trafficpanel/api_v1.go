@@ -284,7 +284,7 @@ func (s *apiServer) handleV1UserAffLogs(w http.ResponseWriter, r *http.Request, 
 		writeV1Error(w, http.StatusMethodNotAllowed, 405, "method not allowed")
 		return
 	}
-	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, user_id, from_user_id, order_id, type, amount_cents, rate, status, COALESCE(CAST(detail_json AS CHAR), ''), created_at, accounted_at FROM aff_logs WHERE user_id = ? ORDER BY id DESC`, session.ActorID)
+	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, user_id, from_user_id, order_id, type, amount_cents, rate, status, COALESCE(detail_json, ''), created_at, accounted_at FROM aff_logs WHERE user_id = ? ORDER BY id DESC`, session.ActorID)
 	if err != nil {
 		writeV1Error(w, http.StatusBadRequest, 400, err.Error())
 		return
@@ -438,7 +438,7 @@ func (s *apiServer) handleV1AdminAffLogs(w http.ResponseWriter, r *http.Request,
 		writeV1OK(w, map[string]string{"status": "ok"})
 		return
 	}
-	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, user_id, from_user_id, order_id, type, amount_cents, rate, status, COALESCE(CAST(detail_json AS CHAR), ''), created_at, accounted_at FROM aff_logs ORDER BY id DESC`)
+	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, user_id, from_user_id, order_id, type, amount_cents, rate, status, COALESCE(detail_json, ''), created_at, accounted_at FROM aff_logs ORDER BY id DESC`)
 	if err != nil {
 		writeV1Error(w, http.StatusBadRequest, 400, err.Error())
 		return
@@ -462,7 +462,7 @@ func (s *apiServer) handleV1AdminKV(w http.ResponseWriter, r *http.Request, sess
 	case http.MethodGet:
 		var valueJSON sql.NullString
 		var valueText sql.NullString
-		err := s.app.DB().QueryRowContext(r.Context(), `SELECT COALESCE(CAST(value_json AS CHAR), ''), value_text FROM system_kv WHERE key_name = ?`, key).Scan(&valueJSON, &valueText)
+		err := s.app.DB().QueryRowContext(r.Context(), `SELECT COALESCE(value_json, ''), value_text FROM system_kv WHERE key_name = ?`, key).Scan(&valueJSON, &valueText)
 		if err == sql.ErrNoRows {
 			writeV1OK(w, map[string]any{})
 			return
@@ -486,7 +486,7 @@ func (s *apiServer) handleV1AdminKV(w http.ResponseWriter, r *http.Request, sess
 		}
 		raw, _ := json.Marshal(input)
 		now := time.Now().UTC()
-		_, err := s.app.DB().ExecContext(r.Context(), `INSERT INTO system_kv(key_name, value_json, scope, updated_by_admin_id, created_at, updated_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE value_json=VALUES(value_json), updated_by_admin_id=VALUES(updated_by_admin_id), updated_at=VALUES(updated_at)`, key, string(raw), "global", session.ActorID, now, now)
+		_, err := s.app.DB().ExecContext(r.Context(), `REPLACE INTO system_kv(key_name, value_json, scope, updated_by_admin_id, created_at, updated_at) VALUES(?,?,?,?,?,?)`, key, string(raw), "global", session.ActorID, now, now)
 		if err != nil {
 			writeV1Error(w, http.StatusBadRequest, 400, err.Error())
 			return
@@ -595,7 +595,7 @@ func v1OrderList(orders []domain.PaymentOrder) map[string]any {
 }
 
 func (s *apiServer) listV1Plans(r *http.Request) ([]map[string]any, error) {
-	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, name, description, price_cents, traffic_mb, duration_days, max_rules, allow_device, user_group_id, status, show_order, COALESCE(CAST(config_json AS CHAR), '') FROM plans WHERE deleted_at IS NULL ORDER BY show_order ASC, id ASC`)
+	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, name, description, price_cents, traffic_mb, duration_days, max_rules, allow_device, user_group_id, status, show_order, COALESCE(config_json, '') FROM plans WHERE deleted_at IS NULL ORDER BY show_order ASC, id ASC`)
 	if err != nil {
 		return nil, err
 	}

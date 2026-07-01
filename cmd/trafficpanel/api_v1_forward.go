@@ -253,7 +253,7 @@ func (s *apiServer) deleteV1DeviceGroup(r *http.Request, id int64) error {
 }
 
 func (s *apiServer) getV1DeviceGroup(r *http.Request, id int64) (domain.DeviceGroup, error) {
-	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, name, type, node_id, ratio, connect_host, port_range_start, port_range_end, COALESCE(CAST(config_json AS CHAR), ''), show_order, display_num, hide_status, status, created_at, updated_at, deleted_at FROM device_groups WHERE id = ? AND deleted_at IS NULL`, id)
+	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, name, type, node_id, ratio, connect_host, port_range_start, port_range_end, COALESCE(config_json, ''), show_order, display_num, hide_status, status, created_at, updated_at, deleted_at FROM device_groups WHERE id = ? AND deleted_at IS NULL`, id)
 	if err != nil {
 		return domain.DeviceGroup{}, err
 	}
@@ -421,7 +421,7 @@ func (s *apiServer) deleteV1Forward(r *http.Request, userID, tunnelID int64) err
 }
 
 func (s *apiServer) getV1Forward(r *http.Request, userID, tunnelID int64) (map[string]any, error) {
-	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, user_id, node_id, name, protocol, listen_addr, target_addr, listen_host, listen_port, target_host, target_port, device_group_in_id, device_group_out_id, COALESCE(CAST(config_json AS CHAR), ''), folder, show_order, max_conn, speed_limit_kb, quota_bytes, used_bytes, expires_at, auto_pause_on_limit, status, created_at, updated_at FROM tunnels WHERE id = ? AND user_id = ?`, tunnelID, userID)
+	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, user_id, node_id, name, protocol, listen_addr, target_addr, listen_host, listen_port, target_host, target_port, device_group_in_id, device_group_out_id, COALESCE(config_json, ''), folder, show_order, max_conn, speed_limit_kb, quota_bytes, used_bytes, expires_at, auto_pause_on_limit, status, created_at, updated_at FROM tunnels WHERE id = ? AND user_id = ?`, tunnelID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +497,7 @@ func v1PathID(path, prefix string) (int64, bool) {
 }
 
 func (s *apiServer) listV1DeviceGroups(r *http.Request) ([]domain.DeviceGroup, error) {
-	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, name, type, node_id, ratio, connect_host, port_range_start, port_range_end, COALESCE(CAST(config_json AS CHAR), ''), show_order, display_num, hide_status, status, created_at, updated_at, deleted_at FROM device_groups WHERE deleted_at IS NULL ORDER BY show_order ASC, id ASC`)
+	rows, err := s.app.DB().QueryContext(r.Context(), `SELECT id, name, type, node_id, ratio, connect_host, port_range_start, port_range_end, COALESCE(config_json, ''), show_order, display_num, hide_status, status, created_at, updated_at, deleted_at FROM device_groups WHERE deleted_at IS NULL ORDER BY show_order ASC, id ASC`)
 	if err != nil {
 		return nil, err
 	}
