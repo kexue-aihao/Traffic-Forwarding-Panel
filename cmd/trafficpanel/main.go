@@ -140,6 +140,7 @@ func (s *apiServer) routes() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/readyz", s.handleReady)
 	mux.HandleFunc("/api/v1/", s.handleAPIV1)
 	mux.HandleFunc("/", s.handlePage)
 	mux.HandleFunc("/api/admin/login", s.handleAdminLogin)
@@ -164,10 +165,21 @@ func (s *apiServer) routes() http.Handler {
 	return mux
 }
 
+func (s *apiServer) handleReady(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.app.Ready(ctx); err != nil {
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ready"))
+}
+
 func (s *apiServer) handlePage(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/", "/app":
-		renderTemplate(w, homeTemplate, map[string]any{"AppName": s.cfg.AppName})
+		renderTemplate(w, homeTemplate, map[string]any{"AppName": s.cfg.AppName, "RegisterEnabled": s.app.PublicRegisterEnabled()})
 	case "/admin":
 		renderTemplate(w, adminTemplate, map[string]any{"AppName": s.cfg.AppName})
 	case "/user":

@@ -35,6 +35,14 @@ func (a *App) EnsureSchema(ctx context.Context) error {
 	return a.store.EnsureSchema(ctx)
 }
 
+func (a *App) Ready(ctx context.Context) error {
+	if err := a.store.DB().PingContext(ctx); err != nil {
+		return err
+	}
+	var count int
+	return a.store.DB().QueryRowContext(ctx, `SELECT COUNT(1) FROM admins`).Scan(&count)
+}
+
 func (a *App) Bootstrap(ctx context.Context) error {
 	if err := a.validateStartupSecurity(); err != nil {
 		return err
@@ -115,6 +123,20 @@ func (a *App) LoginUser(ctx context.Context, username, password string) (string,
 	}
 	token, _, err := a.store.CreateSession(ctx, domain.ActorUser, user.ID, a.cfg.SessionTTL)
 	return token, err
+}
+
+func (a *App) RegisterUser(ctx context.Context, username, password string) (string, error) {
+	if !a.cfg.PublicRegisterEnabled {
+		return "", errors.New("registration is disabled")
+	}
+	if _, err := a.CreateUser(ctx, username, password, 0, nil); err != nil {
+		return "", err
+	}
+	return a.LoginUser(ctx, username, password)
+}
+
+func (a *App) PublicRegisterEnabled() bool {
+	return a.cfg.PublicRegisterEnabled
 }
 
 func (a *App) DashboardStats(ctx context.Context) (mysql.Summary, error) {

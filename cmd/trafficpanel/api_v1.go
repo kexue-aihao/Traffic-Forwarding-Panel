@@ -132,11 +132,7 @@ func (s *apiServer) handleV1Register(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	if _, err := s.app.CreateUser(r.Context(), input.Username, input.Password, 0, nil); err != nil {
-		writeV1Error(w, http.StatusBadRequest, 400, err.Error())
-		return
-	}
-	token, err := s.app.LoginUser(r.Context(), input.Username, input.Password)
+	token, err := s.app.RegisterUser(r.Context(), input.Username, input.Password)
 	if err != nil {
 		writeV1Error(w, http.StatusBadRequest, 400, err.Error())
 		return
@@ -166,7 +162,7 @@ func (s *apiServer) handleV1SystemInfo(w http.ResponseWriter, r *http.Request) {
 		"app_name":       s.cfg.AppName,
 		"version":        "dev",
 		"time":           time.Now().Unix(),
-		"register":       false,
+		"register":       s.app.PublicRegisterEnabled(),
 		"captcha":        false,
 		"license_expire": 0,
 	})

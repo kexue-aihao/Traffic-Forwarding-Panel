@@ -37,6 +37,7 @@ type Config struct {
 	BEpusdtKey            string
 	BEpusdtType           string
 	AllowInsecureDefaults bool
+	PublicRegisterEnabled bool
 }
 
 func Load() Config {
@@ -67,6 +68,7 @@ func Load() Config {
 		BEpusdtKey:            envOr("TP_BEPUSDT_KEY", ""),
 		BEpusdtType:           envOr("TP_BEPUSDT_TYPE", "usdt"),
 		AllowInsecureDefaults: envBoolOr("TP_ALLOW_INSECURE_DEFAULTS", false),
+		PublicRegisterEnabled: envBoolOr("TP_PUBLIC_REGISTER_ENABLED", false),
 	}
 	cfg.AgentNodeID = envInt64Or("TP_AGENT_NODE_ID", 0)
 	cfg.AgentNodePort = int(envInt64Or("TP_AGENT_NODE_PORT", 0))
