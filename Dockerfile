@@ -1,13 +1,11 @@
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$TARGETPLATFORM golang:1.26-alpine AS build
 
-ARG TARGETOS
-ARG TARGETARCH
 WORKDIR /src
 RUN apk add --no-cache gcc musl-dev
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags="-s -w" -o /out/trafficpanel ./cmd/trafficpanel
+RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/trafficpanel ./cmd/trafficpanel
 
 FROM alpine:3.22
 
