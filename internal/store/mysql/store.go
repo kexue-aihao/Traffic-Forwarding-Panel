@@ -175,30 +175,7 @@ func (s *Store) ConsumeNodeCommands(ctx context.Context, nodeID int64, ids []int
 }
 
 func (s *Store) EnsureSchema(ctx context.Context) error {
-	if s.driver == "sqlite3" {
-		for _, stmt := range sqliteSchemaStatements {
-			if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-				return fmt.Errorf("sqlite schema statement failed: %w", err)
-			}
-		}
-		return nil
-	}
-	for _, stmt := range schemaStatements {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("schema statement failed: %w", err)
-		}
-	}
-	for _, migration := range columnMigrations {
-		if err := s.ensureColumn(ctx, migration); err != nil {
-			return err
-		}
-	}
-	for _, stmt := range migrationStatements {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("migration statement failed: %w", err)
-		}
-	}
-	return nil
+	return s.migrate(ctx)
 }
 
 func (s *Store) ensureColumn(ctx context.Context, migration columnMigration) error {
