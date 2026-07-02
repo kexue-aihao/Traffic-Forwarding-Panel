@@ -30,6 +30,8 @@ func (s *apiServer) handleAPIV1(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/auth/login":
 		s.handleV1Login(w, r)
+	case path == "/auth/register":
+		s.handleV1Register(w, r)
 	case path == "/auth/logout":
 		s.handleV1Logout(w, r)
 	case path == "/system/info":
@@ -113,6 +115,30 @@ func (s *apiServer) handleV1Login(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeV1Error(w, http.StatusUnauthorized, 401, "用户名或密码错误")
+		return
+	}
+	writeV1OK(w, token)
+}
+
+func (s *apiServer) handleV1Register(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeV1Error(w, http.StatusMethodNotAllowed, 405, "method not allowed")
+		return
+	}
+	var input struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if _, err := s.app.CreateUser(r.Context(), input.Username, input.Password, 0, nil); err != nil {
+		writeV1Error(w, http.StatusBadRequest, 400, err.Error())
+		return
+	}
+	token, err := s.app.LoginUser(r.Context(), input.Username, input.Password)
+	if err != nil {
+		writeV1Error(w, http.StatusBadRequest, 400, err.Error())
 		return
 	}
 	writeV1OK(w, token)
