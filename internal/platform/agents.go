@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -56,7 +57,8 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	reply(w, 201, map[string]any{"token": t, "expires_at": expires})
 }
 func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
-	if !s.allow("register:"+r.RemoteAddr, 30) {
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if !s.allow("register:"+ip, 30) {
 		fail(w, 429, "rate limited")
 		return
 	}
