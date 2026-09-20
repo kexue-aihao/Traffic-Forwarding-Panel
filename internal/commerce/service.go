@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 	"strings"
+	"sync"
 	"time"
 	_ "time/tzdata"
 )
@@ -53,17 +54,18 @@ type Order struct {
 }
 type Writer func(context.Context, func(*sql.Tx) error) error
 type Service struct {
-	DB      *sql.DB
-	Dialect string
-	Write   Writer
-	Now     func() time.Time
+	DB          *sql.DB
+	Dialect     string
+	Write       Writer
+	Now         func() time.Time
+	reconcileMu sync.Mutex
 }
 
 var ErrConflict = errors.New("state conflict")
 var ErrFunds = errors.New("insufficient available balance")
 
 func New(db *sql.DB, dialect string, write Writer) *Service {
-	return &Service{db, dialect, write, time.Now}
+	return &Service{DB: db, Dialect: dialect, Write: write, Now: time.Now}
 }
 func id() string {
 	b := make([]byte, 16)
@@ -101,30 +103,41 @@ func (s *Service) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS commerce_lease_reservations(lease_id VARCHAR(64) PRIMARY KEY,budget BIGINT NOT NULL,closed INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS commerce_attempts(order_id VARCHAR(64) PRIMARY KEY,state VARCHAR(32) NOT NULL,provider_id VARCHAR(128) NOT NULL,updated_at VARCHAR(40) NOT NULL)`,
 	}
-	return storage.MigrateNamespace(ctx, s.DB, s.Dialect, "commerce", 1, func(conn *sql.Conn) error {
-		for _, q := range statements {
-			if s.Dialect == "mysql" {
-				q = strings.ReplaceAll(q, " TEXT", " LONGTEXT")
+	return storage.MigrateNamespace(ctx, s.DB, s.Dialect, "commerce", 2, func(conn *sql.Conn) error {
+		var current int
+		if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM commerce_schema").Scan(&current); err != nil {
+			return err
+		}
+		// Preserve the already released v1 migration. A fresh database applies
+		// it before v2; an existing v1 database only receives the new table.
+		if current < 1 {
+			for _, q := range statements {
+				if s.Dialect == "mysql" {
+					q = strings.ReplaceAll(q, " TEXT", " LONGTEXT")
+				}
+				if _, e := conn.ExecContext(ctx, q); e != nil {
+					return e
+				}
 			}
-			if _, e := conn.ExecContext(ctx, q); e != nil {
-				return e
+			for _, idx := range []struct {
+				name, table, columns string
+				unique               bool
+			}{
+				{"commerce_ledger_user", "commerce_ledger", "user_id,created_at,id", false},
+				{"commerce_order_user", "commerce_orders", "user_id,created_at,id", false},
+				{"commerce_order_transaction", "commerce_orders", "channel,provider_tx", true},
+				{"commerce_usage_lease", "commerce_usage", "lease_id", false},
+				{"commerce_lease_rule", "commerce_leases", "rule_id,expires_at", false},
+			} {
+				if e := storage.EnsureIndex(ctx, conn, s.Dialect, idx.table, idx.name, idx.columns, idx.unique); e != nil {
+					return e
+				}
+			}
+			if _, err := conn.ExecContext(ctx, "INSERT INTO commerce_schema(version) VALUES(1)"); err != nil {
+				return err
 			}
 		}
-		for _, idx := range []struct {
-			name, table, columns string
-			unique               bool
-		}{
-			{"commerce_ledger_user", "commerce_ledger", "user_id,created_at,id", false},
-			{"commerce_order_user", "commerce_orders", "user_id,created_at,id", false},
-			{"commerce_order_transaction", "commerce_orders", "channel,provider_tx", true},
-			{"commerce_usage_lease", "commerce_usage", "lease_id", false},
-			{"commerce_lease_rule", "commerce_leases", "rule_id,expires_at", false},
-		} {
-			if e := storage.EnsureIndex(ctx, conn, s.Dialect, idx.table, idx.name, idx.columns, idx.unique); e != nil {
-				return e
-			}
-		}
-		return nil
+		return s.migrateReconciliation(ctx, conn)
 	})
 }
 func AddMonths(t time.Time, months int) time.Time {

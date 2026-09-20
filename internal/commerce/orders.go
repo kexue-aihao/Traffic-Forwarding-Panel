@@ -35,6 +35,9 @@ func (s *Service) CreateOrder(ctx context.Context, user, channel, key string, am
 			return e
 		}
 		_, e = tx.ExecContext(ctx, s.q("INSERT INTO commerce_orders(id,user_id,channel,amount,status,payment_url,created_at,idempotency_key) VALUES(?,?,?,?,?,?,?,?)"), o.ID, user, channel, amount, o.Status, o.PaymentURL, stamp(o.CreatedAt), key)
+		if e == nil {
+			e = s.scheduleReconciliation(ctx, tx, o.ID)
+		}
 		return e
 	})
 	return o, err
@@ -83,7 +86,8 @@ func (s *Service) ConfirmPayment(ctx context.Context, channel, order, transactio
 		if n != 1 {
 			return ErrConflict
 		}
-		return nil
+		_, e = tx.ExecContext(ctx, s.q("DELETE FROM commerce_reconciliation WHERE order_id=?"), order)
+		return e
 	})
 }
 func (s *Service) Orders(ctx context.Context, user string) ([]Order, error) {

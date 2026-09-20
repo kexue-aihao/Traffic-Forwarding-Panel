@@ -48,6 +48,9 @@ func (s *Service) CreateAdapterOrder(ctx context.Context, user, channel, key str
 			return e
 		}
 		_, e = tx.ExecContext(ctx, s.q("INSERT INTO commerce_attempts(order_id,state,provider_id,updated_at) VALUES(?,'creating','',?)"), order.ID, stamp(s.Now()))
+		if e == nil {
+			e = s.scheduleReconciliation(ctx, tx, order.ID)
+		}
 		fresh = e == nil
 		return e
 	})
@@ -102,11 +105,16 @@ func (s *Service) ReconcileOrder(ctx context.Context, user, orderID string, chan
 	}
 	order.Currency = "CNY"
 	order.CreatedAt = parse(created)
+	if order.Status == "paid" {
+		return order, nil
+	}
 	c, ok := channels[order.Channel]
 	if !ok || c.Adapter == nil || !c.Adapter.Capabilities().Query {
 		return order, payment.ErrUnsupported
 	}
-	status, err := c.Adapter.Query(ctx, payment.QueryRequest{OrderID: orderID, TransactionID: provider})
+	queryCtx, cancel := context.WithTimeout(ctx, reconciliationTimeout)
+	defer cancel()
+	status, err := c.Adapter.Query(queryCtx, payment.QueryRequest{OrderID: orderID, TransactionID: provider})
 	if err != nil {
 		return order, err
 	}
@@ -114,7 +122,7 @@ func (s *Service) ReconcileOrder(ctx context.Context, user, orderID string, chan
 		return order, err
 	}
 	if status.State == payment.Paid {
-		if err = s.ConfirmPayment(ctx, order.Channel, order.ID, status.TransactionID, status.AmountCents); err != nil {
+		if err = s.ConfirmStatus(ctx, order.Channel, status); err != nil {
 			return order, err
 		}
 		order.Status = "paid"
