@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/app"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/commerce"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/payment"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 )
@@ -40,7 +42,12 @@ func run() error {
 	dsn := flag.String("dsn", env("TFP_DSN", "data/panel.db"), "database DSN (prefer TFP_DSN for server credentials)")
 	origin := flag.String("origin", env("TFP_ORIGIN", ""), "public scheme://host for reverse proxy and CSRF checks")
 	initAdmin := flag.String("init-admin", "", "create first administrator then exit; reads password from stdin")
+	resetPassword := flag.String("reset-password", "", "reset local account password and revoke sessions; reads password from stdin")
+	paymentsFile := flag.String("payments", os.Getenv("TFP_PAYMENTS_FILE"), "operator-owned payment configuration JSON file")
 	flag.Parse()
+	if *initAdmin != "" && *resetPassword != "" {
+		return errors.New("select one account command")
+	}
 	if *origin != "" {
 		u, e := url.Parse(*origin)
 		if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
@@ -67,23 +74,40 @@ func run() error {
 	if gateway.ReturnURL == "" && *origin != "" {
 		gateway.ReturnURL = *origin + "/#/wallet"
 	}
-	application, err := app.New(ctx, store, app.Options{Origin: *origin, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway})
+	var channels map[string]commerce.Channel
+	if *paymentsFile != "" {
+		f, e := os.Open(*paymentsFile)
+		if e != nil {
+			return errors.New("cannot read payment configuration file")
+		}
+		channels, e = app.PaymentChannels(f, *origin)
+		f.Close()
+		if e != nil {
+			return e
+		}
+	}
+	application, err := app.New(ctx, store, app.Options{Origin: *origin, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, Channels: channels})
 	if err != nil {
 		return err
 	}
-	if *initAdmin != "" {
+	if *initAdmin != "" || *resetPassword != "" {
 		fmt.Fprintln(os.Stderr, "读取标准输入中的管理员密码（至少 12 字符），不写入配置或日志。")
 		scanner := bufio.NewScanner(os.Stdin)
 		if !scanner.Scan() {
 			return errors.New("administrator password is required on stdin")
 		}
-		if err := application.Platform.Bootstrap(ctx, *initAdmin, scanner.Text()); err != nil {
+		if *resetPassword != "" {
+			err = application.Platform.ResetPassword(ctx, *resetPassword, scanner.Text())
+		} else {
+			err = application.Platform.Bootstrap(ctx, *initAdmin, scanner.Text())
+		}
+		if err != nil {
 			return err
 		}
-		fmt.Println("管理员初始化完成。")
+		fmt.Println("本机账号操作完成。")
 		return nil
 	}
-	server := &http.Server{Addr: *addr, Handler: application.Handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
+	server := &http.Server{Addr: *addr, Handler: application.Handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)

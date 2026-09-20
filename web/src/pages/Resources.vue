@@ -109,7 +109,15 @@ async function open(row: Row | null = null) {
     token: "",
     user_ids: (row?.user_ids as string[]) || [],
     group_ids: [],
-    blocked_protocols: (row?.blocked_protocols as string[]) || [],
+    blocked_protocols: ((row?.blocked_protocols as string[]) || []).map((p) =>
+      p.includes(":")
+        ? p
+        : ["tcp", "udp"].includes(p)
+          ? "network:" + p
+          : p === "socks"
+            ? "app:socks"
+            : "transport:" + p,
+    ),
     multiplier: String(row?.multiplier || "1"),
     port_min: Number(row?.port_min || 10000),
     port_max: Number(row?.port_max || 60000),
@@ -196,6 +204,26 @@ async function save() {
   }
 }
 const deleting = ref<Row | null>(null);
+const statusTarget = ref<Row | null>(null);
+async function changeStatus() {
+  if (!statusTarget.value || busy.value) return;
+  busy.value = true;
+  formError.value = "";
+  try {
+    await api(
+      `/users/${encodeURIComponent(String(statusTarget.value.id))}/status`,
+      "PUT",
+      { disabled: !statusTarget.value.disabled },
+    );
+    statusTarget.value = null;
+    notice("账号状态已更新。停用账号的会话与 API Token 会被撤销。");
+    await load();
+  } catch (e) {
+    formError.value = errorText(e);
+  } finally {
+    busy.value = false;
+  }
+}
 async function remove() {
   if (!deleting.value || busy.value) return;
   busy.value = true;
@@ -313,7 +341,8 @@ const labels: Record<string, string> = {
               </th>
               <th
                 v-if="
-                  resource === 'rules' || (resource === 'groups' && canManage)
+                  resource === 'rules' ||
+                  (['groups', 'users'].includes(resource) && canManage)
                 "
               >
                 操作
@@ -331,12 +360,14 @@ const labels: Record<string, string> = {
               </td>
               <td
                 v-if="
-                  resource === 'rules' || (resource === 'groups' && canManage)
+                  resource === 'rules' ||
+                  (['groups', 'users'].includes(resource) && canManage)
                 "
                 data-label="操作"
               >
                 <div class="toolbar">
-                  <button @click="open(row)">编辑</button
+                  <button v-if="resource !== 'users'" @click="open(row)">
+                    编辑</button
                   ><button
                     v-if="resource === 'rules'"
                     class="danger"
@@ -346,6 +377,16 @@ const labels: Record<string, string> = {
                     "
                   >
                     删除
+                  </button>
+                  <button
+                    v-if="resource === 'users'"
+                    :disabled="row.role === 'admin'"
+                    @click="
+                      statusTarget = row;
+                      formError = '';
+                    "
+                  >
+                    {{ row.disabled ? "启用" : "停用" }}
                   </button>
                 </div>
               </td>
@@ -412,7 +453,11 @@ const labels: Record<string, string> = {
             ></template
           ><template v-if="resource === 'rules'"
             ><label
-              >入口服务器<select v-model="form.node_id" required>
+              >入口服务器<select
+                v-model="form.node_id"
+                required
+                :disabled="!!selected"
+              >
                 <option value="" disabled>选择服务器</option>
                 <option
                   v-for="n in options.nodes"
@@ -423,7 +468,11 @@ const labels: Record<string, string> = {
                 </option>
               </select></label
             ><label
-              >设备组<select v-model="form.group_id" required>
+              >设备组<select
+                v-model="form.group_id"
+                required
+                :disabled="!!selected"
+              >
                 <option value="" disabled>选择设备组</option>
                 <option
                   v-for="g in options.groups"
@@ -436,7 +485,7 @@ const labels: Record<string, string> = {
             >
             <div class="form-grid">
               <label
-                >传输层<select v-model="form.network">
+                >传输层<select v-model="form.network" :disabled="!!selected">
                   <option value="tcp">TCP</option>
                   <option value="udp">UDP</option>
                 </select></label
@@ -454,9 +503,13 @@ const labels: Record<string, string> = {
             <p class="small muted">
               可用组合由节点能力校验。WS 与 HTTP 本身不加密。
             </p>
+            <p v-if="selected" class="small muted">
+              入口、设备组、传输层和监听地址创建后不可更改。如需调整，请删除并等待节点确认解绑后重建。
+            </p>
             <label
               >监听地址<input
                 v-model="form.listen"
+                :disabled="!!selected"
                 required
                 placeholder=":10000" /></label
             ><label
@@ -481,26 +534,42 @@ const labels: Record<string, string> = {
             ></template
           ><template v-if="resource === 'groups'"
             ><fieldset>
-              <legend>屏蔽协议</legend>
+              <legend>屏蔽网络协议</legend>
+              <label v-for="p in ['tcp', 'udp']" :key="p" class="check"
+                ><input
+                  v-model="form.blocked_protocols"
+                  type="checkbox"
+                  :value="'network:' + p"
+                />{{ p.toUpperCase() }}</label
+              >
+            </fieldset>
+            <fieldset>
+              <legend>屏蔽隧道承载</legend>
               <label
-                v-for="p in [
-                  'tcp',
-                  'udp',
-                  'direct',
-                  'tls',
-                  'ws',
-                  'wss',
-                  'http',
-                ]"
+                v-for="p in ['direct', 'tls', 'ws', 'wss', 'http']"
                 :key="p"
                 class="check"
                 ><input
                   v-model="form.blocked_protocols"
                   type="checkbox"
-                  :value="p"
-                />{{ p }}</label
+                  :value="'transport:' + p"
+                />{{ p === "direct" ? "直接转发" : p.toUpperCase() }}</label
               >
             </fieldset>
+            <fieldset>
+              <legend>屏蔽明文应用协议</legend>
+              <label v-for="p in ['http', 'socks']" :key="p" class="check"
+                ><input
+                  v-model="form.blocked_protocols"
+                  type="checkbox"
+                  :value="'app:' + p"
+                />{{ p.toUpperCase() }} 应用流量</label
+              >
+            </fieldset>
+            <p class="small muted">
+              网络和隧道限制控制可创建的规则；应用识别只检查可识别的明文流量。未知流量允许通过，密文内的协议和
+              URL 路径无法识别。禁用 HTTP 隧道不等同于屏蔽 HTTP 应用。
+            </p>
             <label
               >流量倍率<input
                 v-model="form.multiplier"
@@ -564,6 +633,21 @@ const labels: Record<string, string> = {
       <p v-if="formError" class="error" role="alert">{{ formError }}</p>
       <button class="danger" :disabled="busy" @click="remove">
         确认删除
+      </button></Modal
+    >
+    <Modal
+      v-if="statusTarget"
+      :title="statusTarget.disabled ? '启用账号' : '停用账号'"
+      :busy="busy"
+      @close="statusTarget = null"
+      ><p>
+        {{ statusTarget.disabled ? "恢复" : "停用" }}
+        {{ statusTarget.username }}？停用会撤销所有会话和 API
+        Token，并更新节点转发权限。
+      </p>
+      <p v-if="formError" class="error" role="alert">{{ formError }}</p>
+      <button :disabled="busy" @click="changeStatus">
+        确认修改状态
       </button></Modal
     >
   </section>

@@ -24,6 +24,34 @@ func contains(ss []string, v string) bool {
 	}
 	return false
 }
+
+func policyDenied(g contract.Group, rule contract.Rule) bool {
+	return contains(g.BlockedProtocols, rule.Network) || contains(g.BlockedProtocols, rule.Transport) || contains(g.BlockedProtocols, "network:"+rule.Network) || contains(g.BlockedProtocols, "transport:"+rule.Transport)
+}
+
+func applicationBlocks(rule, group []string) []string {
+	out := []string{}
+	add := func(p string) {
+		if !contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	for _, p := range rule {
+		if p == "http" || p == "socks" {
+			add(p)
+		} else if p == "app:http" || p == "app:socks" {
+			add(strings.TrimPrefix(p, "app:"))
+		}
+	}
+	for _, p := range group {
+		if p == "app:http" || p == "app:socks" {
+			add(strings.TrimPrefix(p, "app:"))
+		} else if p == "socks" {
+			add(p)
+		}
+	}
+	return out
+}
 func (s *Server) groups(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFromContext(r.Context())
 	where := ""
@@ -78,7 +106,7 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, p := range g.BlockedProtocols {
-		if !contains([]string{"tcp", "udp", "direct", "tls", "ws", "wss", "http"}, p) {
+		if !contains([]string{"tcp", "udp", "direct", "tls", "ws", "wss", "http", "socks", "network:tcp", "network:udp", "transport:direct", "transport:tls", "transport:ws", "transport:wss", "transport:http", "app:http", "app:socks"}, p) {
 			fail(w, 400, "unsupported blocked protocol")
 			return
 		}
@@ -253,15 +281,15 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 		if actor.Role != "admin" && !contains(g.UserIDs, actor.ID) {
 			return errors.New("group not authorized")
 		}
-		if port < g.PortMin || port > g.PortMax || contains(g.BlockedProtocols, rule.Network) || contains(g.BlockedProtocols, rule.Transport) {
+		if port < g.PortMin || port > g.PortMax || policyDenied(g, rule) {
 			return errors.New("group policy denied")
 		}
 		for _, p := range rule.BlockedProtocols {
-			if !contains([]string{"tcp", "udp", "direct", "tls", "ws", "wss", "http"}, p) {
+			if !contains([]string{"http", "socks", "app:http", "app:socks"}, p) {
 				return errors.New("unsupported rule protocol policy")
 			}
 		}
-		rule.BlockedProtocols = append(rule.BlockedProtocols, g.BlockedProtocols...)
+		rule.BlockedProtocols = applicationBlocks(rule.BlockedProtocols, nil)
 		if create {
 			rule.Version = 1
 		} else {

@@ -17,6 +17,7 @@ type Options struct {
 	Origin        string
 	SecureCookies bool
 	EPay          payment.EPay
+	Channels      map[string]commerce.Channel
 }
 
 type App struct {
@@ -33,7 +34,7 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	control := platform.New(store, platform.Options{Origin: opts.Origin, SecureCookies: opts.SecureCookies, Entitlements: billing, LeaseCurrent: billing.LeaseCurrent, RetireLease: billing.RetireLease})
 	mux := http.NewServeMux()
 	control.Register(mux)
-	billing.Register(mux, commerce.HTTPOptions{Authenticate: control.Authenticate, EPay: opts.EPay, PublicOrigin: opts.Origin})
+	billing.Register(mux, commerce.HTTPOptions{Authenticate: control.Authenticate, EPay: opts.EPay, PublicOrigin: opts.Origin, Channels: opts.Channels})
 	webui.Register(mux)
 	return &App{Handler: webui.Security(mux), Platform: control, Commerce: billing}, nil
 }
