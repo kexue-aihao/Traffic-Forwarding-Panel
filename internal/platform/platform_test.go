@@ -214,3 +214,20 @@ func TestRetirementRequiresSettledUsageAndNeverReplaysGrant(t *testing.T) {
 		t.Fatal("new usage after retire accepted")
 	}
 }
+
+func TestRecoveryAndNodeRotationRevokeCredentials(t *testing.T) {
+	f := setup(t)
+	_, n := f.node()
+	rotation := read[map[string]string](t, f.req("POST", "/nodes/"+n.NodeID+"/rotate-token", map[string]any{}, ""), 200)
+	if rr := f.req("GET", "/agent/config", nil, n.Token); rr.Code != 401 {
+		t.Fatal("old node credential accepted")
+	}
+	read[contract.Config](t, f.req("GET", "/agent/config", nil, rotation["token"]), 200)
+	if e := f.s.ResetPassword(context.Background(), "admin", "replacement-password"); e != nil {
+		t.Fatal(e)
+	}
+	if rr := f.req("GET", "/auth/session", nil, ""); rr.Code != 401 {
+		t.Fatal("old session survived recovery")
+	}
+	read[map[string]any](t, f.req("POST", "/auth/login", map[string]any{"username": "admin", "password": "replacement-password"}, ""), 200)
+}

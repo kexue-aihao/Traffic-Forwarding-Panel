@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -155,4 +156,52 @@ func (s *Server) bearerUser(r *http.Request) (contract.User, error) {
 	}
 	u.Role = "user"
 	return u, nil
+}
+
+// ResetPassword is an operator-local recovery API, never an unauthenticated HTTP
+// route. Existing sessions and API keys are revoked in the same transaction.
+func (s *Server) ResetPassword(ctx context.Context, username, password string) error {
+	if len(password) < 12 || len(password) > 72 {
+		return errors.New("password must contain 12-72 bytes")
+	}
+	hash, e := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if e != nil {
+		return e
+	}
+	return s.Store.Write(ctx, storage.Critical, func(tx *sql.Tx) error {
+		var uid string
+		if e := tx.QueryRowContext(ctx, s.q(`SELECT id FROM cp_users WHERE username=?`), strings.ToLower(strings.TrimSpace(username))).Scan(&uid); e != nil {
+			return e
+		}
+		if _, e := tx.ExecContext(ctx, s.q(`UPDATE cp_users SET password_hash=? WHERE id=?`), string(hash), uid); e != nil {
+			return e
+		}
+		for _, table := range []string{"cp_sessions", "cp_tokens"} {
+			if _, e := tx.ExecContext(ctx, s.q(`DELETE FROM `+table+` WHERE user_id=?`), uid); e != nil {
+				return e
+			}
+		}
+		return s.AuditTx(ctx, tx, "local-operator", "user.recover", uid)
+	})
+}
+func (s *Server) rotateNodeToken(w http.ResponseWriter, r *http.Request) {
+	node := r.PathValue("id")
+	raw := token()
+	u, _ := UserFromContext(r.Context())
+	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		res, e := tx.ExecContext(r.Context(), s.q(`UPDATE cp_nodes SET token_hash=? WHERE id=?`), digest(raw), node)
+		if e != nil {
+			return e
+		}
+		n, _ := res.RowsAffected()
+		if n != 1 {
+			return errConflict
+		}
+		return s.AuditTx(r.Context(), tx, u.ID, "node.rotate", node)
+	})
+	if e != nil {
+		fail(w, 409, "node credential rotation failed")
+		return
+	}
+	reply(w, 200, map[string]any{"node_id": node, "token": raw})
 }

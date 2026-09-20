@@ -88,7 +88,7 @@ func (s *Store) Rebind(q string) string {
 		return q
 	}
 	n := 0
-	return strings.Map(func(r rune) rune { return r }, replacePlaceholders(q, &n))
+	return replacePlaceholders(q, &n)
 }
 func replacePlaceholders(q string, n *int) string {
 	parts := strings.Split(q, "?")
