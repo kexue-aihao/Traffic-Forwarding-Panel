@@ -6,7 +6,7 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/payment"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
-	"path/filepath"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/testdb"
 	"sync"
 	"testing"
 	"time"
@@ -14,13 +14,9 @@ import (
 
 func fixture(t *testing.T) *Service {
 	t.Helper()
-	st, e := storage.Open(context.Background(), "sqlite", filepath.Join(t.TempDir(), "commerce.db"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	t.Cleanup(func() { st.Close() })
+	st := testdb.Open(t)
 	s := New(st.DB, st.Dialect, func(c context.Context, f func(*sql.Tx) error) error { return st.Write(c, storage.Critical, f) })
-	if e = s.Migrate(context.Background()); e != nil {
+	if e := s.Migrate(context.Background()); e != nil {
 		t.Fatal(e)
 	}
 	return s
@@ -118,7 +114,9 @@ func TestLeaseOldCycleAndUsageReplay(t *testing.T) {
 		}
 	}
 	var oldUsed int64
-	s.DB.QueryRow("SELECT used FROM commerce_entitlements WHERE id=?", a.ID).Scan(&oldUsed)
+	if err := s.DB.QueryRow(s.q("SELECT used FROM commerce_entitlements WHERE id=?"), a.ID).Scan(&oldUsed); err != nil {
+		t.Fatal(err)
+	}
 	current, _ := s.Entitlement(c, "u")
 	if oldUsed != 60 || current.ID != b.ID || current.Used != 0 {
 		t.Fatal(oldUsed, current)
