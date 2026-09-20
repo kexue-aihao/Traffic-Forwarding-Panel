@@ -44,6 +44,7 @@
 - `go test ./internal/payment -count=1`：供应商已公布向量、Cryptomus独立运行时向量、受信TLS模拟网关、超时/重定向/篡改/币种/重复字段。没有真实商户交易。
 - 集成主线运行 `go test -race ./...`、`go vet ./...`，全通过；`CGO_ENABLED=0`的Linux amd64/arm64面板与Agent交叉编译通过。
 - 主线 `npm ci`、`npm run typecheck`、`npm run build`通过，提交的嵌入产物零漂移；`npm test`及`npm run test:live`各自Chromium/Firefox/WebKit通过。fixture覆盖320/390/768/1440/1920、CSP/表单/过期响应/历史空值；live使用真实Go/SQLite及明示聚合夹具验证API/权限/历史UI，不冒充真实Agent采样实验。
+- 支付后台核对追加TLS模拟网关测试，验证丢回调、退避重启、旧备份修复；`ReconciliationCallbackWhileGatewayBlocked`/`ReconciliationV1UpgradePreservesFinancialFacts`及`internal/app`在三库通过，确认网络等待不阻塞回调事务、升级不丢旧事实及进程取消能退出。
 
 四承载真实控制面→商业→Agent集成测试位于 `internal/integration/agent_test.go`；链式实传为Windows本机真实socket。交叉编译与回环实验不替代Linux两台实机和公网条件验收。
 
