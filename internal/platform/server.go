@@ -256,6 +256,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 func (s *Server) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/v1/auth/tokens", s.RequireUser(s.listTokens))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/rotate-token", s.admin(s.rotateNodeToken))
 	mux.HandleFunc("POST /api/v1/agent/leases/retire", s.agent(s.retireLease))
 	mux.HandleFunc("POST /api/v1/auth/tokens", s.RequireUser(s.createToken))
