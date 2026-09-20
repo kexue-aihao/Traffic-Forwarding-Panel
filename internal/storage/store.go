@@ -237,6 +237,43 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	// Migration 2 is restartable even on MySQL, whose DDL auto-commits.
+	for _, idx := range indexes {
+		if s.Dialect == "mysql" {
+			var exists int
+			if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND index_name=?", idx.table, idx.name).Scan(&exists); err != nil {
+				return err
+			}
+			if exists > 0 {
+				continue
+			}
+		}
+		clause := "IF NOT EXISTS "
+		if s.Dialect == "mysql" {
+			clause = ""
+		}
+		if _, err = conn.ExecContext(ctx, "CREATE INDEX "+clause+idx.name+" ON "+idx.table+"("+idx.columns+")"); err != nil {
+			return err
+		}
+	}
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=2").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		if s.Dialect == "postgres" {
+			if _, err = conn.ExecContext(ctx, "ALTER TABLE cp_usage ALTER COLUMN id TYPE VARCHAR(128)"); err != nil {
+				return err
+			}
+		}
+		if s.Dialect == "mysql" {
+			if _, err = conn.ExecContext(ctx, "ALTER TABLE cp_usage MODIFY id VARCHAR(128) NOT NULL"); err != nil {
+				return err
+			}
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(2)"); err != nil {
+			return err
+		}
+	}
 	if s.Dialect == "sqlite" {
 		_, err = conn.ExecContext(ctx, "COMMIT")
 	}
@@ -247,6 +284,7 @@ var schema = []string{
 	`CREATE TABLE IF NOT EXISTS cp_schema(version INTEGER PRIMARY KEY)`,
 	`CREATE TABLE IF NOT EXISTS cp_users(id VARCHAR(64) PRIMARY KEY, username VARCHAR(190) NOT NULL UNIQUE, password_hash VARCHAR(190) NOT NULL, role VARCHAR(32) NOT NULL, disabled INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS cp_sessions(token_hash VARCHAR(64) PRIMARY KEY, user_id VARCHAR(64) NOT NULL, expires_at BIGINT NOT NULL, FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
+	`CREATE TABLE IF NOT EXISTS cp_tokens(id VARCHAR(64) PRIMARY KEY,token_hash VARCHAR(64) NOT NULL UNIQUE,user_id VARCHAR(64) NOT NULL,name VARCHAR(190) NOT NULL,expires_at BIGINT NOT NULL,FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
 	`CREATE TABLE IF NOT EXISTS cp_groups(id VARCHAR(64) PRIMARY KEY, name VARCHAR(190) NOT NULL, payload TEXT NOT NULL, version BIGINT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS cp_group_users(group_id VARCHAR(64) NOT NULL, user_id VARCHAR(64) NOT NULL, PRIMARY KEY(group_id,user_id), FOREIGN KEY(group_id) REFERENCES cp_groups(id), FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
 	`CREATE TABLE IF NOT EXISTS cp_nodes(id VARCHAR(64) PRIMARY KEY, name VARCHAR(190) NOT NULL, token_hash VARCHAR(64) NOT NULL UNIQUE, payload TEXT NOT NULL, desired_version BIGINT NOT NULL, applied_version BIGINT NOT NULL, apply_error TEXT NOT NULL, last_seen BIGINT NOT NULL DEFAULT 0)`,
@@ -257,4 +295,21 @@ var schema = []string{
 	`CREATE TABLE IF NOT EXISTS cp_usage(id VARCHAR(64) PRIMARY KEY, node_id VARCHAR(64) NOT NULL, rule_id VARCHAR(64) NOT NULL, lease_id VARCHAR(64) NOT NULL, payload TEXT NOT NULL, received_at BIGINT NOT NULL, settled INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS cp_audit(id VARCHAR(64) PRIMARY KEY, user_id VARCHAR(64) NOT NULL, action VARCHAR(64) NOT NULL, target VARCHAR(64) NOT NULL, created_at BIGINT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS cp_rule_leases(id VARCHAR(64) PRIMARY KEY, rule_id VARCHAR(64) NOT NULL, node_id VARCHAR(64) NOT NULL, entitlement_id VARCHAR(64) NOT NULL, bytes_allocated BIGINT NOT NULL, bytes_used BIGINT NOT NULL, expires_at BIGINT NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS cp_lease_retirements(id VARCHAR(64) PRIMARY KEY,used_bytes BIGINT NOT NULL,retired_at BIGINT NOT NULL)`,
+}
+
+var indexes = []struct{ name, table, columns string }{
+	{"cp_rules_node", "cp_rules", "node_id,deleted,id"},
+	{"cp_rules_user", "cp_rules", "user_id,deleted,id"},
+	{"cp_rules_group", "cp_rules", "group_id,deleted,id"},
+	{"cp_rules_release", "cp_rules", "node_id,deleted,release_version"},
+	{"cp_sessions_user", "cp_sessions", "user_id,expires_at"},
+	{"cp_sessions_expiry", "cp_sessions", "expires_at"},
+	{"cp_gu_user", "cp_group_users", "user_id,group_id"},
+	{"cp_ng_group", "cp_node_groups", "group_id,node_id"},
+	{"cp_ports_rule", "cp_ports", "rule_id"},
+	{"cp_usage_rule", "cp_usage", "rule_id,received_at"},
+	{"cp_usage_settled", "cp_usage", "settled,received_at"},
+	{"cp_audit_time", "cp_audit", "created_at,id"},
+	{"cp_leases_rule", "cp_rule_leases", "rule_id,expires_at"},
 }
