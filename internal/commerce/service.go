@@ -173,10 +173,18 @@ func (s *Service) Wallet(ctx context.Context, user string) (Wallet, error) {
 }
 func (s *Service) walletTx(ctx context.Context, tx *sql.Tx, user string) (int64, int64, error) {
 	var balance, version int64
-	e := tx.QueryRowContext(ctx, s.q("SELECT balance,version FROM commerce_wallets WHERE user_id=?"), user).Scan(&balance, &version)
-	if errors.Is(e, sql.ErrNoRows) {
-		_, e = tx.ExecContext(ctx, s.q("INSERT INTO commerce_wallets(user_id,balance,version) VALUES(?,0,0)"), user)
+	insert := "INSERT INTO commerce_wallets(user_id,balance,version) VALUES(?,0,0) ON CONFLICT(user_id) DO NOTHING"
+	if s.Dialect == "mysql" {
+		insert = "INSERT INTO commerce_wallets(user_id,balance,version) VALUES(?,0,0) ON DUPLICATE KEY UPDATE user_id=user_id"
 	}
+	if _, e := tx.ExecContext(ctx, s.q(insert), user); e != nil {
+		return 0, 0, e
+	}
+	query := "SELECT balance,version FROM commerce_wallets WHERE user_id=?"
+	if s.Dialect != "sqlite" {
+		query += " FOR UPDATE"
+	}
+	e := tx.QueryRowContext(ctx, s.q(query), user).Scan(&balance, &version)
 	return balance, version, e
 }
 func (s *Service) post(ctx context.Context, tx *sql.Tx, user string, delta int64, kind, reference string) error {
@@ -207,6 +215,9 @@ func (s *Service) Purchase(ctx context.Context, user, plan, key string, expected
 		return result, errors.New("invalid idempotency key")
 	}
 	err := s.Write(ctx, func(tx *sql.Tx) error {
+		if _, _, err := s.walletTx(ctx, tx, user); err != nil {
+			return err
+		}
 		var prev, p string
 		var v int64
 		e := tx.QueryRowContext(ctx, s.q("SELECT entitlement_id,plan_id,expected_version FROM commerce_purchases WHERE user_id=? AND idempotency_key=?"), user, key).Scan(&prev, &p, &v)

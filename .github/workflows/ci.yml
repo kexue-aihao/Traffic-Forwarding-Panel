@@ -1,0 +1,62 @@
+name: checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: tfp
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: tfp_test
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: test-only
+          MYSQL_DATABASE: tfp_test
+        ports: ['3306:3306']
+        options: --health-cmd="mysqladmin ping -h 127.0.0.1 -ptest-only" --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: test -z "$(gofmt -l cmd internal)"
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go test ./internal/commerce ./internal/platform -count=1
+        env:
+          TFP_TEST_DRIVER: postgres
+          TFP_TEST_DSN: postgres://tfp:test-only@localhost:5432/tfp_test?sslmode=disable
+      - run: go test ./internal/commerce ./internal/platform -count=1
+        env:
+          TFP_TEST_DRIVER: mysql
+          TFP_TEST_DSN: root:test-only@tcp(localhost:3306)/tfp_test?parseTime=true
+      - run: go build ./cmd/panel ./cmd/agent
+      - run: GOOS=linux GOARCH=arm64 go build ./cmd/panel ./cmd/agent
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run typecheck
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - run: git diff --exit-code -- internal/webui/assets
+      - run: test -z "$(git status --porcelain -- internal/webui/assets)"
+      - run: '! grep -r -E "v-html|new Function|eval\\(" web/src internal/webui/assets/app.js'

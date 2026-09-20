@@ -13,6 +13,9 @@ func (s *Service) CreateOrder(ctx context.Context, user, channel, key string, am
 		return o, errors.New("invalid or unavailable channel/amount/key")
 	}
 	err := s.Write(ctx, func(tx *sql.Tx) error {
+		if _, _, err := s.walletTx(ctx, tx, user); err != nil {
+			return err
+		}
 		var created string
 		e := tx.QueryRowContext(ctx, s.q("SELECT id,channel,amount,status,payment_url,created_at FROM commerce_orders WHERE user_id=? AND idempotency_key=?"), user, key).Scan(&o.ID, &o.Channel, &o.Amount, &o.Status, &o.PaymentURL, &created)
 		if e == nil {
@@ -44,7 +47,11 @@ func (s *Service) ConfirmPayment(ctx context.Context, channel, order, transactio
 		var user, c, status string
 		var actual int64
 		var prev sql.NullString
-		e := tx.QueryRowContext(ctx, s.q("SELECT user_id,channel,amount,status,provider_tx FROM commerce_orders WHERE id=?"), order).Scan(&user, &c, &actual, &status, &prev)
+		query := "SELECT user_id,channel,amount,status,provider_tx FROM commerce_orders WHERE id=?"
+		if s.Dialect != "sqlite" {
+			query += " FOR UPDATE"
+		}
+		e := tx.QueryRowContext(ctx, s.q(query), order).Scan(&user, &c, &actual, &status, &prev)
 		if e != nil {
 			return e
 		}
