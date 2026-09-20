@@ -375,13 +375,16 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 	node := r.Context().Value(nodeKey{}).(string)
 	accepted := []string{}
 	e := s.Store.Write(r.Context(), storage.Normal, func(tx *sql.Tx) error {
+		queries := storage.NewQueries(tx)
+		defer queries.Close()
+		commercial := []contract.UsageRecord{}
 		for _, u := range batch.Records {
 			if u.NodeID != node || u.ID == "" || len(u.ID) > 128 || u.UploadBytes < 0 || u.DownloadBytes < 0 || u.UploadBytes > math.MaxInt64-u.DownloadBytes || u.StartedAt.IsZero() || u.EndedAt.Before(u.StartedAt) || u.EndedAt.After(time.Now().Add(time.Minute)) {
 				return errors.New("invalid usage record")
 			}
 			payload := strJSON(u)
 			var old string
-			e := tx.QueryRowContext(r.Context(), s.q(`SELECT payload FROM cp_usage WHERE id=?`), u.ID).Scan(&old)
+			e := queries.Row(r.Context(), s.q(`SELECT payload FROM cp_usage WHERE id=?`), u.ID).Scan(&old)
 			if e == nil {
 				if old != payload {
 					return errConflict
@@ -392,23 +395,20 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 			if !errors.Is(e, sql.ErrNoRows) {
 				return e
 			}
-			var retired int
-			if e = tx.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_lease_retirements WHERE id=?`), u.LeaseID).Scan(&retired); e != nil {
-				return e
-			}
-			if retired != 0 {
-				return errors.New("lease retired")
-			}
+			var retired int64
 			var rn, nn, ent string
 			var budget, used, expiry int64
-			if e = tx.QueryRowContext(r.Context(), s.q(`SELECT rule_id,node_id,entitlement_id,bytes_allocated,bytes_used,expires_at FROM cp_rule_leases WHERE id=?`), u.LeaseID).Scan(&rn, &nn, &ent, &budget, &used, &expiry); e != nil {
+			if e = queries.Row(r.Context(), s.q(`SELECT l.rule_id,l.node_id,l.entitlement_id,l.bytes_allocated,l.bytes_used,l.expires_at,COALESCE(ret.used_bytes,-1) FROM cp_rule_leases l LEFT JOIN cp_lease_retirements ret ON ret.id=l.id WHERE l.id=?`), u.LeaseID).Scan(&rn, &nn, &ent, &budget, &used, &expiry, &retired); e != nil {
 				return e
+			}
+			if retired >= 0 {
+				return errors.New("lease retired")
 			}
 			if rn != u.RuleID || nn != node || ent != u.EntitlementID || u.EndedAt.Unix() > expiry || u.UploadBytes+u.DownloadBytes > budget-used {
 				return errors.New("usage outside lease")
 			}
 			amount := u.UploadBytes + u.DownloadBytes
-			res, e := tx.ExecContext(r.Context(), s.q(`UPDATE cp_rule_leases SET bytes_used=bytes_used+? WHERE id=? AND bytes_used=?`), amount, u.LeaseID, used)
+			res, e := queries.Exec(r.Context(), s.q(`UPDATE cp_rule_leases SET bytes_used=bytes_used+? WHERE id=? AND bytes_used=?`), amount, u.LeaseID, used)
 			if e != nil {
 				return e
 			}
@@ -419,14 +419,23 @@ func (s *Server) usage(w http.ResponseWriter, r *http.Request) {
 			if settle, ok := s.opts.Entitlements.(interface {
 				SettleUsage(context.Context, *sql.Tx, contract.UsageRecord) error
 			}); ok && ent != "admin-test" {
-				if e = settle.SettleUsage(r.Context(), tx, u); e != nil {
+				if _, canBatch := s.opts.Entitlements.(interface {
+					SettleUsageBatch(context.Context, *sql.Tx, []contract.UsageRecord) error
+				}); canBatch {
+					commercial = append(commercial, u)
+				} else if e = settle.SettleUsage(r.Context(), tx, u); e != nil {
 					return e
 				}
 			}
-			if _, e = tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_usage(id,node_id,rule_id,lease_id,payload,received_at,settled) VALUES(?,?,?,?,?,?,?)`), u.ID, node, u.RuleID, u.LeaseID, payload, time.Now().Unix(), 1); e != nil {
+			if _, e = queries.Exec(r.Context(), s.q(`INSERT INTO cp_usage(id,node_id,rule_id,lease_id,payload,received_at,settled) VALUES(?,?,?,?,?,?,?)`), u.ID, node, u.RuleID, u.LeaseID, payload, time.Now().Unix(), 1); e != nil {
 				return e
 			}
 			accepted = append(accepted, u.ID)
+		}
+		if len(commercial) > 0 {
+			return s.opts.Entitlements.(interface {
+				SettleUsageBatch(context.Context, *sql.Tx, []contract.UsageRecord) error
+			}).SettleUsageBatch(r.Context(), tx, commercial)
 		}
 		return nil
 	})

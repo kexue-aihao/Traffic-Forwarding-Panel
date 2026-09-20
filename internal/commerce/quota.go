@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 	"math/big"
 	"time"
 )
@@ -155,12 +156,25 @@ func (s *Service) RetireLease(ctx context.Context, tx *sql.Tx, node, leaseID str
 
 // SettleUsage accepts delayed old-cycle facts, but never charges a newer entitlement.
 func (s *Service) SettleUsage(ctx context.Context, tx *sql.Tx, u contract.UsageRecord) error {
+	return s.SettleUsageBatch(ctx, tx, []contract.UsageRecord{u})
+}
+func (s *Service) SettleUsageBatch(ctx context.Context, tx *sql.Tx, records []contract.UsageRecord) error {
+	queries := storage.NewQueries(tx)
+	defer queries.Close()
+	for _, record := range records {
+		if err := s.settleUsage(ctx, queries, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (s *Service) settleUsage(ctx context.Context, queries *storage.Queries, u contract.UsageRecord) error {
 	if u.ID == "" || len(u.ID) > 128 || u.UploadBytes < 0 || u.DownloadBytes < 0 || u.UploadBytes > int64(^uint64(0)>>1)-u.DownloadBytes || u.EndedAt.Before(u.StartedAt) {
 		return errors.New("invalid usage")
 	}
 	payload, _ := json.Marshal(u)
 	var old string
-	err := tx.QueryRowContext(ctx, s.q("SELECT payload FROM commerce_usage WHERE id=?"), u.ID).Scan(&old)
+	err := queries.Row(ctx, s.q("SELECT payload FROM commerce_usage WHERE id=?"), u.ID).Scan(&old)
 	if err == nil {
 		if old != string(payload) {
 			return ErrConflict
@@ -171,18 +185,14 @@ func (s *Service) SettleUsage(ctx context.Context, tx *sql.Tx, u contract.UsageR
 		return err
 	}
 	var closed int
-	err = tx.QueryRowContext(ctx, s.q("SELECT closed FROM commerce_lease_reservations WHERE lease_id=?"), u.LeaseID).Scan(&closed)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	var node, rule, ent, expiry, mult string
+	var bytes, used int64
+	err = queries.Row(ctx, s.q("SELECT l.node_id,l.rule_id,l.entitlement_id,l.expires_at,l.bytes,l.used,l.multiplier,COALESCE(r.closed,0) FROM commerce_leases l LEFT JOIN commerce_lease_reservations r ON r.lease_id=l.id WHERE l.id=?"), u.LeaseID).Scan(&node, &rule, &ent, &expiry, &bytes, &used, &mult, &closed)
+	if err != nil {
 		return err
 	}
 	if closed != 0 {
 		return errors.New("lease retired")
-	}
-	var node, rule, ent, expiry, mult string
-	var bytes, used int64
-	err = tx.QueryRowContext(ctx, s.q("SELECT node_id,rule_id,entitlement_id,expires_at,bytes,used,multiplier FROM commerce_leases WHERE id=?"), u.LeaseID).Scan(&node, &rule, &ent, &expiry, &bytes, &used, &mult)
-	if err != nil {
-		return err
 	}
 	if node != u.NodeID || rule != u.RuleID || ent != u.EntitlementID || u.EndedAt.After(parse(expiry)) {
 		return errors.New("usage outside lease")
@@ -201,7 +211,7 @@ func (s *Service) SettleUsage(ctx context.Context, tx *sql.Tx, u contract.UsageR
 	if !charge.IsInt64() {
 		return errors.New("charge overflow")
 	}
-	r, err := tx.ExecContext(ctx, s.q("UPDATE commerce_leases SET used=used+? WHERE id=? AND used=?"), raw, u.LeaseID, used)
+	r, err := queries.Exec(ctx, s.q("UPDATE commerce_leases SET used=used+? WHERE id=? AND used=?"), raw, u.LeaseID, used)
 	if err != nil {
 		return err
 	}
@@ -209,10 +219,10 @@ func (s *Service) SettleUsage(ctx context.Context, tx *sql.Tx, u contract.UsageR
 	if n != 1 {
 		return ErrConflict
 	}
-	_, err = tx.ExecContext(ctx, s.q("UPDATE commerce_entitlements SET used=used+? WHERE id=?"), charge.Int64(), ent)
+	_, err = queries.Exec(ctx, s.q("UPDATE commerce_entitlements SET used=used+? WHERE id=?"), charge.Int64(), ent)
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, s.q("INSERT INTO commerce_usage(id,lease_id,payload,charged) VALUES(?,?,?,?)"), u.ID, u.LeaseID, string(payload), charge.Int64())
+	_, err = queries.Exec(ctx, s.q("INSERT INTO commerce_usage(id,lease_id,payload,charged) VALUES(?,?,?,?)"), u.ID, u.LeaseID, string(payload), charge.Int64())
 	return err
 }

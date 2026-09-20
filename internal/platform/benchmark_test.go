@@ -158,5 +158,15 @@ func BenchmarkUsageCapacity(b *testing.B) {
 		}
 	}
 	b.StopTimer()
+	var facts, charged int64
+	if err := s.Store.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM commerce_usage").Scan(&facts); err != nil {
+		b.Fatal(err)
+	}
+	if err := s.Store.DB.QueryRowContext(ctx, "SELECT COALESCE(SUM(used),0) FROM commerce_entitlements").Scan(&charged); err != nil {
+		b.Fatal(err)
+	}
+	if facts != int64(b.N*200) || charged != int64(b.N*200*1024) {
+		b.Fatalf("commercial accounting missing: facts=%d charged=%d", facts, charged)
+	}
 	b.ReportMetric(float64(b.N*200)/b.Elapsed().Seconds(), "records/s")
 }
