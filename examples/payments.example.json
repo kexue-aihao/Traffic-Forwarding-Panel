@@ -1,0 +1,9 @@
+{
+  "epay": {
+    "gateway": "https://gateway.example.com",
+    "merchant_id": "REPLACE_WITH_MERCHANT_ID",
+    "key": "REPLACE_WITH_MERCHANT_KEY",
+    "epay_mode": "submit",
+    "method": "alipay"
+  }
+}

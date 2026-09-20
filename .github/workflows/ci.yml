@@ -32,11 +32,11 @@ jobs:
       - run: test -z "$(gofmt -l cmd internal)"
       - run: go vet ./...
       - run: go test -race ./...
-      - run: go test ./internal/commerce ./internal/platform -count=1
+      - run: go test ./internal/commerce ./internal/platform ./internal/storage -count=1
         env:
           TFP_TEST_DRIVER: postgres
           TFP_TEST_DSN: postgres://tfp:test-only@localhost:5432/tfp_test?sslmode=disable
-      - run: go test ./internal/commerce ./internal/platform -count=1
+      - run: go test ./internal/commerce ./internal/platform ./internal/storage -count=1
         env:
           TFP_TEST_DRIVER: mysql
           TFP_TEST_DSN: root:test-only@tcp(localhost:3306)/tfp_test?parseTime=true
@@ -46,6 +46,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -60,3 +64,9 @@ jobs:
       - run: git diff --exit-code -- internal/webui/assets
       - run: test -z "$(git status --porcelain -- internal/webui/assets)"
       - run: '! grep -r -E "v-html|new Function|eval\\(" web/src internal/webui/assets/app.js'
+      - run: npx playwright install --with-deps chromium firefox webkit
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      - run: npm run test:live
+        working-directory: web
