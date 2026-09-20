@@ -1,0 +1,4 @@
+* text=auto eol=lf
+internal/webui/assets/** -text
+web/static/** -text
+web/package-lock.json -text

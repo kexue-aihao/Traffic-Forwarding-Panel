@@ -1,0 +1,11 @@
+/.local/
+/.gocache/
+/bin/
+/web/node_modules/
+*.db
+*.db-shm
+*.db-wal
+*.test
+*.exe
+*.log
+.env

@@ -1,0 +1,4281 @@
+{
+  "target": "https://alpha.argoa.org",
+  "observedPanelVersion": "20260728",
+  "captureDate": "2026-09-20",
+  "method": "Browser HTTP response interception and WebSocket frame schemas; public frontend inspection",
+  "scope": "Administrator session, page navigation, query APIs and unsaved new-item forms; login/logout performed; no business mutations submitted",
+  "limitations": [
+    "No server-side packet capture or tunnel forwarding test",
+    "No ordinary-user account tested",
+    "Schemas sample up to 20 array items and depth 7; presence does not imply requiredness",
+    "No credentials, header values, query values, response scalar values, customer rows or host addresses retained",
+    "HTTP status and application code are independent; empty businessCodes means the collector did not record that code",
+    "The custom capture-report POST was blocked while viewing tz2.html"
+  ],
+  "httpObservationCount": 67,
+  "uniqueHttpEndpoints": 31,
+  "httpEndpoints": [
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/aff/log",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:29:43.414Z",
+      "lastObserved": "2026-09-20T13:29:43.414Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [
+        "page",
+        "size"
+      ],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/devicegroup",
+      "observations": 6,
+      "firstObserved": "2026-09-20T13:29:35.463Z",
+      "lastObserved": "2026-09-20T13:38:21.106Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].config",
+          "types": [
+            "JSON-encoded string"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.blocked_path",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.blocked_path[]",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.blocked_protocol",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.blocked_protocol[]",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.direct_policy",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.disable_udp",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.protocol",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.udp_smart_bind",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].connect_host",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].display_num",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].enable_for_gid",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].port_range",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].ratio",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].show_order",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].token",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].traffic_used",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].type",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/devicegroup/folder",
+      "observations": 3,
+      "firstObserved": "2026-09-20T13:29:42.014Z",
+      "lastObserved": "2026-09-20T13:38:20.552Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.folders",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data.folders[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.folders[].id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.folders[].item_count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.folders[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.unclassified_count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/kv/device-offline-notify-config",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:29:45.999Z",
+      "lastObserved": "2026-09-20T13:29:45.999Z",
+      "httpStatuses": [
+        404
+      ],
+      "businessCodes": [
+        404
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/kv/invite_config",
+      "observations": 2,
+      "firstObserved": "2026-09-20T13:29:44.674Z",
+      "lastObserved": "2026-09-20T13:35:57.717Z",
+      "httpStatuses": [
+        404
+      ],
+      "businessCodes": [
+        404
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/kv/payment_info",
+      "observations": 2,
+      "firstObserved": "2026-09-20T13:29:44.694Z",
+      "lastObserved": "2026-09-20T13:35:57.718Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "JSON-encoded string"
+          ]
+        },
+        {
+          "path": "$.data::<json>",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data::<json>.gateways",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data::<json>.gateways[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data::<json>.gateways[].callback_host",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data::<json>.gateways[].enable",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data::<json>.gateways[].fee_ratio",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data::<json>.gateways[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data::<json>.gateways[].pid",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data::<json>.gateways[].secret",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data::<json>.gateways[].type",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data::<json>.gateways[].url",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data::<json>.min_deposit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/kv/site_notice",
+      "observations": 2,
+      "firstObserved": "2026-09-20T13:29:44.713Z",
+      "lastObserved": "2026-09-20T13:35:57.716Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/kv/telegram-bot-config",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:29:45.998Z",
+      "lastObserved": "2026-09-20T13:29:45.998Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "JSON-encoded string"
+          ]
+        },
+        {
+          "path": "$.data::<json>",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data::<json>.enable",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data::<json>.token",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data::<json>.webhook_url",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/shop/order",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:29:38.109Z",
+      "lastObserved": "2026-09-20T13:29:38.109Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [
+        "page",
+        "size"
+      ],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].amount",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].message",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].open_time",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].order_no",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].paid_time",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].status",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].type",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].uid",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].username",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/shop/plan",
+      "observations": 4,
+      "firstObserved": "2026-09-20T13:29:35.455Z",
+      "lastObserved": "2026-09-20T13:35:54.826Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].connection_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].desc",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].group_id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].hide",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].ip_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].max_rules",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].multiple",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].price",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].show_order",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].speed_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].traffic",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].type",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/shop/redeem",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:29:40.737Z",
+      "lastObserved": "2026-09-20T13:29:40.737Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [
+        "page",
+        "size"
+      ],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].code",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].discount_ratio",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].plan_id",
+          "types": [
+            "number"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/statistic",
+      "observations": 2,
+      "firstObserved": "2026-09-20T13:29:34.264Z",
+      "lastObserved": "2026-09-20T13:36:51.064Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [
+        "top_users"
+      ],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.income_last_month",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.income_this_month",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.income_today",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.income_yesterday",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.node_traffic_rank_today",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data.node_traffic_rank_today[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.node_traffic_rank_today[].gid",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.node_traffic_rank_today[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.node_traffic_rank_today[].traffic",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.node_traffic_rank_yesterday",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data.node_traffic_rank_yesterday[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.node_traffic_rank_yesterday[].gid",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.node_traffic_rank_yesterday[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.node_traffic_rank_yesterday[].traffic",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.total_traffic_today",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.total_traffic_yesterday",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.user_count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.user_traffic_rank_today",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data.user_traffic_rank_today[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.user_traffic_rank_today[].traffic",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.user_traffic_rank_today[].uid",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.user_traffic_rank_today[].username",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.user_traffic_rank_yesterday",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data.user_traffic_rank_yesterday[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.user_traffic_rank_yesterday[].traffic",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.user_traffic_rank_yesterday[].uid",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.user_traffic_rank_yesterday[].username",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/user",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:29:35.726Z",
+      "lastObserved": "2026-09-20T13:29:35.726Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [
+        "page",
+        "size"
+      ],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].admin",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].aff_balance",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].allow_device",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].auto_renew",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].balance",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].banned",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].connection_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].expire",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].group_id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].invite_code",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].invite_config",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].inviter",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].ip_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].max_rules",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].plan_id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].speed_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].telegram_id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].traffic_enable",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].traffic_used",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].username",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/admin/usergroup",
+      "observations": 2,
+      "firstObserved": "2026-09-20T13:29:35.461Z",
+      "lastObserved": "2026-09-20T13:29:36.755Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].show_order",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].user_count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/guest/kv/site_info",
+      "observations": 5,
+      "firstObserved": "2026-09-20T13:27:33.917Z",
+      "lastObserved": "2026-09-20T13:36:50.899Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "JSON-encoded string",
+            "string"
+          ]
+        },
+        {
+          "path": "$.data::<json>",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data::<json>.allow_looking_glass",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data::<json>.allow_single_tunnel",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data::<json>.theme_policy",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data::<json>.title",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data::<json>.transparent_theme_bg_desktop",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data::<json>.transparent_theme_bg_mobile",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/system/info",
+      "observations": 4,
+      "firstObserved": "2026-09-20T13:28:07.295Z",
+      "lastObserved": "2026-09-20T13:36:51.062Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.license_expire",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.time",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.version",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/system/info/queue",
+      "observations": 2,
+      "firstObserved": "2026-09-20T13:29:34.263Z",
+      "lastObserved": "2026-09-20T13:36:51.063Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.forward_status",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.traffic",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/system/node/status",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:29:32.806Z",
+      "lastObserved": "2026-09-20T13:29:32.806Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].gid",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].gType",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[].servers[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].handle",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].ip4",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].ip4_geo",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].ip6",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].ip6_geo",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].last_pull",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].last_seen",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].online",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.arch",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.boot_time",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.cpu",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.cpu[]",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.disk_total",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.hostname",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.mem_total",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.platform",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.platform_version",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.swap_total",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.version",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_info.virtualization",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.cpu",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.disk_used",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.load1",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.load15",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.load5",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.mem_used",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.net_in_speed",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.net_in_transfer",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.net_out_speed",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.net_out_transfer",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.process_count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.swap_used",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.tcp_conn_count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.udp_conn_count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].system_state.uptime",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].servers[].weight",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/aff/config",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:29:26.170Z",
+      "lastObserved": "2026-09-20T13:29:26.170Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "null"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/devicegroup",
+      "observations": 4,
+      "firstObserved": "2026-09-20T13:29:27.732Z",
+      "lastObserved": "2026-09-20T13:38:23.524Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].config",
+          "types": [
+            "JSON-encoded string"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.blocked_host",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.blocked_host[]",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.blocked_path",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.blocked_path[]",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.blocked_protocol",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.blocked_protocol[]",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.direct_policy",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.disable_udp",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.shaping",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.shaping[]",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.tls_inbound_policy",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.tls_reject_empty_sni",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].config::<json>.udp_smart_bind",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].connect_host",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].display_num",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].hide_status",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].port_range",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].ratio",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].show_order",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].traffic_used",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].type",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/forward",
+      "observations": 3,
+      "firstObserved": "2026-09-20T13:29:27.731Z",
+      "lastObserved": "2026-09-20T13:38:23.524Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [
+        "page",
+        "size"
+      ],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/forward/folder",
+      "observations": 3,
+      "firstObserved": "2026-09-20T13:29:27.730Z",
+      "lastObserved": "2026-09-20T13:38:23.523Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.folders",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data.folders[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.folders[].id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.folders[].item_count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.folders[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.folders[].uid",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.unclassified_count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/info",
+      "observations": 6,
+      "firstObserved": "2026-09-20T13:28:07.350Z",
+      "lastObserved": "2026-09-20T13:36:51.061Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "referer",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.admin",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data.aff_balance",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.allow_device",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data.auto_renew",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data.balance",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.banned",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data.connection_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.expire",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.group_id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.group_name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.invite_code",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.invite_config",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.inviter",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.ip_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.max_rules",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.plan_id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.plan_name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.renew_price",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.speed_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.telegram_id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.traffic_enable",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.traffic_used",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.used_rules",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.username",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/kv/site_notice",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:28:07.649Z",
+      "lastObserved": "2026-09-20T13:28:07.649Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/notification/settings",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:37:35.407Z",
+      "lastObserved": "2026-09-20T13:37:35.407Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].channel",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].list",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].mode",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].msg_type",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].uid",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/shop/order",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:29:31.450Z",
+      "lastObserved": "2026-09-20T13:29:31.450Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [
+        "page",
+        "size"
+      ],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.count",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].amount",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].message",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].open_time",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].order_no",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].paid_time",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].status",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].type",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].uid",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].username",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/shop/payment_info",
+      "observations": 2,
+      "firstObserved": "2026-09-20T13:29:30.214Z",
+      "lastObserved": "2026-09-20T13:37:35.698Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.gateways",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data.gateways[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.gateways[].enable",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data.gateways[].fee_ratio",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.gateways[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.gateways[].type",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data.min_deposit",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/shop/plan",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:29:30.198Z",
+      "lastObserved": "2026-09-20T13:29:30.198Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "path": "$.data[]",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data[].connection_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].desc",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].group_id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].hide",
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "path": "$.data[].id",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].ip_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].max_rules",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].multiple",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].name",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].price",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.data[].show_order",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].speed_limit",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].traffic",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data[].type",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/user/statistic",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:37:34.381Z",
+      "lastObserved": "2026-09-20T13:37:34.381Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.data.traffic_today",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data.traffic_yesterday",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:28:07.030Z",
+      "lastObserved": "2026-09-20T13:28:07.030Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "content-length",
+        "content-type",
+        "origin",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.password",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.username",
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.data",
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/logout",
+      "observations": 1,
+      "firstObserved": "2026-09-20T13:39:23.616Z",
+      "lastObserved": "2026-09-20T13:39:23.616Z",
+      "httpStatuses": [
+        200
+      ],
+      "businessCodes": [
+        0
+      ],
+      "queryKeys": [],
+      "requestHeaderNames": [
+        ":authority",
+        ":method",
+        ":path",
+        ":scheme",
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "authorization",
+        "content-length",
+        "origin",
+        "priority",
+        "sec-ch-ua",
+        "sec-ch-ua-mobile",
+        "sec-ch-ua-platform",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+        "user-agent"
+      ],
+      "requestFields": [
+        {
+          "path": "$",
+          "types": [
+            "null"
+          ]
+        }
+      ],
+      "responseFields": [
+        {
+          "path": "$",
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "path": "$.code",
+          "types": [
+            "number"
+          ]
+        },
+        {
+          "path": "$.msg",
+          "types": [
+            "string"
+          ]
+        }
+      ]
+    }
+  ],
+  "websocket": {
+    "path": "/api/v1/system/node/status_ws",
+    "queryKeys": [
+      "token"
+    ],
+    "openedConnections": 2,
+    "receivedFrames": 5,
+    "responseFields": [
+      {
+        "path": "$",
+        "types": [
+          "array"
+        ]
+      },
+      {
+        "path": "$[]",
+        "types": [
+          "object"
+        ]
+      },
+      {
+        "path": "$[].gid",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].gType",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].name",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers",
+        "types": [
+          "array"
+        ]
+      },
+      {
+        "path": "$[].servers[]",
+        "types": [
+          "object"
+        ]
+      },
+      {
+        "path": "$[].servers[].handle",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].ip4",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].ip4_geo",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].ip6",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].ip6_geo",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].last_pull",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].last_seen",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].name",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].online",
+        "types": [
+          "boolean"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info",
+        "types": [
+          "object"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.arch",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.boot_time",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.cpu",
+        "types": [
+          "array"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.cpu[]",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.disk_total",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.hostname",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.mem_total",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.platform",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.platform_version",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.swap_total",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.version",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_info.virtualization",
+        "types": [
+          "string"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state",
+        "types": [
+          "object"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.cpu",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.disk_used",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.load1",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.load15",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.load5",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.mem_used",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.net_in_speed",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.net_in_transfer",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.net_out_speed",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.net_out_transfer",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.process_count",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.swap_used",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.tcp_conn_count",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.udp_conn_count",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].system_state.uptime",
+        "types": [
+          "number"
+        ]
+      },
+      {
+        "path": "$[].servers[].weight",
+        "types": [
+          "number"
+        ]
+      }
+    ]
+  },
+  "pages": [
+    {
+      "route": "/userinfo",
+      "columns": []
+    },
+    {
+      "route": "/forward_rules",
+      "columns": [
+        "",
+        "规则名",
+        "入口",
+        "出口",
+        "已用流量",
+        "状态",
+        "操作"
+      ]
+    },
+    {
+      "route": "/device_group",
+      "columns": [
+        "",
+        "排序",
+        "名称",
+        "类型",
+        "已用流量",
+        "在线设备",
+        "备注",
+        "操作"
+      ]
+    },
+    {
+      "route": "/shop",
+      "columns": []
+    },
+    {
+      "route": "/orders",
+      "columns": [
+        "订单号",
+        "创建时间",
+        "支付时间",
+        "订单信息",
+        "金额",
+        "类型",
+        "状态",
+        "操作"
+      ]
+    },
+    {
+      "route": "/looking_glass",
+      "columns": [
+        "名称",
+        "类型",
+        "在线设备"
+      ]
+    },
+    {
+      "route": "/admin/main",
+      "columns": []
+    },
+    {
+      "route": "/admin/users",
+      "columns": [
+        "UID",
+        "用户名",
+        "过期时间",
+        "流量",
+        "套餐",
+        "用户组",
+        "最大规则数",
+        "钱包余额",
+        "操作",
+        "备注",
+        "",
+        "用户",
+        "规则名",
+        "入口",
+        "出口",
+        "已用流量",
+        "状态",
+        "操作"
+      ]
+    },
+    {
+      "route": "/admin/user_group",
+      "columns": [
+        "排序",
+        "用户组 ID",
+        "名称",
+        "用户数量",
+        "操作"
+      ]
+    },
+    {
+      "route": "/admin/orders",
+      "columns": [
+        "",
+        "订单号",
+        "用户",
+        "创建时间",
+        "支付时间",
+        "订单信息",
+        "金额",
+        "类型",
+        "状态",
+        "操作"
+      ]
+    },
+    {
+      "route": "/admin/plans",
+      "columns": [
+        "排序",
+        "名称",
+        "类型",
+        "分配用户组",
+        "可用流量",
+        "规则数",
+        "价格",
+        "隐藏",
+        "操作"
+      ]
+    },
+    {
+      "route": "/admin/redeem",
+      "columns": [
+        "",
+        "序号",
+        "代码",
+        "套餐",
+        "折扣比例",
+        "剩余次数"
+      ]
+    },
+    {
+      "route": "/admin/device_group",
+      "columns": [
+        "",
+        "排序",
+        "名称",
+        "用户组 ID",
+        "类型",
+        "连接地址(仅入口展示用)",
+        "倍率",
+        "已用流量",
+        "在线设备",
+        "备注",
+        "操作"
+      ]
+    },
+    {
+      "route": "/admin/afflog",
+      "columns": [
+        "",
+        "用户",
+        "创建时间",
+        "订单信息",
+        "金额",
+        "类型",
+        "状态",
+        "操作"
+      ]
+    },
+    {
+      "route": "/admin/settings",
+      "columns": [
+        "排序",
+        "类型",
+        "名称",
+        "是否启用",
+        "操作"
+      ]
+    },
+    {
+      "route": "/admin/push_settings",
+      "columns": [
+        "设备组",
+        "自定义设备离线宽限期",
+        "自定义设备离线保留期"
+      ]
+    }
+  ],
+  "publicAssets": [
+    {
+      "path": "/assets/index-DkqF5UhK.js",
+      "sha256": "030e3e08b29135f4531e25ec757045493fd7f78a4e2177351941ab29cb51a9af"
+    },
+    {
+      "path": "/tz2.html",
+      "sha256": "94e39fbd41e9d602d563ac6d00fb6c6ca9d7cf78fe6016f0897715cbb7f7840c"
+    },
+    {
+      "path": "/tool/assets/tz2-CyyXH6uV.js",
+      "sha256": "107e7132175c2307a605b1c7ed789d7d44975b8eb55d17ba9af5e32f9a94f418"
+    },
+    {
+      "path": "/tool/capture.js",
+      "sha256": "abd9981bfe120a347634e04cc65fa7a1dd3765dcc36dbf4f40d1c48cb09b8be8"
+    }
+  ]
+}
