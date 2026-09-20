@@ -168,5 +168,19 @@ func BenchmarkUsageCapacity(b *testing.B) {
 	if facts != int64(b.N*200) || charged != int64(b.N*200*1024) {
 		b.Fatalf("commercial accounting missing: facts=%d charged=%d", facts, charged)
 	}
+	var controlFacts, controlUsed, leaseUsed, factCharge int64
+	for query, dst := range map[string]*int64{
+		"SELECT COUNT(*) FROM cp_usage":                          &controlFacts,
+		"SELECT COALESCE(SUM(bytes_used),0) FROM cp_rule_leases": &controlUsed,
+		"SELECT COALESCE(SUM(used),0) FROM commerce_leases":      &leaseUsed,
+		"SELECT COALESCE(SUM(charged),0) FROM commerce_usage":    &factCharge,
+	} {
+		if err := s.Store.DB.QueryRowContext(ctx, query).Scan(dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if controlFacts != facts || controlUsed != charged || leaseUsed != charged || factCharge != charged {
+		b.Fatalf("cross-layer totals diverged cpFacts=%d cpUsed=%d leaseUsed=%d factsCharged=%d", controlFacts, controlUsed, leaseUsed, factCharge)
+	}
 	b.ReportMetric(float64(b.N*200)/b.Elapsed().Seconds(), "records/s")
 }
