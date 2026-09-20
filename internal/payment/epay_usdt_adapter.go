@@ -181,6 +181,21 @@ func (p *protocol) usdtStatus(m map[string]any, query bool) (Status, error) {
 		s.State = Paid
 	case "3":
 		s.State = Expired
+	case "4":
+		if p.cfg.Kind != "bepusdt" {
+			return Status{}, ErrProtocol
+		}
+		s.State = Expired
+	case "5":
+		if p.cfg.Kind != "bepusdt" {
+			return Status{}, ErrProtocol
+		}
+		s.State = Pending
+	case "6":
+		if p.cfg.Kind != "bepusdt" {
+			return Status{}, ErrProtocol
+		}
+		s.State = Failed
 	default:
 		return Status{}, ErrProtocol
 	}
