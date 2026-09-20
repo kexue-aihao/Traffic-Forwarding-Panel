@@ -147,6 +147,11 @@ func run() error {
 		return nil
 	}
 	server := &http.Server{Addr: *addr, Handler: application.Handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
+	historyStopped := make(chan struct{})
+	go func() {
+		defer close(historyStopped)
+		application.Platform.RunProbeHistory(ctx)
+	}()
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -159,6 +164,7 @@ func run() error {
 	err = server.ListenAndServe()
 	cancel()
 	<-stopped
+	<-historyStopped
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

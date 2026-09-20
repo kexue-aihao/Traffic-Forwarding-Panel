@@ -32,6 +32,9 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 		return nil, err
 	}
 	control := platform.New(store, platform.Options{Origin: opts.Origin, SecureCookies: opts.SecureCookies, Entitlements: billing, LeaseCurrent: billing.LeaseCurrent, RetireLease: billing.RetireLease})
+	if err := control.MigrateProbeHistory(ctx); err != nil {
+		return nil, err
+	}
 	mux := http.NewServeMux()
 	control.Register(mux)
 	billing.Register(mux, commerce.HTTPOptions{Authenticate: control.Authenticate, EPay: opts.EPay, PublicOrigin: opts.Origin, Channels: opts.Channels})

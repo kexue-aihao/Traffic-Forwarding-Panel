@@ -35,11 +35,12 @@ type Options struct {
 	RetireLease    func(context.Context, *sql.Tx, string, string, int64) error
 }
 type Server struct {
-	Store  *storage.Store
-	opts   Options
-	mu     sync.RWMutex
-	probes map[string]contract.Probe
-	limits map[string]limit
+	Store   *storage.Store
+	opts    Options
+	mu      sync.RWMutex
+	probes  map[string]contract.Probe
+	limits  map[string]limit
+	history *probeHistory
 }
 type limit struct {
 	since time.Time
@@ -48,7 +49,7 @@ type limit struct {
 type userKey struct{}
 
 func New(s *storage.Store, o Options) *Server {
-	return &Server{Store: s, opts: o, probes: map[string]contract.Probe{}, limits: map[string]limit{}}
+	return &Server{Store: s, opts: o, probes: map[string]contract.Probe{}, limits: map[string]limit{}, history: newProbeHistory(time.Now())}
 }
 func UserFromContext(ctx context.Context) (contract.User, bool) {
 	u, ok := ctx.Value(userKey{}).(contract.User)
@@ -290,6 +291,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/v1/rules/{id}", s.RequireUser(s.saveRule))
 	mux.HandleFunc("DELETE /api/v1/rules/{id}", s.RequireUser(s.deleteRule))
 	mux.HandleFunc("GET /api/v1/probes", s.RequireUser(s.probeList))
+	mux.HandleFunc("GET /api/v1/probes/{node_id}/history", s.RequireUser(s.probeHistoryList))
 	mux.HandleFunc("GET /api/v1/probes/events", s.RequireUser(s.probeEvents))
 	mux.HandleFunc("GET /api/v1/audit", s.admin(s.audit))
 	mux.HandleFunc("POST /api/v1/agent/register", s.registerNode)

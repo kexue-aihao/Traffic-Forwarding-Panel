@@ -274,8 +274,21 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.NodeID = node
+	if _, e := probeValues(p); e != nil {
+		fail(w, 400, "invalid probe metric")
+		return
+	}
+	if e := s.history.record(p, time.Now()); e != nil {
+		fail(w, 503, e.Error())
+		return
+	}
 	s.mu.Lock()
 	old, ok := s.probes[node]
+	if !ok && len(s.probes) >= historyBuckets {
+		s.mu.Unlock()
+		fail(w, 503, "live probe capacity reached")
+		return
+	}
 	if !ok || p.SampledAt.After(old.SampledAt) {
 		s.probes[node] = p
 	}
