@@ -56,7 +56,98 @@ func (s *Service) AllocateWithMultiplier(ctx context.Context, tx *sql.Tx, user, 
 		return nil, ErrConflict
 	}
 	_, err = tx.ExecContext(ctx, s.q("INSERT INTO commerce_leases(id,user_id,node_id,rule_id,entitlement_id,expires_at,bytes,used,multiplier) VALUES(?,?,?,?,?,?,?,0,?)"), lease.ID, user, node, rule, e.ID, stamp(deadline), lease.Bytes, m.RatString())
+	if err == nil {
+		_, err = tx.ExecContext(ctx, s.q("INSERT INTO commerce_lease_reservations(lease_id,budget,closed) VALUES(?,?,0)"), lease.ID, budget)
+	}
 	return lease, err
+}
+
+// LeaseCurrent rechecks the latest purchase version without reallocating quota.
+func (s *Service) LeaseCurrent(ctx context.Context, tx *sql.Tx, user string, lease *contract.Lease) (bool, error) {
+	if lease == nil || !s.Now().Before(lease.ExpiresAt) {
+		return false, nil
+	}
+	var current string
+	err := tx.QueryRowContext(ctx, s.q("SELECT id FROM commerce_entitlements WHERE user_id=? ORDER BY version DESC LIMIT 1"), user).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil || current != lease.EntitlementID {
+		return false, err
+	}
+	var closed int
+	err = tx.QueryRowContext(ctx, s.q("SELECT closed FROM commerce_lease_reservations WHERE lease_id=?"), lease.ID).Scan(&closed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	} // pre-reservation migration lease
+	return closed == 0, err
+}
+
+// RetireLease is accepted only after the Agent has durably stopped the lease
+// and all its usage has been acknowledged. Unreported bytes prevent release.
+func (s *Service) RetireLease(ctx context.Context, tx *sql.Tx, node, leaseID string, usedBytes int64) error {
+	if usedBytes < 0 {
+		return errors.New("invalid used bytes")
+	}
+	var storedNode, ent, multiplier string
+	var bytes, used int64
+	err := tx.QueryRowContext(ctx, s.q("SELECT node_id,entitlement_id,bytes,used,multiplier FROM commerce_leases WHERE id=?"), leaseID).Scan(&storedNode, &ent, &bytes, &used, &multiplier)
+	if err != nil {
+		return err
+	}
+	if storedNode != node || used != usedBytes {
+		return ErrConflict
+	}
+	m, ok := new(big.Rat).SetString(multiplier)
+	if !ok || m.Sign() <= 0 {
+		return errors.New("invalid lease multiplier")
+	}
+	charge := func(v int64) int64 {
+		n := new(big.Int).Mul(big.NewInt(v), m.Num())
+		n.Add(n, new(big.Int).Sub(m.Denom(), big.NewInt(1)))
+		n.Quo(n, m.Denom())
+		return n.Int64()
+	}
+	var budget int64
+	var closed int
+	err = tx.QueryRowContext(ctx, s.q("SELECT budget,closed FROM commerce_lease_reservations WHERE lease_id=?"), leaseID).Scan(&budget, &closed)
+	if errors.Is(err, sql.ErrNoRows) {
+		budget = charge(bytes)
+		_, err = tx.ExecContext(ctx, s.q("INSERT INTO commerce_lease_reservations(lease_id,budget,closed) VALUES(?,?,0)"), leaseID, budget)
+	}
+	if err != nil {
+		return err
+	}
+	if closed != 0 {
+		return nil
+	}
+	refund := budget - charge(used)
+	if refund < 0 {
+		return errors.New("invalid lease reservation")
+	}
+	r, err := tx.ExecContext(ctx, s.q("UPDATE commerce_lease_reservations SET closed=1 WHERE lease_id=? AND closed=0"), leaseID)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrConflict
+	}
+	r, err = tx.ExecContext(ctx, s.q("UPDATE commerce_entitlements SET allocated=allocated-? WHERE id=? AND allocated>=?"), refund, ent, refund)
+	if err != nil {
+		return err
+	}
+	n, err = r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrConflict
+	}
+	return nil
 }
 
 // SettleUsage accepts delayed old-cycle facts, but never charges a newer entitlement.
@@ -75,6 +166,14 @@ func (s *Service) SettleUsage(ctx context.Context, tx *sql.Tx, u contract.UsageR
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
+	}
+	var closed int
+	err = tx.QueryRowContext(ctx, s.q("SELECT closed FROM commerce_lease_reservations WHERE lease_id=?"), u.LeaseID).Scan(&closed)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if closed != 0 {
+		return errors.New("lease retired")
 	}
 	var node, rule, ent, expiry, mult string
 	var bytes, used int64

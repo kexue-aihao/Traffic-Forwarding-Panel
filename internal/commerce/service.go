@@ -97,6 +97,7 @@ func (s *Service) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS commerce_orders(id VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,channel VARCHAR(32) NOT NULL,amount BIGINT NOT NULL,status VARCHAR(32) NOT NULL,payment_url TEXT NOT NULL,created_at VARCHAR(40) NOT NULL,idempotency_key VARCHAR(128) NOT NULL,provider_tx VARCHAR(128),UNIQUE(user_id,idempotency_key))`,
 		`CREATE TABLE IF NOT EXISTS commerce_leases(id VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,node_id VARCHAR(64) NOT NULL,rule_id VARCHAR(64) NOT NULL,entitlement_id VARCHAR(64) NOT NULL,expires_at VARCHAR(40) NOT NULL,bytes BIGINT NOT NULL,used BIGINT NOT NULL,multiplier VARCHAR(80) NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS commerce_usage(id VARCHAR(128) PRIMARY KEY,lease_id VARCHAR(64) NOT NULL,payload TEXT NOT NULL,charged BIGINT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS commerce_lease_reservations(lease_id VARCHAR(64) PRIMARY KEY,budget BIGINT NOT NULL,closed INTEGER NOT NULL DEFAULT 0)`,
 	}
 	for _, q := range statements {
 		if _, e := s.DB.ExecContext(ctx, q); e != nil {
