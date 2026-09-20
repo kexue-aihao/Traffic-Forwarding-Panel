@@ -3,6 +3,9 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"sort"
+	"strings"
 )
 
 type Row interface{ Scan(...any) error }
@@ -47,4 +50,87 @@ func (q *Queries) Close() {
 	for _, stmt := range q.statements {
 		stmt.Close()
 	}
+}
+
+// Bulk helpers cap placeholders below SQLite's historical 999 parameter limit.
+// Identifiers and predicates must be compile-time application SQL, never input.
+func Placeholders(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
+func BulkInsert(ctx context.Context, tx *sql.Tx, rebind func(string) string, table, columns string, rows [][]any) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	width := len(rows[0])
+	if width == 0 || width > 999 {
+		return errors.New("invalid bulk row width")
+	}
+	chunkSize := min(100, 999/width)
+	for start := 0; start < len(rows); start += chunkSize {
+		end := start + chunkSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		values := make([]string, 0, end-start)
+		args := []any{}
+		for _, row := range rows[start:end] {
+			if len(row) != width {
+				return errors.New("bulk row width mismatch")
+			}
+			values = append(values, "("+Placeholders(width)+")")
+			args = append(args, row...)
+		}
+		if _, e := tx.ExecContext(ctx, rebind("INSERT INTO "+table+"("+columns+") VALUES "+strings.Join(values, ",")), args...); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+type CounterChange struct {
+	ID            string
+	Before, Delta int64
+}
+
+// BulkCounter uses compare-and-swap when cas=true; every positive change must
+// match, otherwise callers roll back the complete batch (including prior chunks).
+func BulkCounter(ctx context.Context, tx *sql.Tx, rebind func(string) string, table, column, guard string, changes []CounterChange, cas bool) error {
+	sort.Slice(changes, func(i, j int) bool { return changes[i].ID < changes[j].ID })
+	for start := 0; start < len(changes); start += 100 {
+		end := start + 100
+		if end > len(changes) {
+			end = len(changes)
+		}
+		args := []any{}
+		var cases, where []string
+		for _, c := range changes[start:end] {
+			// Keep the addition inside CASE so PostgreSQL infers each delta as
+			// the BIGINT counter type, rather than INTEGER from an ELSE 0.
+			cases = append(cases, "WHEN ? THEN "+column+"+?")
+			args = append(args, c.ID, c.Delta)
+		}
+		for _, c := range changes[start:end] {
+			if cas {
+				where = append(where, "(id=? AND "+column+"=?)")
+				args = append(args, c.ID, c.Before)
+			} else {
+				where = append(where, "id=?")
+				args = append(args, c.ID)
+			}
+		}
+		query := "UPDATE " + table + " SET " + column + "=CASE id " + strings.Join(cases, " ") + " ELSE " + column + " END WHERE (" + strings.Join(where, " OR ") + ")"
+		if guard != "" {
+			query += " AND (" + guard + ")"
+		}
+		res, e := tx.ExecContext(ctx, rebind(query), args...)
+		if e != nil {
+			return e
+		}
+		n, e := res.RowsAffected()
+		if e != nil {
+			return e
+		}
+		if n != int64(end-start) {
+			return errors.New("bulk counter conflict")
+		}
+	}
+	return nil
 }
