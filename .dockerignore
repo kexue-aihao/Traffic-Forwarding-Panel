@@ -1,0 +1,9 @@
+.git
+.local
+.gocache
+web/node_modules
+data
+bin
+*.db*
+*.exe
+.env
