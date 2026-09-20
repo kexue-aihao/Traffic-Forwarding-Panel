@@ -208,10 +208,10 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			fail(w, 500, "config unavailable")
 			return
 		}
-		if disabled != 0 || !rule.Enabled || rule.Lease == nil || !rule.Lease.ExpiresAt.After(time.Now()) || contains(g.BlockedProtocols, rule.Network) || contains(g.BlockedProtocols, rule.Transport) || (role != "admin" && !contains(g.UserIDs, rule.UserID)) {
+		if disabled != 0 || !rule.Enabled || rule.Lease == nil || !rule.Lease.ExpiresAt.After(time.Now()) || policyDenied(g, rule) || (role != "admin" && !contains(g.UserIDs, rule.UserID)) {
 			continue
 		}
-		rule.BlockedProtocols = append(rule.BlockedProtocols, g.BlockedProtocols...)
+		rule.BlockedProtocols = applicationBlocks(rule.BlockedProtocols, g.BlockedProtocols)
 		if rule.Lease.ExpiresAt.Before(cfg.ValidUntil) {
 			cfg.ValidUntil = rule.Lease.ExpiresAt
 		}

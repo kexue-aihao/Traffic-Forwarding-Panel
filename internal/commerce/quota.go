@@ -20,11 +20,14 @@ func (s *Service) AllocateWithMultiplier(ctx context.Context, tx *sql.Tx, user, 
 	}
 	e, err := scanEnt(tx.QueryRowContext(ctx, s.q("SELECT "+entFields+" FROM commerce_entitlements WHERE user_id=? ORDER BY version DESC LIMIT 1"), user))
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, contract.ErrEntitlementUnavailable
+		}
 		return nil, err
 	}
 	now := s.Now()
 	if !now.Before(e.ExpiresAt) {
-		return nil, errors.New("entitlement expired")
+		return nil, contract.ErrEntitlementUnavailable
 	}
 	var allocated int64
 	if err = tx.QueryRowContext(ctx, s.q("SELECT allocated FROM commerce_entitlements WHERE id=?"), e.ID).Scan(&allocated); err != nil {
@@ -32,7 +35,7 @@ func (s *Service) AllocateWithMultiplier(ctx context.Context, tx *sql.Tx, user, 
 	}
 	remaining := e.Quota - allocated
 	if remaining <= 0 {
-		return nil, errors.New("quota exhausted")
+		return nil, contract.ErrEntitlementUnavailable
 	}
 	budget := int64(16 << 20)
 	if budget > remaining {
@@ -40,7 +43,7 @@ func (s *Service) AllocateWithMultiplier(ctx context.Context, tx *sql.Tx, user, 
 	}
 	raw := new(big.Int).Quo(new(big.Int).Mul(big.NewInt(budget), m.Denom()), m.Num())
 	if !raw.IsInt64() || raw.Sign() <= 0 {
-		return nil, errors.New("quota too small")
+		return nil, contract.ErrEntitlementUnavailable
 	}
 	deadline := now.Add(5 * time.Minute)
 	if e.ExpiresAt.Before(deadline) {

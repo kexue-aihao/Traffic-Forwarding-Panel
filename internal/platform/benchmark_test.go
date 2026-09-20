@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/commerce"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/testdb"
@@ -20,7 +21,12 @@ import (
 // opt-in (go test -run '^$' -bench BenchmarkUsageCapacity -benchtime=10x).
 // This measures one 200-record batch, not full production capacity or SLA.
 func BenchmarkUsageCapacity(b *testing.B) {
-	s := New(testdb.Open(b), Options{})
+	store := testdb.Open(b)
+	billing := commerce.New(store.DB, store.Dialect, func(ctx context.Context, fn func(*sql.Tx) error) error { return store.Write(ctx, storage.Critical, fn) })
+	if err := billing.Migrate(context.Background()); err != nil {
+		b.Fatal(err)
+	}
+	s := New(store, Options{Entitlements: billing})
 	ctx := context.Background()
 	start := time.Now()
 	write := func(fn func(*sql.Tx) error) {
@@ -64,6 +70,22 @@ func BenchmarkUsageCapacity(b *testing.B) {
 		return nil
 	})
 	expiry := time.Now().UTC().Add(24 * time.Hour)
+	for offset := 0; offset < 10000; offset += 500 {
+		write(func(tx *sql.Tx) error {
+			stmt, e := tx.PrepareContext(ctx, s.q(`INSERT INTO commerce_entitlements(id,user_id,plan_id,version,starts_at,expires_at,quota,used,allocated) VALUES(?,?,'benchmark-plan',1,?,?,?,0,?)`))
+			if e != nil {
+				return e
+			}
+			defer stmt.Close()
+			for i := offset; i < offset+500; i++ {
+				uid := fmt.Sprintf("u%05d", i)
+				if _, e = stmt.ExecContext(ctx, "e"+uid, uid, time.Now().UTC().Format(time.RFC3339Nano), expiry.Format(time.RFC3339Nano), int64(1<<50), int64(10<<30)); e != nil {
+					return e
+				}
+			}
+			return nil
+		})
+	}
 	for offset := 0; offset < 100000; offset += 500 {
 		write(func(tx *sql.Tx) error {
 			ruleStmt, e := tx.PrepareContext(ctx, s.q(`INSERT INTO cp_rules(id,user_id,node_id,group_id,payload,version,deleted,release_version) VALUES(?,?,?,'bench-group',?,1,0,0)`))
@@ -71,28 +93,44 @@ func BenchmarkUsageCapacity(b *testing.B) {
 				return e
 			}
 			defer ruleStmt.Close()
-			leaseStmt, e := tx.PrepareContext(ctx, s.q(`INSERT INTO cp_rule_leases(id,rule_id,node_id,entitlement_id,bytes_allocated,bytes_used,expires_at) VALUES(?,?,?,'admin-test',?,0,?)`))
+			leaseStmt, e := tx.PrepareContext(ctx, s.q(`INSERT INTO cp_rule_leases(id,rule_id,node_id,entitlement_id,bytes_allocated,bytes_used,expires_at) VALUES(?,?,?,?,?,0,?)`))
 			if e != nil {
 				return e
 			}
 			defer leaseStmt.Close()
+			billingLease, e := tx.PrepareContext(ctx, s.q(`INSERT INTO commerce_leases(id,user_id,node_id,rule_id,entitlement_id,expires_at,bytes,used,multiplier) VALUES(?,?,?,?,?,?,?,0,'1')`))
+			if e != nil {
+				return e
+			}
+			defer billingLease.Close()
+			reserve, e := tx.PrepareContext(ctx, s.q(`INSERT INTO commerce_lease_reservations(lease_id,budget,closed) VALUES(?,?,0)`))
+			if e != nil {
+				return e
+			}
+			defer reserve.Close()
 			for i := offset; i < offset+500; i++ {
 				rid := fmt.Sprintf("r%06d", i)
 				uid := fmt.Sprintf("u%05d", i%10000)
 				nid := fmt.Sprintf("n%03d", i/200)
-				lease := &contract.Lease{ID: "l" + rid, EntitlementID: "admin-test", ExpiresAt: expiry, Bytes: 1 << 50}
+				lease := &contract.Lease{ID: "l" + rid, EntitlementID: "e" + uid, ExpiresAt: expiry, Bytes: 1 << 30}
 				rule := contract.Rule{ID: rid, UserID: uid, NodeID: nid, GroupID: "bench-group", Name: rid, Network: "tcp", Transport: "direct", Listen: fmt.Sprintf("0.0.0.0:%d", 10000+i%200), Target: "127.0.0.1:8080", Enabled: true, Version: 1, Lease: lease}
 				if _, e = ruleStmt.ExecContext(ctx, rid, uid, nid, strJSON(rule)); e != nil {
 					return e
 				}
-				if _, e = leaseStmt.ExecContext(ctx, lease.ID, rid, nid, lease.Bytes, expiry.Unix()); e != nil {
+				if _, e = leaseStmt.ExecContext(ctx, lease.ID, rid, nid, lease.EntitlementID, lease.Bytes, expiry.Unix()); e != nil {
+					return e
+				}
+				if _, e = billingLease.ExecContext(ctx, lease.ID, uid, nid, rid, lease.EntitlementID, expiry.Format(time.RFC3339Nano), lease.Bytes); e != nil {
+					return e
+				}
+				if _, e = reserve.ExecContext(ctx, lease.ID, lease.Bytes); e != nil {
 					return e
 				}
 			}
 			return nil
 		})
 	}
-	b.Logf("seeded 500 nodes/10000 users/100000 rules in %s; synthetic leases isolate control-plane cost, commercial settlement excluded", time.Since(start))
+	b.Logf("seeded 500 nodes/10000 users/100000 rules in %s; includes real commercial settlement with seeded finite entitlements (not payment merchant verification)", time.Since(start))
 	mux := http.NewServeMux()
 	s.Register(mux)
 	b.ReportAllocs()
@@ -104,7 +142,8 @@ func BenchmarkUsageCapacity(b *testing.B) {
 		now := time.Now().UTC()
 		for j := range batch.Records {
 			rid := fmt.Sprintf("r%06d", nodeIndex*200+j)
-			batch.Records[j] = contract.UsageRecord{ID: fmt.Sprintf("event-%d-%d", iteration, j), NodeID: nid, RuleID: rid, LeaseID: "l" + rid, EntitlementID: "admin-test", StartedAt: now.Add(-time.Second), EndedAt: now, UploadBytes: 512, DownloadBytes: 512}
+			uid := fmt.Sprintf("u%05d", (nodeIndex*200+j)%10000)
+			batch.Records[j] = contract.UsageRecord{ID: fmt.Sprintf("event-%d-%d", iteration, j), NodeID: nid, RuleID: rid, LeaseID: "l" + rid, EntitlementID: "e" + uid, StartedAt: now.Add(-time.Second), EndedAt: now, UploadBytes: 512, DownloadBytes: 512}
 		}
 		payload, e := json.Marshal(batch)
 		if e != nil {

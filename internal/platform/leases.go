@@ -53,7 +53,7 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 		for _, it := range items {
 			rule := it.rule
 			g := it.group
-			if !rule.Enabled || it.disabled != 0 || contains(g.BlockedProtocols, rule.Network) || contains(g.BlockedProtocols, rule.Transport) || (it.role != "admin" && !contains(g.UserIDs, rule.UserID)) {
+			if !rule.Enabled || it.disabled != 0 || policyDenied(g, rule) || (it.role != "admin" && !contains(g.UserIDs, rule.UserID)) {
 				continue
 			}
 			valid := rule.Lease != nil && rule.Lease.ExpiresAt.After(time.Now())
@@ -90,7 +90,11 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 					rule.Lease, e = s.opts.Entitlements.Allocate(ctx, tx, rule.UserID, rule.ID, node)
 				}
 				if e != nil {
-					return e
+					if !errors.Is(e, contract.ErrEntitlementUnavailable) {
+						return e
+					}
+					rule.Lease = nil
+					e = nil
 				}
 			}
 			// Explicit test grants are finite and not silently replenished.
