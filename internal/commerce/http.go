@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/payment"
+	"io"
 	"net/http"
 	"net/url"
 )
@@ -13,6 +14,7 @@ import (
 type HTTPOptions struct {
 	Authenticate func(*http.Request) (contract.User, error)
 	EPay         payment.EPay
+	PublicOrigin string // Explicit canonical origin when behind a trusted reverse proxy.
 }
 
 func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
@@ -20,6 +22,10 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		w.Header().Set("Content-Type", "application/json")
 		if e != nil {
 			status := http.StatusBadRequest
+			message := "Request could not be completed"
+			if errors.Is(e, ErrFunds) {
+				message = "Insufficient available balance"
+			}
 			if errors.Is(e, ErrConflict) {
 				status = 409
 			}
@@ -27,7 +33,7 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 				status = 404
 			}
 			w.WriteHeader(status)
-			json.NewEncoder(w).Encode(contract.APIError{Code: "commerce_error", Error: e.Error()})
+			json.NewEncoder(w).Encode(contract.APIError{Code: "commerce_error", Error: message})
 			return
 		}
 		json.NewEncoder(w).Encode(v)
@@ -36,7 +42,13 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		r.Body = http.MaxBytesReader(w, r.Body, 16384)
 		d := json.NewDecoder(r.Body)
 		d.DisallowUnknownFields()
-		return d.Decode(v)
+		if err := d.Decode(v); err != nil {
+			return err
+		}
+		if err := d.Decode(new(any)); err != io.EOF {
+			return errors.New("expected one JSON value")
+		}
+		return nil
 	}
 	secure := func(fn func(http.ResponseWriter, *http.Request, contract.User)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +59,15 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 			}
 			if r.Method != "GET" && r.Header.Get("Authorization") == "" {
 				origin, e := url.Parse(r.Header.Get("Origin"))
-				if r.Header.Get("X-Requested-With") != "fetch" || e != nil || origin.Host != r.Host || (origin.Scheme != "https" && origin.Scheme != "http") {
+				scheme := "http"
+				if r.TLS != nil {
+					scheme = "https"
+				}
+				expectedOrigin := scheme + "://" + r.Host
+				if o.PublicOrigin != "" {
+					expectedOrigin = o.PublicOrigin
+				}
+				if r.Header.Get("X-Requested-With") != "fetch" || e != nil || origin.Host != r.Host || origin.Scheme+"://"+origin.Host != expectedOrigin || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || origin.Path != "" {
 					http.Error(w, "invalid origin", 403)
 					return
 				}
