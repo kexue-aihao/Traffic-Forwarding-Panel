@@ -42,6 +42,16 @@ type Tunnel struct {
 	Endpoint   string `json:"endpoint"`
 	ServerName string `json:"server_name"`
 	Token      string `json:"token,omitempty"`
+	// Chain lists the remaining exits after Endpoint; at most two are allowed.
+	Chain []TunnelHop `json:"chain,omitempty"`
+}
+
+// TunnelHop is one authenticated, encrypted exit in an ordered tunnel chain.
+type TunnelHop struct {
+	Transport  string `json:"transport"`
+	Endpoint   string `json:"endpoint"`
+	ServerName string `json:"server_name"`
+	Token      string `json:"token,omitempty"`
 }
 
 type Rule struct {

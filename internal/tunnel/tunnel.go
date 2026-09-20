@@ -1,4 +1,4 @@
-// Package tunnel provides the v1 authenticated forwarding data plane.
+// Package tunnel provides the v1/v2 authenticated forwarding data plane.
 // ws and http use TLS inside their carrier. wss uses TLS outside WebSocket.
 package tunnel
 
@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
 
 const maxFrame = 65535
@@ -146,10 +147,12 @@ func (s *Session) ReadPacket() ([]byte, error) {
 }
 
 type openRequest struct {
-	Version int    `json:"version"`
-	Token   string `json:"token"`
-	Network string `json:"network"`
-	Target  string `json:"target"`
+	Version int                  `json:"version"`
+	Token   string               `json:"token"`
+	Network string               `json:"network"`
+	Target  string               `json:"target"`
+	Chain   []contract.TunnelHop `json:"chain,omitempty"`
+	Visited []string             `json:"visited,omitempty"`
 }
 type Client struct {
 	TLS     *tls.Config
@@ -157,6 +160,18 @@ type Client struct {
 }
 
 func (c Client) Dial(ctx context.Context, transport, endpoint, serverName, token, network, target string) (*Session, error) {
+	return c.dial(ctx, transport, endpoint, serverName, token, network, target, nil, nil)
+}
+
+// DialChain keeps the original first-hop API and treats chain as the remaining
+// one or two exits. Each receiving exit applies its own local next-hop policy.
+func (c Client) DialChain(ctx context.Context, transport, endpoint, serverName, token, network, target string, chain []contract.TunnelHop) (*Session, error) {
+	if e := ValidateChain(contract.TunnelHop{Transport: transport, Endpoint: endpoint, ServerName: serverName, Token: token}, chain); e != nil {
+		return nil, e
+	}
+	return c.dial(ctx, transport, endpoint, serverName, token, network, target, chain, nil)
+}
+func (c Client) dial(ctx context.Context, transport, endpoint, serverName, token, network, target string, chain []contract.TunnelHop, visited []string) (*Session, error) {
 	timeout := c.Timeout
 	if timeout == 0 {
 		timeout = 10 * time.Second
@@ -215,12 +230,16 @@ func (c Client) Dial(ctx context.Context, transport, endpoint, serverName, token
 		return nil, errors.New("unsupported transport")
 	}
 	ok := false
+	carrier := conn
+	stopCancel := context.AfterFunc(ctx, func() { carrier.Close() })
+	defer stopCancel()
 	defer func() {
 		if !ok {
 			conn.Close()
 		}
 	}()
-	conn.SetDeadline(time.Now().Add(timeout))
+	deadline, _ := ctx.Deadline()
+	conn.SetDeadline(deadline)
 	if transport == "http" {
 		if _, err = fmt.Fprintf(conn, "CONNECT /tunnel HTTP/1.1\r\nHost: %s\r\n\r\n", endpoint); err != nil {
 			return nil, err
@@ -242,7 +261,11 @@ func (c Client) Dial(ctx context.Context, transport, endpoint, serverName, token
 		}
 		conn = t
 	}
-	p, _ := json.Marshal(openRequest{1, token, network, target})
+	version := 1
+	if len(chain) > 0 || len(visited) > 0 {
+		version = 2
+	}
+	p, _ := json.Marshal(openRequest{Version: version, Token: token, Network: network, Target: target, Chain: chain, Visited: visited})
 	if err = writeFrame(conn, openFrame, p); err != nil {
 		return nil, err
 	}
@@ -252,6 +275,9 @@ func (c Client) Dial(ctx context.Context, transport, endpoint, serverName, token
 	}
 	if k != readyFrame || string(p) != "ok" {
 		return nil, errors.New("tunnel authorization or target rejected")
+	}
+	if !stopCancel() || ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	conn.SetDeadline(time.Time{})
 	ok = true
@@ -315,13 +341,21 @@ type Server struct {
 	TLS   *tls.Config
 	Token string
 	// Allowed contains exact "tcp|host:port" or "udp|host:port" destinations.
-	Allowed     map[string]bool
+	Allowed map[string]bool
+	// NextHops is an operator-owned allowlist, including local outbound secrets.
+	// Requested hops must match these entries; an empty list disables chaining.
+	NextHops []contract.TunnelHop
+	// NodeID must be stable and unique across logical exits used in a chain.
+	NodeID      string
+	Client      Client
 	IdleTimeout time.Duration
 	mu          sync.Mutex
 	conns       map[net.Conn]struct{}
 	listener    net.Listener
 	stopped     bool
 	slots       chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 func (s *Server) Serve(l net.Listener, transport string) error {
@@ -331,11 +365,29 @@ func (s *Server) Serve(l net.Listener, transport string) error {
 	if transport != "tls" && transport != "ws" && transport != "wss" && transport != "http" {
 		return errors.New("unsupported transport")
 	}
+	if (s.NodeID != "" && !validNodeID(s.NodeID)) || (len(s.NextHops) > 0 && !validNodeID(s.NodeID)) {
+		return errors.New("chaining requires a stable unique exit ID (1-128 characters)")
+	}
+	if len(s.NextHops) > 64 {
+		return errors.New("at most 64 next-hop entries")
+	}
+	for _, hop := range s.NextHops {
+		if err := ValidateChain(hop, nil); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		l.Close()
+		return net.ErrClosed
+	}
 	s.listener = l
+	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.conns = make(map[net.Conn]struct{})
 	s.slots = make(chan struct{}, 256)
 	s.mu.Unlock()
+	defer s.Close()
 	if transport == "ws" || transport == "wss" {
 		if transport == "wss" {
 			tc := s.TLS.Clone()
@@ -382,6 +434,9 @@ func (s *Server) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stopped = true
+	if s.cancel != nil {
+		s.cancel()
+	}
 	for c := range s.conns {
 		c.Close()
 	}
@@ -449,10 +504,28 @@ func (s *Server) handle(raw net.Conn, transport string) {
 	var req openRequest
 	dec := json.NewDecoder(strings.NewReader(string(p)))
 	dec.DisallowUnknownFields()
-	if e = dec.Decode(&req); e != nil || req.Version != 1 || subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) != 1 || !s.Allowed[req.Network+"|"+req.Target] || (req.Network != "tcp" && req.Network != "udp") {
+	if e = dec.Decode(&req); e != nil || (req.Version != 1 && req.Version != 2) || subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) != 1 || !s.Allowed[req.Network+"|"+req.Target] || (req.Network != "tcp" && req.Network != "udp") {
 		return
 	}
-	target, e := net.DialTimeout(req.Network, req.Target, 10*time.Second)
+	if dec.Decode(new(any)) != io.EOF {
+		return
+	}
+	if s.validateRoute(req) != nil {
+		return
+	}
+	var target net.Conn
+	var next *Session
+	if len(req.Chain) > 0 {
+		hop, allowed := s.authorizedNext(req.Chain[0])
+		if !allowed {
+			return
+		}
+		visited := append(append([]string(nil), req.Visited...), s.NodeID)
+		next, e = s.Client.dial(s.ctx, hop.Transport, hop.Endpoint, hop.ServerName, hop.Token, req.Network, req.Target, req.Chain[1:], visited)
+		target = next
+	} else {
+		target, e = (&net.Dialer{Timeout: 10 * time.Second}).DialContext(s.ctx, req.Network, req.Target)
+	}
 	if e != nil {
 		return
 	}
@@ -467,6 +540,10 @@ func (s *Server) handle(raw net.Conn, transport string) {
 		idle = 2 * time.Minute
 	}
 	if req.Network == "udp" {
+		if next != nil {
+			relayPackets(session, next, idle)
+			return
+		}
 		done := make(chan struct{})
 		go func() {
 			defer close(done)

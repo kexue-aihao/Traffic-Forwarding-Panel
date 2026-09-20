@@ -63,9 +63,15 @@ func validate(v contract.Rule) error {
 	}
 	switch v.Transport {
 	case "direct":
+		if v.Tunnel != nil {
+			return errors.New("direct transport cannot contain a tunnel")
+		}
 	case "tls", "ws", "wss", "http":
 		if v.Tunnel == nil || v.Tunnel.Endpoint == "" || v.Tunnel.Token == "" {
 			return errors.New("tunnel credentials missing")
+		}
+		if e := tunnel.ValidateChain(contract.TunnelHop{Transport: v.Transport, Endpoint: v.Tunnel.Endpoint, ServerName: v.Tunnel.ServerName, Token: v.Tunnel.Token}, v.Tunnel.Chain); e != nil {
+			return e
 		}
 	default:
 		return errors.New("transport unsupported")
@@ -239,7 +245,7 @@ func (b *binding) dial(v contract.Rule) (net.Conn, *tunnel.Session, error) {
 		c, e := net.DialTimeout(v.Network, v.Target, 10*time.Second)
 		return c, nil, e
 	}
-	s, e := b.runtime.Client.Dial(context.Background(), v.Transport, v.Tunnel.Endpoint, v.Tunnel.ServerName, v.Tunnel.Token, v.Network, v.Target)
+	s, e := b.runtime.Client.DialChain(context.Background(), v.Transport, v.Tunnel.Endpoint, v.Tunnel.ServerName, v.Tunnel.Token, v.Network, v.Target, v.Tunnel.Chain)
 	if e != nil {
 		return nil, nil, e
 	}

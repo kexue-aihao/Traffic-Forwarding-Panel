@@ -73,7 +73,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			return errors.New("enrollment token required for first start")
 		}
 		var registered contract.Registered
-		reg := contract.Registration{Token: a.EnrollmentToken, Name: a.Name, Version: "0.1.0", OS: runtime.GOOS, Arch: runtime.GOARCH, Capabilities: []string{"tcp", "udp", "direct", "tls", "ws", "wss", "http", "block:http", "block:socks", "probe"}}
+		reg := contract.Registration{Token: a.EnrollmentToken, Name: a.Name, Version: "0.1.0", OS: runtime.GOOS, Arch: runtime.GOARCH, Capabilities: []string{"tcp", "udp", "direct", "tls", "ws", "wss", "http", "chain:3", "block:http", "block:socks", "probe"}}
 		if e = a.request(ctx, "POST", "/agent/register", reg, &registered); e != nil {
 			return e
 		}

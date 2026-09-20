@@ -1,6 +1,6 @@
 # Go Agent 与独立出口
 
-本实现使用项目自己的 v1 数据面协议，不兼容 nyanpass 节点协议。入口 Agent 从控制面注册并拉取配置；出口服务由管理员用本地证书、共享身份凭据和精确目标白名单启动。出口不会成为任意目标公开代理。
+本实现使用项目自己的数据面协议：单出口使用 v1，多出口链使用 v2，不兼容 nyanpass 节点协议。入口 Agent 从控制面注册并拉取配置；出口服务由管理员用本地证书、共享身份凭据和精确目标白名单启动。出口不会成为任意目标公开代理。
 
 ## 构建与运行
 
@@ -53,6 +53,54 @@ $env:TFP_EXIT_TOKEN = '<至少16字符的随机出口凭据>'
 
 所有隧道均支持 TCP 和 UDP，UDP 使用明确报文帧；由于承载基于 TCP，UDP 仍存在队头阻塞。客户端到入口及出口到目标没有自动加密；业务协议自身是否加密独立判断。CONNECT 仅用于本产品入口到出口协议，尚不承诺兼容任意第三方 HTTP/CDN 代理。
 
+## 最多三个出口的链式隧道
+
+支持入口 Agent → 出口 A → 出口 B → 出口 C → 最终目标，出口总数为 1–3。首出口仍使用 `tunnel.endpoint/server_name/token`；`tunnel.chain` 依次列出后续 1–2 个出口，每项增加自己的 `transport`。各跳可以混用四种承载，均执行 TLS 1.3 证书及 token 验证，TCP 半关闭和 UDP 报文边界贯穿整条链。链中的出口均需运行支持 v2 的版本。
+
+三出口 Rule 的 `transport` / `tunnel` 部分示例：
+
+```json
+{
+  "transport": "tls",
+  "tunnel": {
+    "endpoint": "exit-a.example.com:9443",
+    "server_name": "exit-a.example.com",
+    "token": "EXIT_A_TOKEN_AT_LEAST_16_CHARS",
+    "chain": [
+      {
+        "transport": "wss",
+        "endpoint": "wss://exit-b.example.com:9443/tunnel",
+        "server_name": "exit-b.example.com",
+        "token": "EXIT_B_TOKEN_AT_LEAST_16_CHARS"
+      },
+      {
+        "transport": "http",
+        "endpoint": "exit-c.example.com:9443",
+        "server_name": "exit-c.example.com",
+        "token": "EXIT_C_TOKEN_AT_LEAST_16_CHARS"
+      }
+    ]
+  }
+}
+```
+
+出口还必须在本机显式授权下一跳。A 的 `private/next-hops.json` 是仅含上述 B 对象的 JSON 数组，B 的对应文件仅含 C 对象；`transport`、`endpoint`、`server_name`、`token` 四项必须与请求完全一致。C 无需下一跳文件。文件上限 64 KiB、最多 64 个授权对象；Linux/macOS 要求文件权限 `0600`（`chmod 600 private/next-hops.json`），Windows 需由部署者限制文件 ACL。各出口使用独立随机 token，示例值仅用于说明。
+
+在 A、B、C 三台主机上分别设置自己的 `TFP_EXIT_TOKEN` 并执行对应命令。下面最终目标是 C 本机的 `127.0.0.1:8080` / `127.0.0.1:5353`；所有出口的 `-allow` 都须包含相同最终目标字符串，只有最后一跳实际连接它：
+
+```powershell
+# A：本机 next-hops.json 授权 B
+./agent.exe -mode exit -exit-id exit-a -listen 0.0.0.0:9443 -transport tls -cert ./exit-a.crt -key ./exit-a.key -ca ./ca.pem -next-hops ./private/next-hops.json -allow 'tcp|127.0.0.1:8080,udp|127.0.0.1:5353'
+# B：本机 next-hops.json 授权 C
+./agent.exe -mode exit -exit-id exit-b -listen 0.0.0.0:9443 -transport wss -cert ./exit-b.crt -key ./exit-b.key -ca ./ca.pem -next-hops ./private/next-hops.json -allow 'tcp|127.0.0.1:8080,udp|127.0.0.1:5353'
+# C：终点出口，无下一跳
+./agent.exe -mode exit -exit-id exit-c -listen 0.0.0.0:9443 -transport http -cert ./exit-c.crt -key ./exit-c.key -allow 'tcp|127.0.0.1:8080,udp|127.0.0.1:5353'
+```
+
+参与链路的每个出口必须配置稳定的 `-exit-id`（1–128 字符）。不同逻辑出口使用不同 ID；同一出口通过多个域名或监听器暴露时应保持相同 ID。入口拒绝重复规范化地址，出口通过已访问的 ID 拒绝 DNS 别名造成的回环，逐跳限制整条链不超过三个出口。单出口 v1 不要求 ID。运维配置在进程启动时读取，修改后重启生效。
+
+所有出口都是运营方信任的中继，逐跳可见业务明文及剩余链路凭据；这不是对中间出口隐藏载荷的端到端加密。每次连接仅在全链授权并连接最终目标后就绪，默认连接/握手等待上限为 10 秒。证书、token、白名单、目标连接失败或中继断开会关闭该链路，不自动重试或切换出口。上行/下行仅由入口 Agent 对业务有效载荷记账；中间出口及终点出口不创建租约、不重复计费，隧道帧头不进入计费。
+
 ## 执行、计量与故障语义
 
 - 配置寿命不超过 24 小时，并且每次转发都检查租约有效期及剩余额度。配置/租约过期不新发数据；控制面每批 5 分钟/16 MiB 等预算以实际配置为准。
@@ -63,7 +111,7 @@ $env:TFP_EXIT_TOKEN = '<至少16字符的随机出口凭据>'
 - TCP 半关闭保留，单方向缓存 32 KiB。每入口规则最多 256 TCP 连接或 UDP 会话；UDP 空闲回收 30 秒，TCP 单方向空闲 2 分钟。出口最多 256 隧道会话。会话切换与目标错误不提供无损迁移。
 - 协议屏蔽只实现首段明文 HTTP 方法和 SOCKS4/5 前缀识别；未知流量允许。不是 DPI 保证，TLS/HTTPS 密文内容和 URL 路径不会被解密识别。`fet` 等未知检测器拒绝应用；控制面负责合并组与规则限制。
 
-计量使用 append WAL 和有界 group commit，发送前等待该批次 fsync 成功；上线容量仍需以真实机器基准验收。租约历史去重元数据随租约数量增长，checkpoint 达到 64 MiB 上限将停止转发，需要后续保留/压缩策略；待确认流量 spool 有硬上限。多出口链、反向连接、Mux、SNI 共享端口、远程升级、全局带宽调度尚未实现。
+计量使用 append WAL 和有界 group commit，发送前等待该批次 fsync 成功；上线容量仍需以真实机器基准验收。租约历史去重元数据随租约数量增长，checkpoint 达到 64 MiB 上限将停止转发，需要后续保留/压缩策略；待确认流量 spool 有硬上限。反向连接、Mux、SNI 共享端口、远程升级、全局带宽调度尚未实现。
 
 ## WAL、备份与恢复
 
@@ -104,5 +152,7 @@ go test -race -v ./internal/integration
 ```
 
 四承载均在真实本机 TCP/UDP socket 上测试回显、大于单帧的数据、空 UDP 报文、TCP 半关闭、错误证书名、不受信任证书、错误出口 token 和白名单外目标。Agent 测试覆盖预算重启、防退休复活、满 spool、磁盘失败、配置冲突回滚、计量方向，以及必须确认计量后才退租。
+
+链式测试覆盖全部 64 种三跳承载组合的 TCP/UDP 回显、跨帧数据、空/大 UDP 报文及 TCP 半关闭；在每一跳独立验证错误身份、证书及白名单拒绝；覆盖超长链、重复地址、DNS 别名回环、中继关闭后的会话回收和未完成下游握手取消。真实 Agent 入口测试验证两跳/三跳的 TCP/UDP 业务各方向仅计量一次，以及无效链配置不会替换旧配置。这些测试在同一主机的多个真实监听器上运行，不等同于生产跨机器链路或容量验收。
 
 `internal/integration` 使用真正的 `app.New`、SQL 数据库、HTTP 接口、Agent 与本地出口，不替换控制面处理器。默认 SQLite，也可经 `TFP_TEST_DRIVER` / `TFP_TEST_DSN` 使用有创建临时数据库权限的测试服务器。覆盖注册、管理员和用户授权、签名支付回调幂等、购买、四承载各 TCP/UDP 原始字节结算、部分租约归还与新租约、即时续费新周期、撤权、删除 ACK 释放端口、断联期间持久计量与重启补传、命名空间组策略实际阻断。支付回调是本地有效签名 fixture，没有连接商户支付平台或发生真实付款。生产双机网络、商户实付与容量目标仍需独立验收。Linux amd64/arm64 已以 `CGO_ENABLED=0` 交叉编译；这不等同于对应机器上的运行验收。
