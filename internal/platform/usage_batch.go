@@ -4,13 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
-	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 	"math"
 	"time"
+
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 )
 
 func (s *Server) persistUsageBatch(ctx context.Context, tx *sql.Tx, node string, records []contract.UsageRecord) error {
+	if len(records) > 500 {
+		return errors.New("usage batch exceeds 500")
+	}
 	if len(records) == 0 {
 		return nil
 	}
@@ -71,18 +75,25 @@ func (s *Server) persistUsageBatch(ctx context.Context, tx *sql.Tx, node string,
 		return nil
 	}
 	type lease struct {
-		rule, node, ent                       string
-		budget, before, used, expiry, retired int64
+		rule, node, ent              string
+		budget, before, used, expiry int64
+		retired                      bool
 	}
 	leases := map[string]*lease{}
-	rows, e = tx.QueryContext(ctx, s.q("SELECT l.id,l.rule_id,l.node_id,l.entitlement_id,l.bytes_allocated,l.bytes_used,l.expires_at,COALESCE(ret.used_bytes,-1) FROM cp_rule_leases l LEFT JOIN cp_lease_retirements ret ON ret.id=l.id WHERE l.id IN("+storage.Placeholders(len(args))+")"), args...)
+	// Share the retirement lock order: control-plane leases, then commercial
+	// leases. Lock zero-byte facts too, before checking retirement in a fresh read.
+	lock := ""
+	if s.Store.Dialect != "sqlite" {
+		lock = " FOR UPDATE"
+	}
+	rows, e = tx.QueryContext(ctx, s.q("SELECT id,rule_id,node_id,entitlement_id,bytes_allocated,bytes_used,expires_at FROM cp_rule_leases WHERE id IN("+storage.Placeholders(len(args))+") ORDER BY id"+lock), args...)
 	if e != nil {
 		return e
 	}
 	for rows.Next() {
 		var id string
 		l := &lease{}
-		if e = rows.Scan(&id, &l.rule, &l.node, &l.ent, &l.budget, &l.before, &l.expiry, &l.retired); e != nil {
+		if e = rows.Scan(&id, &l.rule, &l.node, &l.ent, &l.budget, &l.before, &l.expiry); e != nil {
 			rows.Close()
 			return e
 		}
@@ -94,11 +105,30 @@ func (s *Server) persistUsageBatch(ctx context.Context, tx *sql.Tx, node string,
 	if e != nil {
 		return e
 	}
+	rows, e = tx.QueryContext(ctx, s.q("SELECT id FROM cp_lease_retirements WHERE id IN("+storage.Placeholders(len(args))+") ORDER BY id"+lock), args...)
+	if e != nil {
+		return e
+	}
+	for rows.Next() {
+		var id string
+		if e = rows.Scan(&id); e != nil {
+			rows.Close()
+			return e
+		}
+		if l := leases[id]; l != nil {
+			l.retired = true
+		}
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return e
+	}
 	commercial := []contract.UsageRecord{}
 	inserts := [][]any{}
 	for _, u := range fresh {
 		l, ok := leases[u.LeaseID]
-		if !ok || l.retired >= 0 || l.rule != u.RuleID || l.node != node || l.ent != u.EntitlementID || u.EndedAt.Unix() > l.expiry {
+		if !ok || l.retired || l.rule != u.RuleID || l.node != node || l.ent != u.EntitlementID || u.EndedAt.Unix() > l.expiry {
 			return errors.New("usage outside lease")
 		}
 		amount := u.UploadBytes + u.DownloadBytes

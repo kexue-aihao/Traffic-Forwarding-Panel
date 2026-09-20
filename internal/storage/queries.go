@@ -56,12 +56,19 @@ func (q *Queries) Close() {
 // Identifiers and predicates must be compile-time application SQL, never input.
 func Placeholders(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
 func BulkInsert(ctx context.Context, tx *sql.Tx, rebind func(string) string, table, columns string, rows [][]any) error {
-	for start := 0; start < len(rows); start += 100 {
-		end := start + 100
+	if len(rows) == 0 {
+		return nil
+	}
+	width := len(rows[0])
+	if width == 0 || width > 999 {
+		return errors.New("invalid bulk row width")
+	}
+	chunkSize := min(100, 999/width)
+	for start := 0; start < len(rows); start += chunkSize {
+		end := start + chunkSize
 		if end > len(rows) {
 			end = len(rows)
 		}
-		width := len(rows[start])
 		values := make([]string, 0, end-start)
 		args := []any{}
 		for _, row := range rows[start:end] {
@@ -95,7 +102,9 @@ func BulkCounter(ctx context.Context, tx *sql.Tx, rebind func(string) string, ta
 		args := []any{}
 		var cases, where []string
 		for _, c := range changes[start:end] {
-			cases = append(cases, "WHEN ? THEN ?")
+			// Keep the addition inside CASE so PostgreSQL infers each delta as
+			// the BIGINT counter type, rather than INTEGER from an ELSE 0.
+			cases = append(cases, "WHEN ? THEN "+column+"+?")
 			args = append(args, c.ID, c.Delta)
 		}
 		for _, c := range changes[start:end] {
@@ -107,7 +116,7 @@ func BulkCounter(ctx context.Context, tx *sql.Tx, rebind func(string) string, ta
 				args = append(args, c.ID)
 			}
 		}
-		query := "UPDATE " + table + " SET " + column + "=" + column + "+CASE id " + strings.Join(cases, " ") + " ELSE 0 END WHERE (" + strings.Join(where, " OR ") + ")"
+		query := "UPDATE " + table + " SET " + column + "=CASE id " + strings.Join(cases, " ") + " ELSE " + column + " END WHERE (" + strings.Join(where, " OR ") + ")"
 		if guard != "" {
 			query += " AND (" + guard + ")"
 		}

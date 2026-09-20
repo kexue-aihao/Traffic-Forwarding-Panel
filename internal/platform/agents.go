@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
 	"net"
 	"net/http"
 	"strings"

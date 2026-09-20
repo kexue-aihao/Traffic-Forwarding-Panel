@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
-	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 	"math"
 	"math/big"
+
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 )
 
 func (s *Service) SettleUsageBatch(ctx context.Context, tx *sql.Tx, records []contract.UsageRecord) error {
@@ -82,14 +83,22 @@ func (s *Service) SettleUsageBatch(ctx context.Context, tx *sql.Tx, records []co
 		mult                    *big.Rat
 	}
 	leases := map[string]*lease{}
-	rows, e = tx.QueryContext(ctx, s.q("SELECT l.id,l.node_id,l.rule_id,l.entitlement_id,l.expires_at,l.bytes,l.used,l.multiplier,COALESCE(r.closed,0) FROM commerce_leases l LEFT JOIN commerce_lease_reservations r ON r.lease_id=l.id WHERE l.id IN("+storage.Placeholders(len(args))+")"), args...)
+	// Lock every lease, including zero-byte facts, in the same order. Retirement
+	// holds this row until its reservation closes, so settlement cannot race the
+	// refund. Read reservations separately after acquiring these locks: a joined
+	// snapshot can predate a concurrent retirement that we waited for.
+	lock := ""
+	if s.Dialect != "sqlite" {
+		lock = " FOR UPDATE"
+	}
+	rows, e = tx.QueryContext(ctx, s.q("SELECT id,node_id,rule_id,entitlement_id,expires_at,bytes,used,multiplier FROM commerce_leases WHERE id IN("+storage.Placeholders(len(args))+") ORDER BY id"+lock), args...)
 	if e != nil {
 		return e
 	}
 	for rows.Next() {
 		var id, m string
 		l := &lease{}
-		if e = rows.Scan(&id, &l.node, &l.rule, &l.ent, &l.expiry, &l.budget, &l.before, &m, &l.closed); e != nil {
+		if e = rows.Scan(&id, &l.node, &l.rule, &l.ent, &l.expiry, &l.budget, &l.before, &m); e != nil {
 			rows.Close()
 			return e
 		}
@@ -101,6 +110,27 @@ func (s *Service) SettleUsageBatch(ctx context.Context, tx *sql.Tx, records []co
 		}
 		l.used = l.before
 		leases[id] = l
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return e
+	}
+	// FOR UPDATE also makes this a current read under MySQL REPEATABLE READ.
+	rows, e = tx.QueryContext(ctx, s.q("SELECT lease_id,closed FROM commerce_lease_reservations WHERE lease_id IN("+storage.Placeholders(len(args))+") ORDER BY lease_id"+lock), args...)
+	if e != nil {
+		return e
+	}
+	for rows.Next() {
+		var id string
+		var closed int
+		if e = rows.Scan(&id, &closed); e != nil {
+			rows.Close()
+			return e
+		}
+		if l := leases[id]; l != nil {
+			l.closed = closed
+		}
 	}
 	e = rows.Err()
 	rows.Close()

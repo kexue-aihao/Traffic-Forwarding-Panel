@@ -3,12 +3,11 @@ package commerce
 import (
 	"context"
 	"database/sql"
-
 	"errors"
-	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
-
 	"math/big"
 	"time"
+
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
 
 func (s *Service) Allocate(ctx context.Context, tx *sql.Tx, user, rule, node string) (*contract.Lease, error) {
