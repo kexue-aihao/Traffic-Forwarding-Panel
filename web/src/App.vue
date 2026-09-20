@@ -17,6 +17,7 @@ const menus = computed(() => [
   { path: "/nodes", label: "服务器", icon: "server" },
   { path: "/probes", label: "实时探针", icon: "activity" },
   { path: "/commerce", label: "套餐与钱包", icon: "wallet" },
+  { path: "/account", label: "账号与 API", icon: "shield" },
   ...(adminSite && state.user?.role === "admin"
     ? [
         { path: "/groups", label: "设备组", icon: "layers" },
