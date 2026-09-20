@@ -205,3 +205,34 @@ func (s *Server) rotateNodeToken(w http.ResponseWriter, r *http.Request) {
 	}
 	reply(w, 200, map[string]any{"node_id": node, "token": raw})
 }
+
+func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
+	u, _ := UserFromContext(r.Context())
+	n, o := pages(r)
+	var total int
+	if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_tokens WHERE user_id=?`), u.ID).Scan(&total); e != nil {
+		fail(w, 500, "token query failed")
+		return
+	}
+	rows, e := s.Store.DB.QueryContext(r.Context(), s.q(`SELECT id,name,expires_at FROM cp_tokens WHERE user_id=? ORDER BY id LIMIT ? OFFSET ?`), u.ID, n, o)
+	if e != nil {
+		fail(w, 500, "token query failed")
+		return
+	}
+	defer rows.Close()
+	items := []map[string]any{}
+	for rows.Next() {
+		var tid, name string
+		var expiry int64
+		if e = rows.Scan(&tid, &name, &expiry); e != nil {
+			fail(w, 500, "token query failed")
+			return
+		}
+		items = append(items, map[string]any{"id": tid, "name": name, "expires_at": time.Unix(expiry, 0).UTC(), "scope": "owner-resources"})
+	}
+	if rows.Err() != nil {
+		fail(w, 500, "token query failed")
+		return
+	}
+	reply(w, 200, map[string]any{"items": items, "total": total})
+}

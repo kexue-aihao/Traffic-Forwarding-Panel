@@ -231,3 +231,39 @@ func TestRecoveryAndNodeRotationRevokeCredentials(t *testing.T) {
 	}
 	read[map[string]any](t, f.req("POST", "/auth/login", map[string]any{"username": "admin", "password": "replacement-password"}, ""), 200)
 }
+
+func TestTokenListOwnerIsolationAndNoSecrets(t *testing.T) {
+	f := setup(t)
+	admin := f.cookie
+	token := read[map[string]any](t, f.req("POST", "/auth/tokens", map[string]any{"name": "private-admin-token", "expires_at": time.Now().Add(time.Hour)}, ""), 201)
+	read[contract.User](t, f.req("POST", "/users", map[string]any{"username": "other", "password": "test-password-long", "role": "user"}, ""), 201)
+	res := f.req("POST", "/auth/login", map[string]any{"username": "other", "password": "test-password-long"}, "")
+	f.cookie = res.Result().Cookies()[0]
+	other := read[struct {
+		Total int `json:"total"`
+	}](t, f.req("GET", "/auth/tokens", nil, ""), 200)
+	if other.Total != 0 {
+		t.Fatal("cross-user token list")
+	}
+	if rr := f.req("DELETE", "/auth/tokens/"+token["id"].(string), nil, ""); rr.Code != 204 {
+		t.Fatal(rr.Code)
+	}
+	f.cookie = admin
+	rr := f.req("GET", "/auth/tokens", nil, "")
+	list := read[struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}](t, rr, 200)
+	if list.Total != 1 || len(list.Items) != 1 {
+		t.Fatal("cross-user revocation")
+	}
+	if _, ok := list.Items[0]["token"]; ok {
+		t.Fatal("secret disclosure")
+	}
+	if _, ok := list.Items[0]["token_hash"]; ok {
+		t.Fatal("hash disclosure")
+	}
+	if bytes.Contains(rr.Body.Bytes(), []byte(token["token"].(string))) {
+		t.Fatal("secret in response")
+	}
+}
