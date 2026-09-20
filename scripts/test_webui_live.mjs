@@ -227,7 +227,7 @@ try {
         .click();
       await user.getByRole("button", { name: "确认提交" }).click();
       await user
-        .getByText("Insufficient available balance", { exact: true })
+        .getByText("可用余额不足，请核对钱包余额。", { exact: true })
         .waitFor();
       await user.getByRole("button", { name: "关闭对话框" }).click();
       await user.getByRole("link", { name: "账号与 API", exact: true }).click();
@@ -279,6 +279,54 @@ try {
       await user
         .getByRole("heading", { name: "账号与 API", exact: true })
         .waitFor();
+      if (browserName === "chromium") {
+        const screenshots = resolve(root, ".gocache/screens");
+        await mkdir(screenshots, { recursive: true });
+        for (const [role, page] of [
+          ["admin", admin],
+          ["user", user],
+        ]) {
+          const dismiss = page.getByRole("button", {
+            name: "关闭通知",
+            exact: true,
+          });
+          if (await dismiss.count()) await dismiss.click();
+          for (const [section, label] of [
+            ["overview", "概览"],
+            ["commerce", "套餐与钱包"],
+            ["account", "账号与 API"],
+            ["probes", "实时探针"],
+          ]) {
+            await page.getByRole("link", { name: label, exact: true }).click();
+            await page.waitForTimeout(180);
+            for (const [viewport, size] of [
+              ["desktop", { width: 1440, height: 1000 }],
+              ["mobile", { width: 320, height: 800 }],
+            ]) {
+              await page.setViewportSize(size);
+              await page.screenshot({
+                path: resolve(
+                  screenshots,
+                  `${role}-${section}-${viewport}.png`,
+                ),
+              });
+              assert.ok(
+                await page.evaluate(
+                  () => document.documentElement.scrollWidth <= innerWidth,
+                ),
+                "viewport overflow",
+              );
+              assert.ok(
+                await page
+                  .locator("#view")
+                  .evaluate((el) => el.clientHeight > 0),
+                "main is reachable",
+              );
+            }
+          }
+        }
+        await admin.setViewportSize({ width: 1440, height: 1000 });
+      }
       await admin.getByRole("link", { name: "用户管理", exact: true }).click();
       await admin
         .getByRole("row")

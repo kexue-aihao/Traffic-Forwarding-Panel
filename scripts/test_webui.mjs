@@ -14,6 +14,17 @@ let authorized = false;
 let expire = false;
 let rules = [];
 let purchases = 0;
+let paymentFixture = false;
+let createdKeys = [];
+let reconcileCalls = 0;
+const uncertainOrder = {
+  id: "uncertain-fixture",
+  channel: "epay",
+  amount_cents: "1000",
+  currency: "CNY",
+  status: "pending",
+  created_at: new Date().toISOString(),
+};
 const user = {
   id: "u1",
   username: "fixture-admin",
@@ -89,6 +100,16 @@ const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = raw ? JSON.parse(raw) : {};
+    if (path === "/orders" && req.method === "POST") {
+      createdKeys.push(body.idempotency_key);
+      if (createdKeys.length === 1)
+        return json({ code: "payment_uncertain", error: "创建待核实" }, 409);
+      return json(uncertainOrder);
+    }
+    if (path === "/orders/uncertain-fixture/reconcile") {
+      reconcileCalls++;
+      return json({ code: "unsupported", error: "查询不支持" }, 422);
+    }
     if (path === "/rules" && req.method === "POST") {
       rules.push({ ...body, id: "r1", version: 1 });
       return json(rules.at(-1));
@@ -121,20 +142,23 @@ const server = createServer(async (req, res) => {
           months: 1,
         },
       ],
-      "/orders": [],
+      "/orders": paymentFixture ? [uncertainOrder] : [],
       "/ledger": [],
       "/payment-channels": [
         {
           id: "epay",
           name: "EPay",
-          enabled: false,
+          enabled: paymentFixture,
           status: "unconfigured",
           reason: "未配置",
         },
       ],
     };
     if (path in maps)
-      return json({ items: maps[path], total: maps[path].length });
+      return json({
+        items: maps[path],
+        total: path === "/orders" && paymentFixture ? 41 : maps[path].length,
+      });
     return json({ code: "not_found", error: "未实现" }, 404);
   }
   try {
@@ -236,6 +260,42 @@ try {
         .getByText("购买已由服务端确认，请查看更新后的权益。")
         .waitFor();
       assert.equal(purchases > 0, true);
+      paymentFixture = true;
+      createdKeys = [];
+      reconcileCalls = 0;
+      await page.getByRole("button", { name: "刷新状态", exact: true }).click();
+      await page
+        .getByText("核实中（创建结果待确认）", { exact: true })
+        .waitFor();
+      const historyLength = await page.evaluate(() => history.length);
+      await page
+        .getByRole("button", { name: "下一页订单", exact: true })
+        .click();
+      await page.waitForURL(/orders_page=2/);
+      assert.equal(await page.evaluate(() => history.length), historyLength);
+      assert.equal(
+        await page.getByRole("link", { name: "前往支付 ↗" }).count(),
+        0,
+      );
+      await page
+        .getByRole("button", { name: "核实支付状态", exact: true })
+        .click();
+      await page
+        .getByText("该支付渠道不支持主动查单，请联系管理员核实，勿重复付款。", {
+          exact: true,
+        })
+        .waitFor();
+      assert.equal(reconcileCalls, 1);
+      await page.getByRole("button", { name: "充值钱包", exact: true }).click();
+      await page.getByLabel("支付渠道").selectOption("epay");
+      await page.getByRole("button", { name: "确认提交", exact: true }).click();
+      await page.locator("dialog .error").waitFor();
+      assert.equal(await page.getByLabel("充值金额（分）").isDisabled(), true);
+      await page.getByRole("button", { name: "确认提交", exact: true }).click();
+      await page.locator("dialog").waitFor({ state: "detached" });
+      assert.equal(createdKeys.length, 2);
+      assert.equal(createdKeys[0], createdKeys[1]);
+      paymentFixture = false;
       for (const accent of [
         "blue",
         "teal",
@@ -276,7 +336,13 @@ try {
       await page.getByRole("link", { name: "转发规则", exact: true }).click();
       await page.getByRole("button", { name: "登录控制台" }).waitFor();
       assert.deepEqual(
-        errors.filter((x) => !x.includes("401") && !x.includes("Unauthorized")),
+        errors.filter(
+          (x) =>
+            !x.includes("401") &&
+            !x.includes("Unauthorized") &&
+            !x.includes("409") &&
+            !x.includes("422"),
+        ),
         [],
       );
       console.log(

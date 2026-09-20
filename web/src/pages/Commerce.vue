@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import Modal from "../components/Modal.vue";
-import { api, errorText } from "../core/api";
+import { api, ApiError, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
 interface Plan {
   id: string;
@@ -58,6 +59,123 @@ const amount = ref("1000");
 const channel = ref("");
 const formError = ref("");
 const key = ref("");
+const chargeDraft = ref<{
+  channel: string;
+  amount_cents: string;
+  idempotency_key: string;
+} | null>(null);
+const draftStorageKey = "tfp-charge-draft:" + state.user?.id;
+try {
+  const saved = JSON.parse(
+    sessionStorage.getItem(draftStorageKey) || "null",
+  ) as unknown;
+  if (
+    saved &&
+    typeof saved === "object" &&
+    "channel" in saved &&
+    typeof saved.channel === "string" &&
+    "amount_cents" in saved &&
+    typeof saved.amount_cents === "string" &&
+    "idempotency_key" in saved &&
+    typeof saved.idempotency_key === "string"
+  )
+    chargeDraft.value = {
+      channel: saved.channel,
+      amount_cents: saved.amount_cents,
+      idempotency_key: saved.idempotency_key,
+    };
+} catch {
+  /* unavailable session storage leaves the current in-memory retry intact */
+}
+function persistDraft() {
+  try {
+    if (chargeDraft.value)
+      sessionStorage.setItem(
+        draftStorageKey,
+        JSON.stringify(chargeDraft.value),
+      );
+    else sessionStorage.removeItem(draftStorageKey);
+  } catch {
+    /* storage may be unavailable */
+  }
+}
+const reconciling = ref<string | null>(null);
+const orderError = ref<Record<string, string>>({});
+const financialReady = ref(false);
+const route = useRoute();
+const router = useRouter();
+const totals = ref({ plans: 0, orders: 0, ledger: 0 });
+const pages = computed(() => ({
+  plans: Math.max(1, Number(route.query.plans_page) || 1),
+  orders: Math.max(1, Number(route.query.orders_page) || 1),
+  ledger: Math.max(1, Number(route.query.ledger_page) || 1),
+}));
+function turnPage(kind: "plans" | "orders" | "ledger", page: number) {
+  void router.replace({
+    query: { ...route.query, [kind + "_page"]: String(page) },
+  });
+}
+let loadVersion = 0;
+const ledgerKinds: Record<string, string> = {
+  payment: "充值到账",
+  purchase: "套餐购买",
+  adjustment: "人工调整",
+  refund: "退款",
+};
+const channelNames: Record<string, string> = {
+  epay: "易支付 EPay",
+  epusdt: "EPUSDT（原版）",
+  bepusdt: "BEpusdt（兼容版）",
+  tokenpay: "TokenPay",
+  cryptomus: "Cryptomus",
+  cyber: "Cyber",
+};
+function channelName(id: string) {
+  return channelNames[id] || "其他支付渠道";
+}
+function channelState(channel: Channel) {
+  return (
+    (
+      {
+        unconfigured: "尚未配置商户信息",
+        configured_unverified: "已配置，尚未完成真实支付验证",
+        blocked: "暂不可用，等待确认服务商与接口版本",
+        not_implemented: "暂未接入",
+        ready: "可用",
+      } as Record<string, string>
+    )[channel.status] || (channel.enabled ? "已启用" : "暂不可用")
+  );
+}
+function orderState(order: Order) {
+  if (order.status === "pending")
+    return paymentURL(order.payment_url)
+      ? "待支付"
+      : "核实中（创建结果待确认）";
+  return (
+    (
+      {
+        paid: "已到账",
+        closed: "已关闭",
+        failed: "处理失败",
+        refunded: "已退款",
+      } as Record<string, string>
+    )[order.status] || "状态待核实"
+  );
+}
+function businessError(error: unknown) {
+  if (error instanceof ApiError && error.code === "unsupported")
+    return "该支付渠道不支持主动查单，请联系管理员核实，勿重复付款。";
+  const message = errorText(error);
+  return (
+    (
+      {
+        "Insufficient available balance": "可用余额不足，请核对钱包余额。",
+        "Request could not be completed":
+          "暂时无法完成处理，请刷新状态或联系管理员核实。",
+      } as Record<string, string>
+    )[message] || message
+  );
+}
 const planForm = ref({
   name: "",
   price_cents: "1000",
@@ -71,38 +189,64 @@ function money(cents: string) {
   return `${neg ? "-" : ""}${a / 100n}.${String(a % 100n).padStart(2, "0")}`;
 }
 async function load() {
+  const version = ++loadVersion;
   loading.value = true;
+  financialReady.value = false;
+  wallet.value = null;
+  entitlement.value = null;
   error.value = "";
   const results = await Promise.allSettled([
-    api<{ items: Plan[] }>("/plans").then((x) => {
+    api<{ items: Plan[]; total: number }>(
+      `/plans?page=${pages.value.plans}&page_size=20`,
+    ).then((x) => {
+      if (version !== loadVersion) return;
       plans.value = x.items;
+      totals.value.plans = x.total;
     }),
     api<typeof wallet.value>("/wallet").then((x) => {
+      if (version !== loadVersion) return;
       wallet.value = x;
     }),
-    api<{ items: Order[] }>("/orders").then((x) => {
+    api<{ items: Order[]; total: number }>(
+      `/orders?page=${pages.value.orders}&page_size=20`,
+    ).then((x) => {
+      if (version !== loadVersion) return;
       orders.value = x.items;
+      totals.value.orders = x.total;
     }),
     api<{ items: Channel[] }>("/payment-channels").then((x) => {
+      if (version !== loadVersion) return;
       channels.value = x.items;
     }),
     api<Entitlement | null>("/entitlement").then((x) => {
+      if (version !== loadVersion) return;
       entitlement.value = x;
     }),
-    api<{ items: Ledger[] }>("/ledger").then((x) => {
+    api<{ items: Ledger[]; total: number }>(
+      `/ledger?page=${pages.value.ledger}&page_size=20`,
+    ).then((x) => {
+      if (version !== loadVersion) return;
       ledger.value = x.items;
+      totals.value.ledger = x.total;
     }),
   ]);
+  if (version !== loadVersion) return;
+  financialReady.value =
+    results[1]?.status === "fulfilled" && results[4]?.status === "fulfilled";
   const failures = results.filter(
     (r): r is PromiseRejectedResult => r.status === "rejected",
   );
   if (failures.length)
-    error.value = `部分商业功能暂不可用：${failures.map((f) => errorText(f.reason)).join("；")}`;
+    error.value = `部分商业功能暂不可用：${failures.map((f) => businessError(f.reason)).join("；")}`;
   loading.value = false;
 }
 function startCharge() {
   charging.value = true;
-  key.value = crypto.randomUUID();
+  if (chargeDraft.value) {
+    channel.value = chargeDraft.value.channel;
+    amount.value = chargeDraft.value.amount_cents;
+  }
+  key.value = chargeDraft.value?.idempotency_key || crypto.randomUUID();
   formError.value = "";
 }
 function buy(plan: Plan) {
@@ -124,13 +268,21 @@ async function submit() {
       selected.value = null;
       notice("购买已由服务端确认，请查看更新后的权益。");
     } else if (charging.value) {
-      await api("/orders", "POST", {
+      chargeDraft.value ??= {
         channel: channel.value,
         amount_cents: amount.value,
         idempotency_key: key.value,
-      });
+      };
+      persistDraft();
+      const order = await api<Order>("/orders", "POST", chargeDraft.value);
       charging.value = false;
-      notice("充值订单已创建，到账以服务端支付核实结果为准。");
+      chargeDraft.value = null;
+      persistDraft();
+      notice(
+        order.status === "pending" && !paymentURL(order.payment_url)
+          ? "订单创建结果正在核实，请查单或联系管理员，勿重复付款。"
+          : "充值订单已创建，到账以服务端支付核实结果为准。",
+      );
     } else {
       await api("/plans", "POST", planForm.value);
       creating.value = false;
@@ -138,10 +290,40 @@ async function submit() {
     }
     await load();
   } catch (e) {
-    formError.value = errorText(e);
+    formError.value = charging.value
+      ? "订单创建结果待核实。请先查看订单；再次提交仅核实同一次请求，不会创建新的充值意图。 " +
+        businessError(e)
+      : businessError(e);
+    if (state.user) await load();
   } finally {
     busy.value = false;
   }
+}
+async function reconcile(order: Order) {
+  if (reconciling.value) return;
+  reconciling.value = order.id;
+  delete orderError.value[order.id];
+  try {
+    const result = await api<Order>(
+      `/orders/${encodeURIComponent(order.id)}/reconcile`,
+      "POST",
+      {},
+    );
+    notice(
+      result.status === "paid"
+        ? "支付已由服务端确认，正在更新钱包。"
+        : "尚未确认到账，请勿重复付款。",
+    );
+  } catch (e) {
+    orderError.value[order.id] = businessError(e);
+  } finally {
+    if (state.user) await load();
+    reconciling.value = null;
+  }
+}
+function refreshVisible() {
+  if (!document.hidden && state.user && !busy.value && !reconciling.value)
+    void load();
 }
 function paymentURL(raw: string | undefined) {
   if (!raw) return "";
@@ -152,7 +334,20 @@ function paymentURL(raw: string | undefined) {
     return "";
   }
 }
-onMounted(load);
+onMounted(() => {
+  void load();
+  window.addEventListener("focus", refreshVisible);
+});
+onUnmounted(() => {
+  loadVersion++;
+  window.removeEventListener("focus", refreshVisible);
+});
+watch(
+  () => route.query,
+  () => {
+    void load();
+  },
+);
 </script>
 <template>
   <section class="page">
@@ -198,7 +393,13 @@ onMounted(load);
             {{ entitlement.quota_bytes }} 字节
           </p></template
         >
-        <p v-else class="muted">暂无可展示的套餐权益。</p>
+        <p v-else class="muted">
+          {{
+            financialReady
+              ? "当前没有套餐权益。"
+              : "权益状态正在刷新或暂不可用。"
+          }}
+        </p>
       </div>
     </div>
     <h2>可选套餐</h2>
@@ -210,17 +411,35 @@ onMounted(load);
         <p class="muted">
           {{ plan.months }} 个月 · {{ plan.quota_bytes }} 字节
         </p>
-        <button class="primary" :disabled="!wallet" @click="buy(plan)">
+        <button
+          class="primary"
+          :disabled="!wallet || !financialReady || loading"
+          @click="buy(plan)"
+        >
           余额购买
         </button>
       </article>
+    </div>
+    <div class="pagination" aria-label="套餐分页">
+      <span>共 {{ totals.plans }} 个套餐 · 第 {{ pages.plans }} 页</span
+      ><button
+        :disabled="loading || pages.plans <= 1"
+        @click="turnPage('plans', pages.plans - 1)"
+      >
+        上一页套餐</button
+      ><button
+        :disabled="loading || pages.plans * 20 >= totals.plans"
+        @click="turnPage('plans', pages.plans + 1)"
+      >
+        下一页套餐
+      </button>
     </div>
     <details class="card">
       <summary>支付通道状态</summary>
       <p v-if="!channels.length" class="muted">暂未获取可用支付通道。</p>
       <p v-for="c in channels" :key="c.id">
-        {{ c.name }} · {{ c.enabled ? "已启用" : "不可用" }}
-        <span class="muted">{{ c.reason || c.status }}</span>
+        {{ channelName(c.id) }} · {{ c.enabled ? "已启用" : "不可用" }}
+        <span class="muted">{{ channelState(c) }}</span>
       </p>
     </details>
     <h2>充值订单</h2>
@@ -238,11 +457,15 @@ onMounted(load);
         </thead>
         <tbody>
           <tr v-for="o in orders" :key="o.id">
-            <td data-label="订单">{{ o.id }}</td>
+            <td data-label="订单">
+              {{ o.id }}<br /><span class="small muted">{{
+                channelName(o.channel)
+              }}</span>
+            </td>
             <td data-label="金额">
               {{ money(o.amount_cents) }} {{ o.currency }}
             </td>
-            <td data-label="状态">{{ o.status }}</td>
+            <td data-label="状态">{{ orderState(o) }}</td>
             <td data-label="创建时间">
               {{ new Date(o.created_at).toLocaleString() }}
             </td>
@@ -253,11 +476,37 @@ onMounted(load);
                 target="_blank"
                 rel="noopener noreferrer"
                 >前往支付 ↗</a
-              ><span v-else>—</span>
+              ><span v-else-if="o.status === 'pending'" class="small muted"
+                >请核实订单，勿重复付款。</span
+              >
+              <button
+                v-if="o.status === 'pending'"
+                :disabled="!!reconciling || loading"
+                @click="reconcile(o)"
+              >
+                {{ reconciling === o.id ? "正在查单…" : "核实支付状态" }}
+              </button>
+              <p v-if="orderError[o.id]" role="alert" class="error small">
+                {{ orderError[o.id] }}
+              </p>
             </td>
           </tr>
         </tbody>
       </table>
+    </div>
+    <div class="pagination" aria-label="订单分页">
+      <span>共 {{ totals.orders }} 个订单 · 第 {{ pages.orders }} 页</span
+      ><button
+        :disabled="loading || pages.orders <= 1"
+        @click="turnPage('orders', pages.orders - 1)"
+      >
+        上一页订单</button
+      ><button
+        :disabled="loading || pages.orders * 20 >= totals.orders"
+        @click="turnPage('orders', pages.orders + 1)"
+      >
+        下一页订单
+      </button>
     </div>
     <h2>钱包账本</h2>
     <div class="card table-wrap">
@@ -273,7 +522,7 @@ onMounted(load);
         </thead>
         <tbody>
           <tr v-for="l in ledger" :key="l.id">
-            <td data-label="类型">{{ l.kind }}</td>
+            <td data-label="类型">{{ ledgerKinds[l.kind] || "账务变动" }}</td>
             <td data-label="变动金额">{{ money(l.amount_cents) }}</td>
             <td data-label="余额">{{ money(l.balance_cents) }}</td>
             <td data-label="时间">
@@ -282,6 +531,20 @@ onMounted(load);
           </tr>
         </tbody>
       </table>
+    </div>
+    <div class="pagination" aria-label="账本分页">
+      <span>共 {{ totals.ledger }} 条记录 · 第 {{ pages.ledger }} 页</span
+      ><button
+        :disabled="loading || pages.ledger <= 1"
+        @click="turnPage('ledger', pages.ledger - 1)"
+      >
+        上一页账本</button
+      ><button
+        :disabled="loading || pages.ledger * 20 >= totals.ledger"
+        @click="turnPage('ledger', pages.ledger + 1)"
+      >
+        下一页账本
+      </button>
     </div>
     <Modal
       v-if="selected || charging || creating"
@@ -302,19 +565,24 @@ onMounted(load);
           </p></template
         ><template v-else-if="charging"
           ><label
-            >支付渠道<select v-model="channel" required>
+            >支付渠道<select
+              v-model="channel"
+              required
+              :disabled="!!chargeDraft"
+            >
               <option value="" disabled>选择渠道</option>
               <option
                 v-for="c in channels.filter((x) => x.enabled)"
                 :key="c.id"
                 :value="c.id"
               >
-                {{ c.name }}
+                {{ channelName(c.id) }}
               </option>
             </select></label
           ><label
             >充值金额（分）<input
               v-model="amount"
+              :disabled="!!chargeDraft"
               inputmode="numeric"
               pattern="[1-9][0-9]*"
               required
