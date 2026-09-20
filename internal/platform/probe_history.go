@@ -36,7 +36,7 @@ type probeHistory struct {
 	flushMu sync.Mutex
 	cutoff  int64
 	pending map[probeBucket]probeAggregate
-	last    map[string]int64
+	seen    map[probeBucket]map[int64]bool
 }
 type ProbeHistoryPoint struct {
 	SampledAt  time.Time `json:"sampled_at"`
@@ -51,7 +51,7 @@ type ProbeHistoryPoint struct {
 }
 
 func newProbeHistory(now time.Time) *probeHistory {
-	return &probeHistory{cutoff: now.UTC().Truncate(time.Minute).Add(-time.Minute).Unix(), pending: map[probeBucket]probeAggregate{}, last: map[string]int64{}}
+	return &probeHistory{cutoff: now.UTC().Truncate(time.Minute).Add(-time.Minute).Unix(), pending: map[probeBucket]probeAggregate{}, seen: map[probeBucket]map[int64]bool{}}
 }
 
 func (s *Server) MigrateProbeHistory(ctx context.Context) error {
@@ -97,15 +97,15 @@ func (h *probeHistory) record(p contract.Probe, now time.Time) error {
 	if key.Minute < h.cutoff || key.Minute < now.UTC().Truncate(time.Minute).Add(-time.Minute).Unix() {
 		return errors.New("probe sample is too old")
 	}
-	if last, ok := h.last[p.NodeID]; ok && p.SampledAt.Unix() <= last {
+	if h.seen[key][p.SampledAt.UnixNano()] {
 		return nil
 	}
 	a, exists := h.pending[key]
 	if !exists && len(h.pending) >= historyBuckets {
 		return errors.New("probe history queue full")
 	}
-	if _, exists := h.last[p.NodeID]; !exists && len(h.last) >= historyBuckets {
-		return errors.New("probe node capacity reached")
+	if len(h.seen[key]) >= 120 {
+		return errors.New("probe minute sample capacity reached")
 	}
 	a.Samples++
 	for i, n := range v {
@@ -115,7 +115,10 @@ func (h *probeHistory) record(p contract.Probe, now time.Time) error {
 		}
 	}
 	h.pending[key] = a
-	h.last[p.NodeID] = p.SampledAt.Unix()
+	if h.seen[key] == nil {
+		h.seen[key] = map[int64]bool{}
+	}
+	h.seen[key][p.SampledAt.UnixNano()] = true
 	return nil
 }
 
@@ -202,23 +205,17 @@ func (s *Server) FlushProbeHistory(ctx context.Context, now time.Time) error {
 		h.mu.Lock()
 		for _, k := range batch {
 			delete(h.pending, k)
+			delete(h.seen, k)
 		}
 		h.mu.Unlock()
 	}
-	h.mu.Lock()
-	for node, at := range h.last {
-		if at < cutoff {
-			delete(h.last, node)
-		}
-	}
-	h.mu.Unlock()
 	return nil
 }
 
 // Clean a bounded number per call so retention cannot monopolize the writer.
 func (s *Server) PruneProbeHistory(ctx context.Context, now time.Time) error {
 	return s.Store.Write(ctx, storage.Background, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, s.q(`SELECT node_id,resolution,bucket FROM cp_probe_history WHERE (resolution='minute' AND bucket<?) OR (resolution='hour' AND bucket<?) ORDER BY bucket LIMIT 1000`), now.Add(-7*24*time.Hour).Unix(), now.Add(-180*24*time.Hour).Unix())
+		rows, err := tx.QueryContext(ctx, s.q(`SELECT node_id,resolution,bucket FROM cp_probe_history WHERE (resolution='minute' AND bucket<?) OR (resolution='hour' AND bucket<?) ORDER BY bucket LIMIT 1000`), now.Add(-7*24*time.Hour).Truncate(time.Minute).Unix(), now.Add(-180*24*time.Hour).Truncate(time.Hour).Unix())
 		if err != nil {
 			return err
 		}

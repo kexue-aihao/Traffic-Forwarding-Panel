@@ -129,7 +129,7 @@ func TestProbeHistoryRetentionAndBoundedInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, n := f.node()
-	now := time.Now().UTC().Truncate(time.Minute)
+	now := time.Now().UTC().Truncate(time.Hour).Add(34*time.Minute + 30*time.Second)
 	h := newProbeHistory(now)
 	for _, value := range []float64{math.NaN(), math.Inf(1), -1, 101} {
 		if err := h.record(contract.Probe{NodeID: n.NodeID, SampledAt: now, CPUPercent: &value}, now); err == nil {
@@ -146,7 +146,7 @@ func TestProbeHistoryRetentionAndBoundedInput(t *testing.T) {
 		for _, item := range []struct {
 			resolution string
 			at         time.Time
-		}{{"minute", now.Add(-8 * 24 * time.Hour)}, {"minute", now.Add(-6 * 24 * time.Hour)}, {"hour", now.Add(-181 * 24 * time.Hour)}, {"hour", now.Add(-179 * 24 * time.Hour)}} {
+		}{{"minute", now.Add(-8 * 24 * time.Hour)}, {"minute", now.Add(-6 * 24 * time.Hour)}, {"hour", now.Add(-181 * 24 * time.Hour)}, {"hour", now.Add(-179 * 24 * time.Hour)}, {"minute", now.Add(-7 * 24 * time.Hour).Truncate(time.Minute)}, {"hour", now.Add(-180 * 24 * time.Hour).Truncate(time.Hour)}} {
 			if _, err := tx.ExecContext(ctx, f.s.q(`INSERT INTO cp_probe_history(node_id,resolution,bucket,payload) VALUES(?,?,?,?)`), n.NodeID, item.resolution, item.at.Unix(), strJSON(probeAggregate{})); err != nil {
 				return err
 			}
@@ -160,12 +160,38 @@ func TestProbeHistoryRetentionAndBoundedInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err = f.s.Store.DB.QueryRow("SELECT COUNT(*) FROM cp_probe_history").Scan(&count); err != nil || count != 2 {
+	if err = f.s.Store.DB.QueryRow("SELECT COUNT(*) FROM cp_probe_history").Scan(&count); err != nil || count != 4 {
 		t.Fatal("retention mismatch", count, err)
 	}
 	for _, path := range []string{historyPath(n.NodeID, "minute", now.Add(-8*24*time.Hour), now), historyPath(n.NodeID, "hour", now.Add(-181*24*time.Hour), now), historyPath(n.NodeID, "invalid", now.Add(-time.Hour), now)} {
 		if r := f.req("GET", path, nil, ""); r.Code != 400 {
 			t.Fatal("unbounded history query accepted", r.Code)
 		}
+	}
+}
+
+func TestProbeHistoryLateAndSubsecondSamplesRemainBounded(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute).Add(5 * time.Second)
+	h := newProbeHistory(now)
+	for _, at := range []time.Time{now, now.Add(-10 * time.Second), now.Add(time.Nanosecond), now} {
+		if err := h.record(contract.Probe{NodeID: "node", SampledAt: at, CPUPercent: probeNumber(50)}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := probeBucket{"node", now.Truncate(time.Minute).Unix()}
+	previous := probeBucket{"node", now.Add(-time.Minute).Truncate(time.Minute).Unix()}
+	if h.pending[current].Samples != 2 || h.pending[previous].Samples != 1 {
+		t.Fatal("late/subsecond sample dropped or replay counted")
+	}
+	for i := 2; i < 120; i++ {
+		if err := h.record(contract.Probe{NodeID: "node", SampledAt: now.Add(time.Duration(i) * time.Nanosecond)}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.record(contract.Probe{NodeID: "node", SampledAt: now.Add(120 * time.Nanosecond)}, now); err == nil {
+		t.Fatal("unbounded per-bucket dedup set")
+	}
+	if len(h.seen[current]) != 120 || h.pending[current].Samples != 120 {
+		t.Fatal("rejected sample changed aggregation")
 	}
 }

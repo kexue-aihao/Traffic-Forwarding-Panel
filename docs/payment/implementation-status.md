@@ -1,21 +1,32 @@
-# Payment and quota implementation status
+# 支付、账务与配额实施状态
 
-This is a first implementation slice, not completed product acceptance.
+更新：2026-09-21。已有协议适配和本机事务验证，尚未完成真实商户验收。完整协议来源及签名差异见 [协议固定版本](protocol-sources.md)。
 
-- EPay: classic submit.php / MD5 callback implemented with local signing, tampering and replay tests. Provider version and merchant end-to-end evidence remain required; active query/reconciliation not implemented yet.
-- Original EPUSDT and Bepusdt: mandatory, not yet implemented. Source discovery on 2026-09-20 resolved assimon/epusdt master to aed4a970a28d734c8a35499496604b868a24ef7f via GitHub tree API; this discovery does NOT establish a supported version or verify API behavior. API source inspection remains pending.
-- LightCountry/TokenPay and Cryptomus: mandatory, not yet implemented; protocol version locking and merchant tests pending.
-- Cyber: mandatory external dependency blocked on exact provider identity and versioned API documentation. No invented endpoint or signature.
-- Refunds, payment attempts, outbox/reconciliation, coupons and commissions remain future implementation work, not covered by first slice.
+| 渠道 | 当前能力 | 尚缺证据 |
+|---|---|---|
+| EPay | submit/mapi创建、MD5通知、主动查单 | 实际商户分支与实付回调 |
+| 原版EPUSDT | 固定历史v0.0.1创建和回调；查单返回不支持 | 实际商户实付；不能伪造其协议没有的查单接口 |
+| BEpusdt | v1.24.2创建、独立回调签名、HTTPS查单 | 真实收银台指纹限制与实付 |
+| TokenPay | 创建/查单、显式MD5或HMAC-SHA256、完整标量通知验签 | 商户币种配置、真实回调 |
+| Cryptomus | 官方API创建/查单、保序PHP兼容回调签名 | 实际供应商通知样本和实付 |
+| Cyber | 必交付外部依赖，未实现 | 明确供应商身份、版本化API文档、测试商户 |
 
-## Quota integration
+订单先持久保存创建意图与一次支付尝试，再调用外部网关；网络调用不占SQL事务。超时/断连保留原订单为待核实，同幂等键不会重复创建外部交易。回调与主动查单共用订单号、CNY币种、整数分金额、交易号校验和唯一入账事务。前端保留未确认支付意图，支持分页查看订单和主动核对；返回页不代表付款成功。
 
-Commerce Service implements Allocate(ctx, tx, userID, ruleID, nodeID) and AllocateWithMultiplier with a final exact rational multiplier string. Both use the caller's SQL transaction. Multiply ingress and egress group factors before allocation; default Allocate is multiplier 1 only. Returned Lease.Bytes is RAW bidirectional application payload allowance. Allocated entitlement budget is weighted bytes.
+当前每订单一次支付尝试，尚无切换渠道后多次实收的完整归并/退款流程。商户凭据来自部署配置，尚未保存历史密钥版本；轮换与跨商户迁移需操作员核对未决订单，不能宣称无缝轮换。退款、拒付、优惠兑换、返佣/回冲、自动续费和通用outbox仍未完成。只提供钱包充值再余额购买；没有直付套餐。
 
-SettleUsage(ctx, tx, contract.UsageRecord) validates persisted lease bindings and charges the lease's original entitlement, including reports delayed past a renewal. Duplicate identical records are accepted, changed repeats rejected. Agent must use globally unique usage IDs and non-overlapping delta records; period counters must not be resent as new deltas.
+## 配额与事务
 
-Current leases last at most five minutes and reserve at most 16 MiB weighted budget. Reservations are deliberately NOT reclaimed solely because a lease expires: delayed usage may still arrive. This is a significant availability limitation, not final production quota behavior. Implement authenticated final usage/lease surrender and persistent Agent spend state, release only proven unspent budget, and issue consumption-driven successor batches. Allocate cannot be called on every config poll; control plane must reuse current valid allocations. Config must replace old entitlement leases after purchases; runtime must stop stale grants at expiry. Offline propagation is not instantaneous.
+`AllocateWithMultiplier`接收最终精确有理数倍率；`Lease.Bytes`是上下行应用载荷原始字节，权益预留的是加权字节。当前规则配置调用已接入入口组倍率，出口组身份/定价尚未整合；不能把手工隧道出口配置当作已经完成入口×出口组商业定价。
 
-Money uses CNY integer cents. Successful purchase creates a new cycle starting now, expiry by Asia/Shanghai calendar-month addition with end-day clamping. It does not extend old expiry or grant another reset on calendar month day 1. Old ledger and usage facts remain immutable.
+`SettleUsageBatch`最多500条：检查持久租约绑定、原周期、最终累计倍率取整、重复/冲突和超额，同事务保存控制面/商业事实。续费后迟到数据仍结算旧权益。批量使用有序行锁与CAS，退租锁顺序为控制面租约→商业租约；MySQL退租状态用当前读，避免旧快照放行新流量。
 
-SQLite tests passed locally. PostgreSQL/MySQL SQL syntax was designed portably but live database integration has NOT been run. Merchant payments have NOT been tested. API collection paging is currently capped at 100 for wallet ledger/orders and needs full shared pagination integration.
+租约每次至多5分钟、16MiB加权预算。Agent先以WAL持久保留用量，再确认后退租，控制面仅返回已证实未花费的预算；租约过期本身不释放预留。已实现退租、补传及配置复用，未知未用额度不重复分配。当前续租会关闭旧连接，仍非最终连续可用性方案。
+
+钱包使用CNY整数分。购买成功以当前时间建立新周期，上海自然月加法夹紧月末；不顺延旧到期时间，不在每月1日再补配额。账本、旧周期用量和购买幂等事实保留。
+
+## 已运行验证
+
+SQLite、PostgreSQL18.6、MySQL8.4.6真实隔离库的商业/平台/存储测试通过：并发支付和购买、重放/篡改、旧周期迟到、退租、跨层事务回滚、4GiB增量、精确备份恢复。协议层使用官方已公开向量与受信TLS模拟网关；Cryptomus向量由独立Node.js按官方规范生成，不称为供应商公开测试向量。
+
+plans/orders/ledger已采用`page/page_size`与`{items,total}`，默认20/最多100。商业页面类型检查及三浏览器fixture/live验证已运行；live使用隔离本机数据，不代表真实付款。无任何渠道的真实商户交易被标为通过。
