@@ -13,6 +13,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -21,6 +22,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -443,5 +445,109 @@ func TestRealControlPlaneAllEncryptedCarriers(t *testing.T) {
 			}
 			t.Logf("real application + SQL + Agent + %s TCP/UDP + settled raw 52 bytes", transport)
 		})
+	}
+}
+
+type outageTransport struct {
+	base    http.RoundTripper
+	offline atomic.Bool
+}
+
+func (o *outageTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if o.offline.Load() {
+		return nil, errors.New("injected network outage")
+	}
+	return o.base.RoundTrip(r)
+}
+
+func TestControlOutageRestartAndLateUsageExactlyOnce(t *testing.T) {
+	f := newFixture(t, tunnel.Client{})
+	target, _ := targets(t)
+	rule := f.rule("tcp", "direct", target, nil)
+	f.sync()
+	lease := *f.lease(rule.ID)
+	network := &outageTransport{base: http.DefaultTransport}
+	f.agent.HTTP = &http.Client{Transport: network, Timeout: time.Second}
+	network.offline.Store(true)
+	transfer(t, rule, []byte("before-restart"))
+	if e := f.agent.Step(context.Background()); e == nil {
+		t.Fatal("network failure not observed")
+	}
+	pendingBefore := len(f.store.Pending())
+	if pendingBefore == 0 {
+		t.Fatal("usage was lost during control outage")
+	}
+	if f.number("SELECT used FROM commerce_entitlements WHERE id=?", f.ent.ID) != 0 {
+		t.Fatal("offline data unexpectedly settled")
+	}
+	f.agent.Runtime.Close()
+	f.store.Close()
+	var e error
+	f.store, e = agent.OpenStore(f.statePath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	f.agent.Store = f.store
+	f.agent.Runtime = agent.NewRuntime(f.store, f.client)
+	if e = f.agent.Runtime.Apply(f.store.Config(), false); e != nil {
+		t.Fatal(e)
+	}
+	if len(f.store.Pending()) != pendingBefore {
+		t.Fatal("restart dropped durable spool")
+	}
+	transfer(t, rule, []byte("after-restart"))
+	if f.lease(rule.ID).ID != lease.ID {
+		t.Fatal("offline restart changed lease identity")
+	}
+	network.offline.Store(false)
+	f.sync()
+	expected := int64(2 * (len("before-restart") + len("after-restart")))
+	if got := f.number("SELECT used FROM commerce_entitlements WHERE id=?", f.ent.ID); got != expected {
+		t.Fatalf("late usage %d expected %d", got, expected)
+	}
+	if len(f.store.Pending()) != 0 {
+		t.Fatal("confirmed spool retained")
+	}
+	f.sync()
+	if got := f.number("SELECT used FROM commerce_entitlements WHERE id=?", f.ent.ID); got != expected {
+		t.Fatal("reconnect double-charged")
+	}
+	if f.lease(rule.ID).ID != lease.ID {
+		t.Fatal("reconnect silently refilled allocation")
+	}
+}
+
+func TestNamespacedGroupPolicyReachesRealDataPlane(t *testing.T) {
+	f := newFixture(t, tunnel.Client{})
+	target, udp := targets(t)
+	f.group.BlockedProtocols = []string{"network:udp", "transport:tls", "app:http", "app:socks"}
+	f.group = decode[contract.Group](t, f.request("PUT", "/groups/"+f.group.ID, f.group, f.admin, 200))
+	f.request("POST", "/rules", contract.Rule{Name: "blocked-udp", NodeID: f.store.Identity().NodeID, GroupID: f.group.ID, Network: "udp", Transport: "direct", Listen: freeAddress(t, "udp"), Target: udp, Enabled: true}, f.user, 409)
+	rule := f.rule("tcp", "direct", target, nil)
+	f.sync()
+	for _, p := range f.store.Config().Rules[0].BlockedProtocols {
+		if p != "http" && p != "socks" {
+			t.Fatalf("control restriction leaked into detector %q", p)
+		}
+	}
+	transfer(t, rule, []byte("unknown-allowed"))
+	for _, payload := range [][]byte{[]byte("GET /private HTTP/1.1\r\n\r\n"), {5, 1, 0}} {
+		c, e := net.DialTimeout("tcp", rule.Listen, time.Second)
+		if e != nil {
+			t.Fatal(e)
+		}
+		c.SetDeadline(time.Now().Add(2 * time.Second))
+		c.Write(payload)
+		c.(*net.TCPConn).CloseWrite()
+		buf := make([]byte, 100)
+		n, e := c.Read(buf)
+		c.Close()
+		if n != 0 || e == nil {
+			t.Fatal("blocked plaintext forwarded")
+		}
+	}
+	f.sync()
+	if used := f.number("SELECT used FROM commerce_entitlements WHERE id=?", f.ent.ID); used != 30 {
+		t.Fatalf("blocked payload was billed or allowed payload missing: %d", used)
 	}
 }
