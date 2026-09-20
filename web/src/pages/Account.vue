@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import Modal from "../components/Modal.vue";
 import { api, errorText } from "../core/api";
 import { state, notice } from "../core/state";
+import { displayTimeZoneLabel, formatDateTime } from "../core/format";
 interface Token {
   id: string;
   name: string;
@@ -132,6 +133,7 @@ onMounted(load);
       <p class="muted">
         Token
         仅访问账号自己的资源。即使由管理员创建，也不具有管理员操作权限。密钥只展示一次。
+        有效期使用{{ displayTimeZoneLabel }}。
       </p>
       <p v-if="error" role="alert" class="error">
         无法读取 Token 列表：{{ error }} <button @click="load">重试</button>
@@ -151,7 +153,7 @@ onMounted(load);
             <tr v-for="token in tokens" :key="token.id">
               <td data-label="名称">{{ token.name }}</td>
               <td data-label="有效期">
-                {{ new Date(token.expires_at).toLocaleString() }}
+                {{ formatDateTime(token.expires_at) }}
               </td>
               <td data-label="范围">自身资源</td>
               <td data-label="操作">
@@ -225,7 +227,12 @@ onMounted(load);
                 autocomplete="new-password"
                 required /></label></template
           ><template v-else
-            ><label
+            ><p class="small muted">
+              有效期从提交时起计算，每天为 24 小时；到期时间显示为{{
+                displayTimeZoneLabel
+              }}。
+            </p>
+            <label
               >Token 名称<input
                 v-model="name"
                 required

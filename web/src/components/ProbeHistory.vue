@@ -2,6 +2,12 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api, errorText } from "../core/api";
+import {
+  displayTimeZoneLabel,
+  formatDateTime,
+  formatDate,
+  formatTime,
+} from "../core/format";
 
 interface HistorySample {
   sampled_at: string;
@@ -103,16 +109,10 @@ function value(item: HistorySample | undefined) {
     ? "未知"
     : `${number.format(amount)}${metric.value.unit ? " " + metric.value.unit : ""}`;
 }
-function time(timestamp: number | string) {
-  return new Date(timestamp).toLocaleString();
-}
 function axisTime(timestamp: number) {
   return range.value.hours <= 24
-    ? new Date(timestamp).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : new Date(timestamp).toLocaleDateString();
+    ? formatTime(timestamp)
+    : formatDate(timestamp);
 }
 function select(key: string, event: Event) {
   void router.replace({
@@ -216,7 +216,8 @@ onUnmounted(() => {
     <p v-else-if="!selectedNode" class="empty">暂无可查询历史的授权节点。</p>
     <template v-else>
       <p class="small muted history-window">
-        {{ time(windowStart) }} 至 {{ time(windowEnd) }} · 本地时间 ·
+        {{ formatDateTime(windowStart) }} 至 {{ formatDateTime(windowEnd) }} ·
+        {{ displayTimeZoneLabel }} ·
         {{ range.resolution === "minute" ? "分钟" : "小时" }}汇总
       </p>
       <p v-if="!items.length" class="empty" role="status">
@@ -282,12 +283,12 @@ onUnmounted(() => {
             step="1"
             :aria-valuetext="
               selected
-                ? `${time(selected.sampled_at)}，${metric.label} ${value(selected)}`
+                ? `${formatDateTime(selected.sampled_at)}，${displayTimeZoneLabel}，${metric.label} ${value(selected)}`
                 : ''
             "
         /></label>
         <p v-if="selected" class="history-selection" aria-live="polite">
-          {{ time(selected.sampled_at) }} · {{ metric.label }}
+          {{ formatDateTime(selected.sampled_at) }} · {{ metric.label }}
           <strong>{{ value(selected) }}</strong> · {{ selected.samples }} 次上报
         </p>
       </template>

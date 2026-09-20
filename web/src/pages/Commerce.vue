@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import Modal from "../components/Modal.vue";
 import { api, ApiError, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
+import { displayTimeZoneLabel, formatDateTime } from "../core/format";
 interface Plan {
   id: string;
   name: string;
@@ -370,6 +371,7 @@ watch(
         </button>
       </div>
     </div>
+    <p class="small muted">时间使用{{ displayTimeZoneLabel }}。</p>
     <p v-if="error" class="warning" role="alert">{{ error }}</p>
     <div class="stats">
       <div class="card stat">
@@ -387,7 +389,7 @@ watch(
       <div class="card">
         <h2>当前权益</h2>
         <template v-if="entitlement"
-          ><p>到期 {{ new Date(entitlement.expires_at).toLocaleString() }}</p>
+          ><p>到期 {{ formatDateTime(entitlement.expires_at) }}</p>
           <p class="muted">
             已用 {{ entitlement.used_bytes }} /
             {{ entitlement.quota_bytes }} 字节
@@ -467,7 +469,7 @@ watch(
             </td>
             <td data-label="状态">{{ orderState(o) }}</td>
             <td data-label="创建时间">
-              {{ new Date(o.created_at).toLocaleString() }}
+              {{ formatDateTime(o.created_at) }}
             </td>
             <td data-label="操作">
               <a
@@ -526,7 +528,7 @@ watch(
             <td data-label="变动金额">{{ money(l.amount_cents) }}</td>
             <td data-label="余额">{{ money(l.balance_cents) }}</td>
             <td data-label="时间">
-              {{ new Date(l.created_at).toLocaleString() }}
+              {{ formatDateTime(l.created_at) }}
             </td>
           </tr>
         </tbody>

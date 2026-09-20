@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { api, errorText, ApiError } from "../core/api";
 import ProbeHistory from "../components/ProbeHistory.vue";
+import { displayTimeZoneLabel, formatDateTime } from "../core/format";
 interface Probe {
   node_id: string;
   sampled_at: string;
@@ -136,6 +137,7 @@ onUnmounted(() => {
         <p class="muted">
           {{ count }} 个可见采样 ·
           {{ connected ? "实时连接已建立" : "实时连接未建立" }}
+          · {{ displayTimeZoneLabel }}
         </p>
       </div>
       <button @click="load">重新连接</button>
@@ -153,9 +155,7 @@ onUnmounted(() => {
             now - Date.parse(p.sampled_at) > 30000 ? "数据陈旧" : "近期采样"
           }}</span>
         </div>
-        <p class="small muted">
-          采样于 {{ new Date(p.sampled_at).toLocaleString() }}
-        </p>
+        <p class="small muted">采样于 {{ formatDateTime(p.sampled_at) }}</p>
         <dl class="metrics">
           <div>
             <dt>上行</dt>
@@ -204,8 +204,7 @@ onUnmounted(() => {
         <div v-if="p.public_ips?.length">
           <p v-for="ip in p.public_ips" :key="ip.address" class="small">
             {{ ip.family }} · {{ ip.address }}<br /><span class="muted"
-              >{{ ip.source }} ·
-              {{ new Date(ip.observed_at).toLocaleString() }}</span
+              >{{ ip.source }} · {{ formatDateTime(ip.observed_at) }}</span
             >
           </p>
         </div>

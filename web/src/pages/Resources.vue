@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import Modal from "../components/Modal.vue";
 import { api, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
+import { displayTimeZoneLabel, formatDateTime } from "../core/format";
 type Row = Record<string, unknown>;
 const route = useRoute();
 const router = useRouter();
@@ -190,7 +191,7 @@ async function save() {
       data,
     );
     if (resource === "nodes") {
-      token.value = `${result.token}\n有效期至 ${result.expires_at}`;
+      token.value = `${result.token}\n有效期至 ${formatDateTime(result.expires_at)}（${displayTimeZoneLabel}）`;
       initial.value = JSON.stringify(form.value);
     } else {
       editing.value = false;
@@ -249,7 +250,17 @@ function query(next: number) {
 }
 watch(() => route.query, load);
 onMounted(load);
-function value(v: unknown) {
+function value(v: unknown, column: string) {
+  if (
+    [
+      "last_seen",
+      "created_at",
+      "expires_at",
+      "sampled_at",
+      "observed_at",
+    ].includes(column)
+  )
+    return typeof v === "string" ? formatDateTime(v) : "未知";
   return v === null || v === undefined
     ? "—"
     : typeof v === "object"
@@ -293,6 +304,7 @@ const labels: Record<string, string> = {
   username: "用户名",
   role: "角色",
   disabled: "停用",
+  created_at: "时间",
 };
 </script>
 <template>
@@ -307,6 +319,9 @@ const labels: Record<string, string> = {
               ? "在线心跳与配置应用状态分别展示。"
               : "配置与权限由服务端统一校验。"
           }}
+          <span v-if="resource === 'nodes' || resource === 'audit'"
+            >时间使用{{ displayTimeZoneLabel }}。</span
+          >
         </p>
       </div>
       <button
@@ -356,7 +371,7 @@ const labels: Record<string, string> = {
                 :key="col"
                 :data-label="labels[col] || col"
               >
-                {{ value(row[col]) }}
+                {{ value(row[col], col) }}
               </td>
               <td
                 v-if="

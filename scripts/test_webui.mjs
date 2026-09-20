@@ -20,13 +20,16 @@ let reconcileCalls = 0;
 let historyMode = "samples";
 let historyRequests = [];
 let releaseHistory;
+const summerUTC = "2026-07-14T16:20:30.000Z";
+const winterUTC = "2026-01-15T16:20:30.000Z";
+let tokenExpiry = "";
 const uncertainOrder = {
   id: "uncertain-fixture",
   channel: "epay",
   amount_cents: "1000",
   currency: "CNY",
   status: "pending",
-  created_at: new Date().toISOString(),
+  created_at: summerUTC,
 };
 const user = {
   id: "u1",
@@ -48,14 +51,14 @@ const node = {
   id: "n1",
   name: "Fixture node",
   agent_version: "test",
-  last_seen: new Date().toISOString(),
+  last_seen: summerUTC,
   desired_version: 1,
   applied_version: 1,
   apply_error: "",
 };
 const fixtureProbe = {
   node_id: "n1",
-  sampled_at: new Date().toISOString(),
+  sampled_at: winterUTC,
   cpu_percent: null,
   memory_used: null,
   memory_total: null,
@@ -65,6 +68,14 @@ const fixtureProbe = {
   download_bps: null,
   load1: null,
   uptime_seconds: null,
+  public_ips: [
+    {
+      address: "203.0.113.8",
+      family: "ipv4",
+      source: "fixture",
+      observed_at: summerUTC,
+    },
+  ],
 };
 const server = createServer(async (req, res) => {
   res.setHeader("X-WebUI-Preview", "contract-fixture");
@@ -103,6 +114,12 @@ const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = raw ? JSON.parse(raw) : {};
+    if (path === "/nodes/enrollment")
+      return json({ token: "fixture-enrollment", expires_at: winterUTC });
+    if (path === "/auth/tokens" && req.method === "POST") {
+      tokenExpiry = body.expires_at;
+      return json({ token: "fixture-api-token" });
+    }
     if (path === "/orders" && req.method === "POST") {
       createdKeys.push(body.idempotency_key);
       if (createdKeys.length === 1)
@@ -128,7 +145,15 @@ const server = createServer(async (req, res) => {
     }
     if (path === "/wallet")
       return json({ currency: "CNY", balance_cents: "9007199254740993123" });
-    if (path === "/entitlement") return json(null);
+    if (path === "/entitlement")
+      return json({
+        id: "entitlement1",
+        plan_id: "p1",
+        version: 1,
+        expires_at: winterUTC,
+        quota_bytes: "10737418240",
+        used_bytes: "0",
+      });
     if (path === "/probes") return json({ items: [fixtureProbe] });
     if (path === "/nodes")
       return json({
@@ -168,7 +193,23 @@ const server = createServer(async (req, res) => {
       "/nodes": [node],
       "/groups": [group],
       "/users": [user],
-      "/audit": [],
+      "/audit": [
+        {
+          id: "audit1",
+          user_id: "u1",
+          action: "fixture",
+          target: "n1",
+          created_at: winterUTC,
+        },
+      ],
+      "/auth/tokens": [
+        {
+          id: "token1",
+          name: "fixture-token",
+          expires_at: winterUTC,
+          scope: "self",
+        },
+      ],
       "/plans": [
         {
           id: "p1",
@@ -179,7 +220,16 @@ const server = createServer(async (req, res) => {
         },
       ],
       "/orders": paymentFixture ? [uncertainOrder] : [],
-      "/ledger": [],
+      "/ledger": [
+        {
+          id: "ledger1",
+          amount_cents: "1000",
+          balance_cents: "1000",
+          kind: "credit",
+          reference: "fixture",
+          created_at: winterUTC,
+        },
+      ],
       "/payment-channels": [
         {
           id: "epay",
@@ -237,7 +287,8 @@ try {
     historyRequests = [];
     const browser = await engine.launch({ headless: true });
     try {
-      const page = await browser.newPage();
+      const page = await browser.newPage({ timezoneId: "America/New_York" });
+      await page.clock.setFixedTime(new Date(summerUTC));
       const errors = [];
       page.on("pageerror", (e) => errors.push(e.message));
       page.on("console", (m) => {
@@ -250,6 +301,40 @@ try {
       await page
         .getByRole("heading", { name: "你好，fixture-admin" })
         .waitFor();
+      assert.equal(
+        await page.evaluate(
+          () => new Intl.DateTimeFormat().resolvedOptions().timeZone,
+        ),
+        "America/New_York",
+      );
+      await page.getByRole("link", { name: "服务器", exact: true }).click();
+      await page.getByText("2026-07-15 00:20:30", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "生成接入凭据" }).click();
+      await page.getByLabel("名称", { exact: true }).fill("Timezone fixture");
+      await page.getByRole("button", { name: "保存", exact: true }).click();
+      await page.getByLabel("一次性接入凭据").waitFor();
+      assert.match(
+        await page.getByLabel("一次性接入凭据").inputValue(),
+        /2026-01-16 00:20:30（上海时间 UTC\+8）/,
+      );
+      await page.getByRole("button", { name: "已保存，关闭" }).click();
+      await page.getByRole("link", { name: "操作审计", exact: true }).click();
+      await page.getByText("2026-01-16 00:20:30", { exact: true }).waitFor();
+      await page.getByRole("link", { name: "账号与 API", exact: true }).click();
+      await page.getByText("2026-01-16 00:20:30", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "创建 Token" }).click();
+      await page
+        .getByLabel("Token 名称", { exact: true })
+        .fill("Timezone token");
+      await page.getByLabel("有效天数", { exact: true }).fill("1");
+      await page.getByRole("button", { name: "确认提交", exact: true }).click();
+      await page.getByLabel("API Token 密钥").waitFor();
+      assert.equal(
+        tokenExpiry,
+        "2026-07-15T16:20:30.000Z",
+        "one token day is 24 absolute hours, independent of local timezone",
+      );
+      await page.getByRole("button", { name: "已保存，关闭" }).click();
       for (const width of [320, 390, 768, 1440, 1920]) {
         await page.setViewportSize({ width, height: 900 });
         await page.getByRole("link", { name: "转发规则", exact: true }).click();
@@ -283,9 +368,27 @@ try {
       assert.equal(await page.locator("td img").count(), 0);
       await page.getByRole("link", { name: "实时探针", exact: true }).click();
       await page.getByRole("heading", { name: "Fixture node" }).waitFor();
+      await page
+        .getByText("采样于 2026-01-16 00:20:30", { exact: true })
+        .waitFor();
+      await page
+        .getByText("fixture · 2026-07-15 00:20:30", { exact: true })
+        .waitFor();
       assert.ok((await page.getByText("未知", { exact: true }).count()) > 0);
       const history = page.getByRole("region", { name: "历史趋势" });
       await history.getByText("6 个采样桶 · 5 个CPU有效值").waitFor();
+      assert.match(
+        await history.locator(".history-window").innerText(),
+        /2026-07-14 00:21:00 至 2026-07-15 00:21:00 · 上海时间 UTC\+8/,
+      );
+      assert.match(
+        await history.locator(".history-selection").innerText(),
+        /2026-07-15 00:20:00/,
+      );
+      assert.deepEqual(
+        await history.locator(".history-x span").allTextContents(),
+        ["00:21", "00:21"],
+      );
       assert.equal(
         await history.locator("polyline").count(),
         2,
@@ -328,6 +431,15 @@ try {
       assert.equal(
         historyRequests.at(-1).searchParams.get("resolution"),
         "hour",
+      );
+      assert.equal(
+        historyRequests.at(-1).searchParams.get("to"),
+        "2026-07-14T17:00:00.000Z",
+        "query boundary stays RFC3339 UTC",
+      );
+      assert.deepEqual(
+        await history.locator(".history-x span").allTextContents(),
+        ["2026-01-16", "2026-07-15"],
       );
       assert.equal(
         Date.parse(historyRequests.at(-1).searchParams.get("to")) -
@@ -421,6 +533,10 @@ try {
         });
       }
       await page.getByRole("link", { name: "套餐与钱包", exact: true }).click();
+      await page
+        .getByText("到期 2026-01-16 00:20:30", { exact: true })
+        .waitFor();
+      await page.getByText("2026-01-16 00:20:30", { exact: true }).waitFor();
       await page.getByText("90071992547409931.23", { exact: false }).waitFor();
       assert.equal(
         await page
@@ -441,6 +557,7 @@ try {
       await page
         .getByText("核实中（创建结果待确认）", { exact: true })
         .waitFor();
+      await page.getByText("2026-07-15 00:20:30", { exact: true }).waitFor();
       const historyLength = await page.evaluate(() => history.length);
       await page
         .getByRole("button", { name: "下一页订单", exact: true })
@@ -520,7 +637,7 @@ try {
         [],
       );
       console.log(
-        `${name}: contract, CSP, login, 5 viewport widths, dirty dialog, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, purchase, themes, 401 PASS`,
+        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), dirty dialog, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, purchase, themes, 401 PASS`,
       );
     } finally {
       await browser.close();
