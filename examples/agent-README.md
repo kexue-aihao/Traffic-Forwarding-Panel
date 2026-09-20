@@ -82,6 +82,9 @@ $env:TFP_EXIT_TOKEN = '<至少16字符的随机出口凭据>'
 ```powershell
 go test ./internal/agent ./internal/tunnel ./internal/probe ./cmd/agent
 go test -race ./internal/agent ./internal/tunnel ./internal/probe
+go test -race -v ./internal/integration
 ```
 
-四承载均在真实本机 TCP/UDP socket 上测试回显、大于单帧的数据、空 UDP 报文、TCP 半关闭、错误证书名、不受信任证书、错误出口 token 和白名单外目标。Agent 测试覆盖预算重启、防退休复活、满 spool、磁盘失败、配置冲突回滚、计量方向，以及必须确认计量后才退租。端到端控制面和生产双机网络仍需集成验收。
+四承载均在真实本机 TCP/UDP socket 上测试回显、大于单帧的数据、空 UDP 报文、TCP 半关闭、错误证书名、不受信任证书、错误出口 token 和白名单外目标。Agent 测试覆盖预算重启、防退休复活、满 spool、磁盘失败、配置冲突回滚、计量方向，以及必须确认计量后才退租。
+
+`internal/integration` 使用真正的 `app.New`、SQL 数据库、HTTP 接口、Agent 与本地出口，不替换控制面处理器。默认 SQLite，也可经 `TFP_TEST_DRIVER` / `TFP_TEST_DSN` 使用有创建临时数据库权限的测试服务器。覆盖注册、管理员和用户授权、签名支付回调幂等、购买、四承载各 TCP/UDP 原始字节结算、部分租约归还与新租约、即时续费新周期、撤权、删除 ACK 释放端口、断联期间持久计量与重启补传、命名空间组策略实际阻断。支付回调是本地有效签名 fixture，没有连接商户支付平台或发生真实付款。生产双机网络、商户实付与容量目标仍需独立验收。Linux amd64/arm64 已以 `CGO_ENABLED=0` 交叉编译；这不等同于对应机器上的运行验收。
