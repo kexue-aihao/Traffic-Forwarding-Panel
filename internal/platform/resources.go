@@ -14,6 +14,7 @@ import (
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/tunnel"
 )
 
 func contains(ss []string, v string) bool {
@@ -26,7 +27,17 @@ func contains(ss []string, v string) bool {
 }
 
 func policyDenied(g contract.Group, rule contract.Rule) bool {
-	return contains(g.BlockedProtocols, rule.Network) || contains(g.BlockedProtocols, rule.Transport) || contains(g.BlockedProtocols, "network:"+rule.Network) || contains(g.BlockedProtocols, "transport:"+rule.Transport)
+	if contains(g.BlockedProtocols, rule.Network) || contains(g.BlockedProtocols, rule.Transport) || contains(g.BlockedProtocols, "network:"+rule.Network) || contains(g.BlockedProtocols, "transport:"+rule.Transport) {
+		return true
+	}
+	if rule.Tunnel != nil {
+		for _, hop := range rule.Tunnel.Chain {
+			if contains(g.BlockedProtocols, hop.Transport) || contains(g.BlockedProtocols, "transport:"+hop.Transport) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func applicationBlocks(rule, group []string) []string {
@@ -198,6 +209,9 @@ func redact(rule *contract.Rule) {
 	rule.Lease = nil
 	if rule.Tunnel != nil {
 		rule.Tunnel.Token = ""
+		for i := range rule.Tunnel.Chain {
+			rule.Tunnel.Chain[i].Token = ""
+		}
 	}
 }
 func validateRule(rule contract.Rule) (int, error) {
@@ -225,6 +239,14 @@ func validateRule(rule contract.Rule) (int, error) {
 	}
 	if rule.Transport != "direct" && (rule.Tunnel == nil || rule.Tunnel.Endpoint == "" || rule.Tunnel.Token == "") {
 		return 0, errors.New("tunnel endpoint and credential required")
+	}
+	if rule.Transport == "direct" && rule.Tunnel != nil {
+		return 0, errors.New("direct forwarding cannot contain a tunnel")
+	}
+	if rule.Tunnel != nil {
+		if e := tunnel.ValidateChain(contract.TunnelHop{Transport: rule.Transport, Endpoint: rule.Tunnel.Endpoint, ServerName: rule.Tunnel.ServerName, Token: rule.Tunnel.Token}, rule.Tunnel.Chain); e != nil {
+			return 0, e
+		}
 	}
 	return port, nil
 }
@@ -261,8 +283,18 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 			if rule.NodeID != old.NodeID || rule.GroupID != old.GroupID || rule.UserID != old.UserID || rule.Listen != old.Listen || rule.Network != old.Network {
 				return errors.New("listener, owner and placement are immutable; delete and recreate after ACK")
 			}
-			if rule.Tunnel != nil && rule.Tunnel.Token == "" && old.Tunnel != nil && rule.Tunnel.Endpoint == old.Tunnel.Endpoint {
-				rule.Tunnel.Token = old.Tunnel.Token
+			if rule.Tunnel != nil && old.Tunnel != nil {
+				if rule.Tunnel.Token == "" && rule.Transport == old.Transport && rule.Tunnel.Endpoint == old.Tunnel.Endpoint && rule.Tunnel.ServerName == old.Tunnel.ServerName {
+					rule.Tunnel.Token = old.Tunnel.Token
+				}
+				for i, hop := range rule.Tunnel.Chain {
+					if i < len(old.Tunnel.Chain) {
+						prior := old.Tunnel.Chain[i]
+						if hop.Token == "" && hop.Transport == prior.Transport && hop.Endpoint == prior.Endpoint && hop.ServerName == prior.ServerName {
+							rule.Tunnel.Chain[i].Token = prior.Token
+						}
+					}
+				}
 			}
 			rule.Lease = old.Lease
 		}
