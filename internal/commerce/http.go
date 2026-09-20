@@ -72,7 +72,7 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 				http.Error(w, "unauthorized", 401)
 				return
 			}
-			if r.Method != "GET" && r.Header.Get("Authorization") == "" {
+			if r.Method != "GET" && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 				origin, e := url.Parse(r.Header.Get("Origin"))
 				scheme := "http"
 				if r.TLS != nil {

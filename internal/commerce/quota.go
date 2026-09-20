@@ -95,7 +95,11 @@ func (s *Service) RetireLease(ctx context.Context, tx *sql.Tx, node, leaseID str
 	}
 	var storedNode, ent, multiplier string
 	var bytes, used int64
-	err := tx.QueryRowContext(ctx, s.q("SELECT node_id,entitlement_id,bytes,used,multiplier FROM commerce_leases WHERE id=?"), leaseID).Scan(&storedNode, &ent, &bytes, &used, &multiplier)
+	query := "SELECT node_id,entitlement_id,bytes,used,multiplier FROM commerce_leases WHERE id=?"
+	if s.Dialect != "sqlite" {
+		query += " FOR UPDATE"
+	}
+	err := tx.QueryRowContext(ctx, s.q(query), leaseID).Scan(&storedNode, &ent, &bytes, &used, &multiplier)
 	if err != nil {
 		return err
 	}

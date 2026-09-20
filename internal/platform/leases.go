@@ -141,7 +141,11 @@ func (s *Server) retireLease(w http.ResponseWriter, r *http.Request) {
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
 		var owner, ent string
 		var used int64
-		if e := tx.QueryRowContext(r.Context(), s.q(`SELECT node_id,entitlement_id,bytes_used FROM cp_rule_leases WHERE id=?`), in.LeaseID).Scan(&owner, &ent, &used); e != nil {
+		query := `SELECT node_id,entitlement_id,bytes_used FROM cp_rule_leases WHERE id=?`
+		if s.Store.Dialect != "sqlite" {
+			query += " FOR UPDATE"
+		}
+		if e := tx.QueryRowContext(r.Context(), s.q(query), in.LeaseID).Scan(&owner, &ent, &used); e != nil {
 			return e
 		}
 		if owner != node || used != in.Used {
