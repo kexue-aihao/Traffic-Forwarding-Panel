@@ -80,7 +80,7 @@ func run() error {
 		gateway.NotifyURL = *origin + "/api/v1/payments/epay/notify"
 	}
 	if gateway.ReturnURL == "" && *origin != "" {
-		gateway.ReturnURL = *origin + "/#/wallet"
+		gateway.ReturnURL = *origin + "/#/commerce"
 	}
 	var channels map[string]commerce.Channel
 	if *paymentsFile != "" {
@@ -147,10 +147,10 @@ func run() error {
 		return nil
 	}
 	server := &http.Server{Addr: *addr, Handler: application.Handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10, BaseContext: func(net.Listener) context.Context { return ctx }}
-	historyStopped := make(chan struct{})
+	backgroundStopped := make(chan struct{})
 	go func() {
-		defer close(historyStopped)
-		application.Platform.RunProbeHistory(ctx)
+		defer close(backgroundStopped)
+		application.RunBackground(ctx)
 	}()
 	stopped := make(chan struct{})
 	go func() {
@@ -164,7 +164,7 @@ func run() error {
 	err = server.ListenAndServe()
 	cancel()
 	<-stopped
-	<-historyStopped
+	<-backgroundStopped
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"strings"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/commerce"
@@ -46,10 +47,15 @@ func PaymentChannels(r io.Reader, origin string) (map[string]commerce.Channel, e
 		if cfg.ReturnURL == "" {
 			cfg.ReturnURL = strings.TrimRight(origin, "/") + "/#/commerce"
 		}
-		if !strings.HasPrefix(cfg.NotifyURL, "https://") || !strings.HasPrefix(cfg.ReturnURL, "https://") {
+		if !validPaymentURL(cfg.NotifyURL, false) || !validPaymentURL(cfg.ReturnURL, true) {
 			return nil, errors.New("public HTTPS payment URLs required for " + name)
 		}
 		result[name] = commerce.Channel{Adapter: adapter, NotifyURL: cfg.NotifyURL, ReturnURL: cfg.ReturnURL, Method: cfg.Method}
 	}
 	return result, nil
+}
+
+func validPaymentURL(raw string, fragment bool) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && (fragment || u.Fragment == "")
 }

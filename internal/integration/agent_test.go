@@ -122,7 +122,7 @@ func (f *fixture) login(name string) *http.Cookie {
 func newFixture(t *testing.T, tc tunnel.Client) *fixture {
 	t.Helper()
 	db := testdb.Open(t)
-	a, e := app.New(context.Background(), db, app.Options{EPay: payment.EPay{Gateway: "https://fixture.invalid", PID: "fixture-merchant", Key: "fixture-secret"}})
+	a, e := app.New(context.Background(), db, app.Options{EPay: payment.EPay{Gateway: "https://fixture.invalid", PID: "fixture-merchant", Key: "fixture-secret", NotifyURL: "https://panel.invalid/api/v1/payments/epay/notify", ReturnURL: "https://panel.invalid/#/commerce"}})
 	if e != nil {
 		t.Fatal(e)
 	}

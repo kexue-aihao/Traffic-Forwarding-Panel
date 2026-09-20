@@ -4,7 +4,10 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/http"
+	"strings"
+	"sync"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/commerce"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/payment"
@@ -24,9 +27,32 @@ type App struct {
 	Handler  http.Handler
 	Platform *platform.Server
 	Commerce *commerce.Service
+	channels map[string]commerce.Channel
 }
 
 func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) {
+	channels := make(map[string]commerce.Channel, len(opts.Channels)+1)
+	for name, channel := range opts.Channels {
+		channels[name] = channel
+	}
+	// The legacy environment configuration uses the same adapter and retry
+	// worker as the operator-owned JSON file. Explicit file configuration wins.
+	if _, exists := channels["epay"]; !exists && opts.EPay.Gateway != "" && opts.EPay.Key != "" {
+		if opts.EPay.NotifyURL == "" {
+			opts.EPay.NotifyURL = strings.TrimRight(opts.Origin, "/") + "/api/v1/payments/epay/notify"
+		}
+		if opts.EPay.ReturnURL == "" {
+			opts.EPay.ReturnURL = strings.TrimRight(opts.Origin, "/") + "/#/commerce"
+		}
+		if !validPaymentURL(opts.EPay.NotifyURL, false) || !validPaymentURL(opts.EPay.ReturnURL, true) {
+			return nil, errors.New("public HTTPS EPay callback URLs required")
+		}
+		adapter, err := payment.NewAdapter(payment.Configuration{Kind: "epay", Gateway: opts.EPay.Gateway, MerchantID: opts.EPay.PID, Key: opts.EPay.Key})
+		if err != nil {
+			return nil, errors.New("invalid legacy EPay configuration")
+		}
+		channels["epay"] = commerce.Channel{Adapter: adapter, NotifyURL: opts.EPay.NotifyURL, ReturnURL: opts.EPay.ReturnURL}
+	}
 	billing := commerce.New(store.DB, store.Dialect, func(ctx context.Context, fn func(*sql.Tx) error) error { return store.Write(ctx, storage.Critical, fn) })
 	if err := billing.Migrate(ctx); err != nil {
 		return nil, err
@@ -37,7 +63,16 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	}
 	mux := http.NewServeMux()
 	control.Register(mux)
-	billing.Register(mux, commerce.HTTPOptions{Authenticate: control.Authenticate, EPay: opts.EPay, PublicOrigin: opts.Origin, Channels: opts.Channels})
+	billing.Register(mux, commerce.HTTPOptions{Authenticate: control.Authenticate, EPay: opts.EPay, PublicOrigin: opts.Origin, Channels: channels})
 	webui.Register(mux)
-	return &App{Handler: webui.Security(mux), Platform: control, Commerce: billing}, nil
+	return &App{Handler: webui.Security(mux), Platform: control, Commerce: billing, channels: channels}, nil
+}
+
+// RunBackground is started only in server mode, never during restore or local
+// account commands. It returns after both workers stop, before closing SQL.
+func (a *App) RunBackground(ctx context.Context) {
+	var workers sync.WaitGroup
+	workers.Go(func() { a.Platform.RunProbeHistory(ctx) })
+	workers.Go(func() { _ = a.Commerce.RunReconciliation(ctx, a.channels) })
+	workers.Wait()
 }
