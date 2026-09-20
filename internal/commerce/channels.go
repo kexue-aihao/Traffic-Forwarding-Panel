@@ -16,6 +16,8 @@ type Channel struct {
 	Method    string
 }
 
+var ErrPaymentUncertain = errors.New("payment creation uncertain; reconcile this order before retrying")
+
 // CreateAdapterOrder durably allocates an order before calling any gateway.
 // An ambiguous creation is never retried as a new external order automatically.
 func (s *Service) CreateAdapterOrder(ctx context.Context, user, channel, key string, amount int64, configured Channel, clientIP string) (Order, error) {
@@ -83,7 +85,7 @@ func (s *Service) CreateAdapterOrder(ctx context.Context, user, channel, key str
 		return order, err
 	}
 	if callErr != nil {
-		return order, errors.New("payment creation uncertain; reconcile this order before retrying")
+		return order, ErrPaymentUncertain
 	}
 	order.PaymentURL = created.PaymentURL
 	return order, nil

@@ -77,7 +77,11 @@ func TestPersistenceBudgetRetirementAndSpool(t *testing.T) {
 func TestDiskFailureAndFullSpoolFailClosed(t *testing.T) {
 	s, _, c := setup(t)
 	r := testRule("127.0.0.1:1")
-	s.path = filepath.Join(s.path, "impossible")
+	// The hot path now appends to the already-open WAL, so inject a real
+	// closed-file write failure rather than changing the snapshot pathname.
+	s.mu.Lock()
+	s.wal.Close()
+	s.mu.Unlock()
 	if e := s.Charge(r, c.ValidUntil, true, 10); e == nil {
 		t.Fatal("disk failure ignored")
 	}

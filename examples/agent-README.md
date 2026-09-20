@@ -63,7 +63,25 @@ $env:TFP_EXIT_TOKEN = '<至少16字符的随机出口凭据>'
 - TCP 半关闭保留，单方向缓存 32 KiB。每入口规则最多 256 TCP 连接或 UDP 会话；UDP 空闲回收 30 秒，TCP 单方向空闲 2 分钟。出口最多 256 隧道会话。会话切换与目标错误不提供无损迁移。
 - 协议屏蔽只实现首段明文 HTTP 方法和 SOCKS4/5 前缀识别；未知流量允许。不是 DPI 保证，TLS/HTTPS 密文内容和 URL 路径不会被解密识别。`fet` 等未知检测器拒绝应用；控制面负责合并组与规则限制。
 
-当前同步落盘策略优先保证有限配额及崩溃恢复，不是高吞吐优化版本；上线容量需以真实机器基准验收。租约历史去重元数据随租约数量增长，需要后续保留/压缩策略；待确认流量 spool 有硬上限。多出口链、反向连接、Mux、SNI 共享端口、远程升级、全局带宽调度尚未实现。
+计量使用 append WAL 和有界 group commit，发送前等待该批次 fsync 成功；上线容量仍需以真实机器基准验收。租约历史去重元数据随租约数量增长，checkpoint 达到 64 MiB 上限将停止转发，需要后续保留/压缩策略；待确认流量 spool 有硬上限。多出口链、反向连接、Mux、SNI 共享端口、远程升级、全局带宽调度尚未实现。
+
+## WAL、备份与恢复
+
+持久化格式版本为 1。`agent-state.json` 是带 sequence 与 CRC32C 的 checkpoint；`agent-state.json.wal` 是追加事件日志，文件头包含版本 magic、基准 sequence 和 CRC32C，记录包含长度、单调 sequence、头部 CRC32C、头部与载荷联合 CRC32C、JSON 事件。事件分别记录节点身份、配置、原始计量、服务端确认、退休和退休确认。旧版单 JSON 文件在首次打开时一次性迁移，保留全部 pending、used 与 retired 状态。
+
+- 队列最多 256 请求；计量批次最多 128 笔，最多等候 1 ms 聚合。只有整批写入并 fsync 后，`Charge` 才允许调用者发送。超额度、队列满、spool 满或落盘错误不能通过继续写内存绕过。
+- WAL 达 8 MiB 后创建 checkpoint：写临时文件 → fsync → rename → Unix 上目录 fsync；然后写带新基准 sequence 的新 WAL → fsync → rename → Unix 上目录 fsync。始终先完整保存 checkpoint，再替换 WAL。尚未 ACK 的事件也包含在 checkpoint，不能因轮转而丢弃。
+- 恢复仅裁掉可确认的末尾不完整写入。完整记录的 CRC 错误（包括最后一条）、中间记录损坏、sequence 错误、头部错误、缺失必需 WAL 都停止启动，避免把损坏误判成“没用过额度”。完整但调用者未收到成功的记录仍保守计费，符合发送缓冲计量口径。
+- **停 Agent 后备份完整状态目录**，同时保留 checkpoint 与 `.wal`；不要只备份 JSON。`.tmp` / `.wal.next` 是未完成替换的暂存文件，正常恢复依据正式 checkpoint 与 WAL，不能自行用旧文件覆盖新文件来解除额度限制。不要手工截断完整损坏记录；应从一致备份恢复并核对控制面账务。
+- Windows 执行文件 fsync 与 rename，但 Go 路径未提供 Unix 式目录 fsync；实际断电与文件系统持久性保证需在目标 OS/文件系统上验收。自动化故障测试模拟写入/同步/替换边界及短写，不等同于物理断电认证。
+
+可复现计量基准：
+
+```powershell
+go test ./internal/agent -run '^$' -bench BenchmarkDurableUsage -benchtime=500x -count=1
+```
+
+2026-09-20 Windows amd64、Intel i5-10400F、Go 1.26.5、本地测试临时目录，预置 3000 条待确认记录，每次记录 32 KiB，有 500 次操作：旧版整 JSON 写/sync/rename 单 worker 为 5.73 ms/op，WAL 为 2.04 ms/op；32 workers 旧版 5.42 ms/op，WAL 为 64.8 µs/op。旧版路径在同一基准内保留以供对照；这些数字仅反映计量持久化调用，不是实际转发带宽或生产容量。`-benchtime` 请使用不超过 1000 次，避免超过此基准保留的 4096 条 spool 上限。
 
 ## 探针
 

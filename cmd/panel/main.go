@@ -44,9 +44,17 @@ func run() error {
 	initAdmin := flag.String("init-admin", "", "create first administrator then exit; reads password from stdin")
 	resetPassword := flag.String("reset-password", "", "reset local account password and revoke sessions; reads password from stdin")
 	paymentsFile := flag.String("payments", os.Getenv("TFP_PAYMENTS_FILE"), "operator-owned payment configuration JSON file")
+	backupPath := flag.String("backup", "", "export a consistent sensitive database snapshot to a new JSONL file, then exit")
+	restorePath := flag.String("restore", "", "restore JSONL into an empty database, then exit; stop panel before use")
 	flag.Parse()
-	if *initAdmin != "" && *resetPassword != "" {
-		return errors.New("select one account command")
+	commands := 0
+	for _, v := range []string{*initAdmin, *resetPassword, *backupPath, *restorePath} {
+		if v != "" {
+			commands++
+		}
+	}
+	if commands > 1 {
+		return errors.New("select one local administrative command")
 	}
 	if *origin != "" {
 		u, e := url.Parse(*origin)
@@ -89,6 +97,37 @@ func run() error {
 	application, err := app.New(ctx, store, app.Options{Origin: *origin, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, Channels: channels})
 	if err != nil {
 		return err
+	}
+	if *backupPath != "" {
+		f, e := os.OpenFile(*backupPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if e != nil {
+			return e
+		}
+		e = store.Export(ctx, f)
+		if e == nil {
+			e = f.Sync()
+		}
+		closeErr := f.Close()
+		if e != nil {
+			return e
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		fmt.Println("数据库快照已生成；恢复所需证书、支付配置和 Agent 状态需单独保管。")
+		return nil
+	}
+	if *restorePath != "" {
+		f, e := os.Open(*restorePath)
+		if e != nil {
+			return e
+		}
+		defer f.Close()
+		if e = store.Import(ctx, f); e != nil {
+			return e
+		}
+		fmt.Println("数据库已恢复。启动前核对节点状态、支付对账与配置版本。")
+		return nil
 	}
 	if *initAdmin != "" || *resetPassword != "" {
 		fmt.Fprintln(os.Stderr, "读取标准输入中的管理员密码（至少 12 字符），不写入配置或日志。")
