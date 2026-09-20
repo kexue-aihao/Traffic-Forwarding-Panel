@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -26,6 +27,17 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		if e != nil {
 			status := http.StatusBadRequest
 			message := "Request could not be completed"
+			code := "commerce_error"
+			if errors.Is(e, payment.ErrUnsupported) {
+				status = 422
+				code = "unsupported"
+				message = "该支付协议不支持此操作"
+			}
+			if errors.Is(e, ErrPaymentUncertain) {
+				status = 409
+				code = "payment_uncertain"
+				message = "支付结果正在核实，请查询原订单，勿重复付款"
+			}
 			if errors.Is(e, ErrFunds) {
 				message = "Insufficient available balance"
 			}
@@ -36,7 +48,7 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 				status = 404
 			}
 			w.WriteHeader(status)
-			json.NewEncoder(w).Encode(contract.APIError{Code: "commerce_error", Error: message})
+			json.NewEncoder(w).Encode(contract.APIError{Code: code, Error: message})
 			return
 		}
 		json.NewEncoder(w).Encode(v)
@@ -79,8 +91,9 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		}
 	}
 	mux.HandleFunc("GET /api/v1/plans", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
-		v, e := s.Plans(r.Context())
-		send(w, map[string]any{"items": v, "total": len(v)}, e)
+		page, size := commercePage(r)
+		v, total, e := s.PlansPage(r.Context(), page, size)
+		send(w, map[string]any{"items": v, "total": total}, e)
 	}))
 	mux.HandleFunc("POST /api/v1/plans", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
 		if u.Role != "admin" {
@@ -100,12 +113,14 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		send(w, v, e)
 	}))
 	mux.HandleFunc("GET /api/v1/ledger", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
-		v, e := s.Ledger(r.Context(), u.ID)
-		send(w, map[string]any{"items": v, "total": len(v)}, e)
+		page, size := commercePage(r)
+		v, total, e := s.LedgerPage(r.Context(), u.ID, page, size)
+		send(w, map[string]any{"items": v, "total": total}, e)
 	}))
 	mux.HandleFunc("GET /api/v1/orders", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
-		v, e := s.Orders(r.Context(), u.ID)
-		send(w, map[string]any{"items": v, "total": len(v)}, e)
+		page, size := commercePage(r)
+		v, total, e := s.OrdersPage(r.Context(), u.ID, page, size)
+		send(w, map[string]any{"items": v, "total": total}, e)
 	}))
 	mux.HandleFunc("POST /api/v1/orders", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
 		var p struct {
@@ -242,4 +257,22 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte(strings.TrimSpace(channel.Adapter.Capabilities().NotifyAck)))
 	})
+}
+
+func commercePage(r *http.Request) (int, int) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	size, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if page < 1 {
+		page = 1
+	}
+	if page > 1000000 {
+		page = 1000000
+	}
+	if size < 1 {
+		size = 20
+	}
+	if size > 100 {
+		size = 100
+	}
+	return page, size
 }

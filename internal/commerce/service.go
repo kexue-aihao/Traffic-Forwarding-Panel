@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 	"strings"
 	"time"
 	_ "time/tzdata"
@@ -100,12 +101,31 @@ func (s *Service) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS commerce_lease_reservations(lease_id VARCHAR(64) PRIMARY KEY,budget BIGINT NOT NULL,closed INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS commerce_attempts(order_id VARCHAR(64) PRIMARY KEY,state VARCHAR(32) NOT NULL,provider_id VARCHAR(128) NOT NULL,updated_at VARCHAR(40) NOT NULL)`,
 	}
-	for _, q := range statements {
-		if _, e := s.DB.ExecContext(ctx, q); e != nil {
-			return e
+	return storage.MigrateNamespace(ctx, s.DB, s.Dialect, "commerce", 1, func(conn *sql.Conn) error {
+		for _, q := range statements {
+			if s.Dialect == "mysql" {
+				q = strings.ReplaceAll(q, " TEXT", " LONGTEXT")
+			}
+			if _, e := conn.ExecContext(ctx, q); e != nil {
+				return e
+			}
 		}
-	}
-	return nil
+		for _, idx := range []struct {
+			name, table, columns string
+			unique               bool
+		}{
+			{"commerce_ledger_user", "commerce_ledger", "user_id,created_at,id", false},
+			{"commerce_order_user", "commerce_orders", "user_id,created_at,id", false},
+			{"commerce_order_transaction", "commerce_orders", "channel,provider_tx", true},
+			{"commerce_usage_lease", "commerce_usage", "lease_id", false},
+			{"commerce_lease_rule", "commerce_leases", "rule_id,expires_at", false},
+		} {
+			if e := storage.EnsureIndex(ctx, conn, s.Dialect, idx.table, idx.name, idx.columns, idx.unique); e != nil {
+				return e
+			}
+		}
+		return nil
+	})
 }
 func AddMonths(t time.Time, months int) time.Time {
 	loc, _ := time.LoadLocation("Asia/Shanghai")
