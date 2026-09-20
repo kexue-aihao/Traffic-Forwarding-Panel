@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { api, errorText, ApiError } from "../core/api";
+import ProbeHistory from "../components/ProbeHistory.vue";
 interface Probe {
   node_id: string;
   sampled_at: string;
@@ -22,6 +23,7 @@ interface Probe {
 }
 const probes = ref<Probe[]>([]);
 const names = ref<Record<string, string>>({});
+const nodes = ref<{ id: string; name: string }[]>([]);
 const error = ref("");
 const connected = ref(false);
 const now = ref(Date.now());
@@ -67,11 +69,12 @@ async function load() {
   try {
     const [p, n] = await Promise.all([
       api<{ items: Probe[] }>("/probes"),
-      api<{ items: { id: string; name: string }[] }>("/nodes?page_size=100"),
+      loadNodes(),
     ]);
-    accept(p.items);
-    names.value = Object.fromEntries(n.items.map((x) => [x.id, x.name]));
     if (!alive) return;
+    accept(p.items);
+    nodes.value = n;
+    names.value = Object.fromEntries(n.map((x) => [x.id, x.name]));
     events?.close();
     events = new EventSource("/api/v1/probes/events", {
       withCredentials: true,
@@ -100,6 +103,18 @@ async function load() {
     error.value = errorText(e);
   }
 }
+async function loadNodes() {
+  const result: { id: string; name: string }[] = [];
+  for (let page = 1; ; page++) {
+    const next = await api<{
+      items: { id: string; name: string }[];
+      total: number;
+    }>(`/nodes?page=${page}&page_size=100`);
+    result.push(...next.items);
+    if (!alive || !next.items.length || result.length >= next.total)
+      return result;
+  }
+}
 onMounted(() => {
   void load();
   ticker = setInterval(() => {
@@ -126,6 +141,7 @@ onUnmounted(() => {
       <button @click="load">重新连接</button>
     </div>
     <p v-if="error" class="warning" role="status">{{ error }}</p>
+    <ProbeHistory :nodes="nodes" />
     <p v-if="!probes.length" class="card empty">
       尚无授权节点采样。节点接入并上报后将在这里显示。
     </p>

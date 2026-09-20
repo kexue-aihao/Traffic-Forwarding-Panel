@@ -17,6 +17,9 @@ let purchases = 0;
 let paymentFixture = false;
 let createdKeys = [];
 let reconcileCalls = 0;
+let historyMode = "samples";
+let historyRequests = [];
+let releaseHistory;
 const uncertainOrder = {
   id: "uncertain-fixture",
   channel: "epay",
@@ -127,6 +130,39 @@ const server = createServer(async (req, res) => {
       return json({ currency: "CNY", balance_cents: "9007199254740993123" });
     if (path === "/entitlement") return json(null);
     if (path === "/probes") return json({ items: [fixtureProbe] });
+    if (path === "/nodes")
+      return json({
+        items:
+          url.searchParams.get("page") === "2"
+            ? [{ ...node, id: "n2", name: "Offline fixture node" }]
+            : [node],
+        total: 2,
+      });
+    if (/^\/probes\/[^/]+\/history$/.test(path)) {
+      historyRequests.push(url);
+      if (historyMode === "error")
+        return json({ code: "unavailable", error: "历史查询暂不可用" }, 409);
+      if (path.includes("/n2/")) return json({ items: [], total: 0 });
+      const resolution = url.searchParams.get("resolution");
+      const step = resolution === "minute" ? 60000 : 3600000;
+      const end = Date.parse(url.searchParams.get("to"));
+      const items = [0, 1, 2, 3, 5, 6].map((offset, index) => ({
+        sampled_at: new Date(end - (7 - offset) * step).toISOString(),
+        resolution,
+        samples: index + 1,
+        cpu_percent: [0, 50, null, 25, 60, 80][index],
+        memory_percent: 50,
+        disk_percent: 0,
+        load1: null,
+        upload_bps: 1024 * index,
+        download_bps: 2048 * index,
+      }));
+      if (historyMode === "hold") {
+        releaseHistory = () => json({ items: items.slice(0, 1), total: 1 });
+        return;
+      }
+      return json({ items, total: items.length });
+    }
     const maps = {
       "/rules": rules,
       "/nodes": [node],
@@ -197,6 +233,8 @@ try {
     authorized = false;
     expire = false;
     rules = [];
+    historyMode = "samples";
+    historyRequests = [];
     const browser = await engine.launch({ headless: true });
     try {
       const page = await browser.newPage();
@@ -246,6 +284,142 @@ try {
       await page.getByRole("link", { name: "实时探针", exact: true }).click();
       await page.getByRole("heading", { name: "Fixture node" }).waitFor();
       assert.ok((await page.getByText("未知", { exact: true }).count()) > 0);
+      const history = page.getByRole("region", { name: "历史趋势" });
+      await history.getByText("6 个采样桶 · 5 个CPU有效值").waitFor();
+      assert.equal(
+        await history.locator("polyline").count(),
+        2,
+        "null and absent buckets both break the line",
+      );
+      assert.equal(
+        await page.getByLabel("历史节点").locator("option").count(),
+        2,
+        "history includes paginated and offline nodes",
+      );
+      const navigationLength = await page.evaluate(() => window.history.length);
+      await page.getByLabel("历史指标").selectOption("disk_percent");
+      await history
+        .locator(".history-selection")
+        .getByText("0 %", { exact: true })
+        .waitFor();
+      await page.getByLabel("历史指标").selectOption("load1");
+      await history.getByText("该指标在此时间范围没有有效值。").waitFor();
+      assert.equal(
+        await history.locator("svg").count(),
+        0,
+        "unknown metrics have no synthetic zero chart",
+      );
+      await page.getByLabel("历史指标").selectOption("upload_bps");
+      const slider = page.getByRole("slider", { name: "查看历史采样" });
+      await slider.focus();
+      await slider.press("Home");
+      await history
+        .locator(".history-selection")
+        .getByText("0 bytes/s", { exact: true })
+        .waitFor();
+      await slider.press("ArrowRight");
+      await history
+        .locator(".history-selection")
+        .getByText("1,024 bytes/s", { exact: true })
+        .waitFor();
+      await page.getByLabel("历史时间范围").selectOption("180d");
+      await page.waitForURL(/range=180d/);
+      await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();
+      assert.equal(
+        historyRequests.at(-1).searchParams.get("resolution"),
+        "hour",
+      );
+      assert.equal(
+        Date.parse(historyRequests.at(-1).searchParams.get("to")) -
+          Date.parse(historyRequests.at(-1).searchParams.get("from")),
+        180 * 86400000,
+      );
+      assert.equal(
+        await page.evaluate(() => window.history.length),
+        navigationLength,
+        "history filters replace the URL",
+      );
+      await page.reload();
+      await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();
+      assert.equal(await page.getByLabel("历史时间范围").inputValue(), "180d");
+      assert.equal(
+        await page.getByLabel("历史指标").inputValue(),
+        "upload_bps",
+      );
+      await page.getByLabel("历史节点").selectOption("n2");
+      await history.getByText("此时间范围暂无历史采样。").waitFor();
+      assert.equal(await history.locator("svg").count(), 0);
+      historyMode = "error";
+      await page.getByLabel("历史节点").selectOption("n1");
+      await history
+        .getByRole("alert")
+        .filter({ hasText: "历史查询暂不可用" })
+        .waitFor();
+      historyMode = "samples";
+      await history.getByRole("button", { name: "重试历史查询" }).click();
+      await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();
+      historyMode = "hold";
+      const heldRequest = page.waitForRequest(
+        (request) =>
+          request.url().includes("/history?") &&
+          request.url().includes("resolution=minute"),
+      );
+      await page.getByLabel("历史时间范围").selectOption("1h");
+      await heldRequest;
+      await history.getByText("正在加载历史采样…").waitFor();
+      historyMode = "samples";
+      const cancelledHistory = page.waitForEvent("requestfailed", {
+        predicate: (request) => request.url().includes("/history?"),
+      });
+      await page.getByLabel("历史时间范围").selectOption("7d");
+      await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();
+      await cancelledHistory;
+      releaseHistory();
+      await page.waitForTimeout(100);
+      await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();
+      assert.equal(
+        await page.getByLabel("历史时间范围").inputValue(),
+        "7d",
+        "late response cannot replace a newer range",
+      );
+      for (const width of [320, 390, 768, 1440, 1920]) {
+        await page.setViewportSize({ width, height: 900 });
+        assert.ok(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+          `history ${name} ${width} overflow`,
+        );
+      }
+      if (name === "chromium") {
+        await page.getByLabel("历史时间范围").selectOption("1h");
+        await page.getByLabel("历史指标").selectOption("cpu_percent");
+        await history.getByText("6 个采样桶 · 5 个CPU有效值").waitFor();
+        await mkdir(resolve(import.meta.dirname, "../.gocache/screens"), {
+          recursive: true,
+        });
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.screenshot({
+          path: resolve(
+            import.meta.dirname,
+            "../.gocache/screens/history-desktop.png",
+          ),
+        });
+        await page.setViewportSize({ width: 320, height: 900 });
+        await page.screenshot({
+          path: resolve(
+            import.meta.dirname,
+            "../.gocache/screens/history-mobile.png",
+          ),
+        });
+        await history.locator(".history-chart").scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: resolve(
+            import.meta.dirname,
+            "../.gocache/screens/history-mobile-chart.png",
+          ),
+        });
+      }
       await page.getByRole("link", { name: "套餐与钱包", exact: true }).click();
       await page.getByText("90071992547409931.23", { exact: false }).waitFor();
       assert.equal(
@@ -346,7 +520,7 @@ try {
         [],
       );
       console.log(
-        `${name}: contract, CSP, login, 5 viewport widths, dirty dialog, safe text, probe unknowns, exact money, purchase, themes, 401 PASS`,
+        `${name}: contract, CSP, login, 5 viewport widths, dirty dialog, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, purchase, themes, 401 PASS`,
       );
     } finally {
       await browser.close();

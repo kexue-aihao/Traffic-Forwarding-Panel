@@ -9,6 +9,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import assert from "node:assert/strict";
 const root = resolve(import.meta.dirname, "..");
 await mkdir(resolve(root, ".local"), { recursive: true });
@@ -60,6 +61,51 @@ async function save(page) {
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await page.locator("dialog").waitFor({ state: "detached" });
 }
+// Explicit persisted aggregation fixtures test the real history API and UI.
+// They do not claim that a real Agent collected these samples or test rollup jobs.
+function seedHistory(nodeID) {
+  const db = new DatabaseSync(database);
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+    const insert = db.prepare(
+      "INSERT INTO cp_probe_history(node_id,resolution,bucket,payload) VALUES(?,?,?,?)",
+    );
+    const minute = Math.floor(Date.now() / 60000) * 60;
+    for (const [index, cpu] of [40, 80, null, 0].entries()) {
+      insert.run(
+        nodeID,
+        "minute",
+        minute - (10 - index) * 60,
+        JSON.stringify({
+          samples: 2,
+          metrics: [cpu, 50, null, null, 0, 1024].map((metric) => ({
+            sum: metric === null ? 0 : metric * 2,
+            count: metric === null ? 0 : 2,
+          })),
+        }),
+      );
+    }
+    insert.run(
+      nodeID,
+      "hour",
+      Math.floor(minute / 3600) * 3600 - 3600,
+      JSON.stringify({
+        samples: 8,
+        metrics: [
+          { sum: 240, count: 6 },
+          { sum: 400, count: 8 },
+          { sum: 0, count: 0 },
+          { sum: 0, count: 0 },
+          { sum: 0, count: 8 },
+          { sum: 8192, count: 8 },
+        ],
+      }),
+    );
+  } finally {
+    db.close();
+  }
+}
+const historyNodeIDs = [];
 try {
   for (const [browserName, engine] of Object.entries({
     chromium,
@@ -131,6 +177,7 @@ try {
       );
       assert.equal(registration.status(), 201);
       const registered = await registration.json();
+      seedHistory(registered.node_id);
       const probe = await admin.request.post(base + "/api/v1/agent/probe", {
         headers: { Authorization: `Bearer ${registered.token}` },
         data: {
@@ -191,6 +238,43 @@ try {
         (await user.locator("body").innerText()).includes("203.0.113.99"),
         false,
       );
+      const history = user.getByRole("region", { name: "历史趋势" });
+      await history.getByText("4 个采样桶 · 3 个CPU有效值").waitFor();
+      await history
+        .locator(".history-selection")
+        .getByText("0 %", { exact: true })
+        .waitFor();
+      assert.equal(await history.locator("polyline").count(), 1);
+      const ownHistory = await user.request.get(
+        base + `/api/v1/probes/${registered.node_id}/history`,
+      );
+      assert.equal(ownHistory.status(), 200);
+      const historical = await ownHistory.json();
+      assert.equal(historical.total, 4);
+      assert.equal(historical.items[0].memory_percent, 50);
+      assert.equal(historical.items[0].disk_percent, null);
+      assert.equal(JSON.stringify(historical).includes("public_ips"), false);
+      assert.equal(JSON.stringify(historical).includes("203.0.113.99"), false);
+      for (const forbiddenNode of historyNodeIDs)
+        assert.equal(
+          (
+            await user.request.get(
+              base + `/api/v1/probes/${forbiddenNode}/history`,
+            )
+          ).status(),
+          404,
+          "history obeys current node membership",
+        );
+      historyNodeIDs.push(registered.node_id);
+      await user.getByLabel("历史时间范围").selectOption("30d");
+      await history.getByText("1 个采样桶 · 1 个CPU有效值").waitFor();
+      await history
+        .locator(".history-selection")
+        .getByText("40 %", { exact: true })
+        .waitFor();
+      await user.reload();
+      await history.getByText("1 个采样桶 · 1 个CPU有效值").waitFor();
+      assert.equal(await user.getByLabel("历史时间范围").inputValue(), "30d");
       const userNodes = await (
         await user.request.get(base + "/api/v1/nodes")
       ).json();
@@ -339,7 +423,7 @@ try {
       await user.getByRole("button", { name: "登录控制台" }).waitFor();
       assert.deepEqual(exceptions, []);
       console.log(
-        `${browserName}: REAL Go/SQLite/embedded UI PASS (login, user/group/enrollment, simulated Agent/probe privacy, zero wallet + insufficient funds, Token isolation/revocation, password, disable + session revoke)`,
+        `${browserName}: REAL Go/SQLite/embedded UI PASS (login, user/group/enrollment, simulated Agent/probe privacy, persisted history fixture API/permissions/chart, zero wallet + insufficient funds, Token isolation/revocation, password, disable + session revoke)`,
       );
       await userContext.close();
     } finally {
