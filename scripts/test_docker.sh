@@ -57,7 +57,7 @@ docker run -d --name tfp-test-proxy --network host \
 curl_options=(--silent --show-error --fail --noproxy '*' --cacert "$work/proxy/cert.pem" \
     --resolve panel.test:18443:127.0.0.1)
 origin=https://panel.test:18443
-for attempt in $(seq 1 30); do
+for ((attempt = 0; attempt < 30; attempt++)); do
     if curl "${curl_options[@]}" "$origin/api/v1/health" >/dev/null 2>&1; then break; fi
     sleep 1
 done

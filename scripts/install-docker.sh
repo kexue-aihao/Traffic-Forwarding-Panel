@@ -7,7 +7,7 @@ RELEASE_URL="https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/do
 install_dir=/opt/traffic-forwarding-panel
 domain=
 port=18080
-admin=admin
+admin="admin"
 bundle=
 password_stdin=false
 
@@ -48,7 +48,9 @@ docker info >/dev/null 2>&1 || die 'Docker 未运行'
 docker compose version >/dev/null 2>&1 || die '需要 Docker Compose v2'
 [[ $install_dir =~ ^/([a-zA-Z0-9_.-]+/)*[a-zA-Z0-9_.-]+$ && $install_dir != / ]] || die '安装目录必须是绝对路径且不含空格'
 [[ $install_dir != *'/../'* && $install_dir != */.. && $install_dir != *'/./'* && $install_dir != */. ]] || die '安装目录不能包含 . 或 .. 路径段'
-[[ $port =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1024 && 10#$port <= 65535)) || die '端口范围为 1024–65535'
+if [[ ! $port =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1024 || 10#$port > 65535)); then
+    die '端口范围为 1024–65535'
+fi
 port=$((10#$port))
 
 if [[ -f $install_dir/.initialized ]]; then
