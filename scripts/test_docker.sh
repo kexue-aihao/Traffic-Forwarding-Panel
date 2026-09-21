@@ -19,6 +19,8 @@ cleanup() {
 }
 trap cleanup EXIT
 # A fresh install must complete without a domain, terminal, or stdin prompts.
+# The invoking test user owns this private output directory; only Docker setup needs root.
+# shellcheck disable=SC2024
 sudo bash "$repo_dir/scripts/install-docker.sh" \
     --port 18080 --dir "$install_dir" --bundle "$bundle" </dev/null > "$work/install-output"
 password=$(sed -n 's/^管理员密码：//p' "$work/install-output")
