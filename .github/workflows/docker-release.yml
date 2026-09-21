@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       upload_release:
-        description: Upload verified Docker packages to a draft prerelease
+        description: Upload verified Docker packages to a draft release
         type: boolean
         default: false
 
@@ -86,7 +86,11 @@ jobs:
             test "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true
             test "$(gh release view "$tag" --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA"
           else
-            gh release create "$tag" --target "$GITHUB_SHA" --draft --prerelease \
+            release_flags=()
+            if [[ "$version" == *-* ]]; then
+              release_flags+=(--prerelease)
+            fi
+            gh release create "$tag" --target "$GITHUB_SHA" --draft "${release_flags[@]}" \
               --title "$tag" --notes-file "docs/releases/$tag.md"
           fi
           gh release upload "$tag" dist/* --clobber
