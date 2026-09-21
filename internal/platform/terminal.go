@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/httporigin"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 )
 
@@ -64,11 +65,7 @@ func (s *Server) attachTerminal(w http.ResponseWriter, r *http.Request, agentSid
 		}
 		expected := s.opts.Origin
 		if expected == "" {
-			scheme := "http"
-			if r.TLS != nil {
-				scheme = "https"
-			}
-			expected = scheme + "://" + r.Host
+			expected = httporigin.Scheme(r, s.opts.TrustProxy) + "://" + r.Host
 		}
 		return origin != "" && strings.TrimRight(origin, "/") == strings.TrimRight(expected, "/")
 	}}

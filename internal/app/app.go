@@ -21,6 +21,7 @@ import (
 type Options struct {
 	Origin        string
 	SecureCookies bool
+	TrustProxy    bool
 	EPay          payment.EPay
 	Channels      map[string]commerce.Channel
 }
@@ -72,7 +73,7 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	if err := billing.Migrate(ctx); err != nil {
 		return nil, err
 	}
-	control := platform.New(store, platform.Options{Origin: opts.Origin, SecureCookies: opts.SecureCookies, Entitlements: billing, LeaseCurrent: billing.LeaseCurrent, RetireLease: billing.RetireLease, ResourceLimits: billing.LimitsTx})
+	control := platform.New(store, platform.Options{Origin: opts.Origin, TrustProxy: opts.TrustProxy, SecureCookies: opts.SecureCookies, Entitlements: billing, LeaseCurrent: billing.LeaseCurrent, RetireLease: billing.RetireLease, ResourceLimits: billing.LimitsTx})
 	billing.PaymentAllowed = control.PaymentAllowed
 	if err := control.MigrateProbeHistory(ctx); err != nil {
 		return nil, err
@@ -84,7 +85,7 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	billing.EventVisible = monitor.Visible
 	mux := http.NewServeMux()
 	control.Register(mux)
-	billing.Register(mux, commerce.HTTPOptions{Authenticate: control.Authenticate, EPay: opts.EPay, PublicOrigin: opts.Origin, Channels: channels})
+	billing.Register(mux, commerce.HTTPOptions{Authenticate: control.Authenticate, EPay: opts.EPay, PublicOrigin: opts.Origin, TrustProxy: opts.TrustProxy, Channels: channels})
 	monitor.Register(mux, control)
 	openapi.Register(mux)
 	webui.Register(mux)

@@ -18,9 +18,12 @@ cleanup() {
     sudo rm -rf -- "$work"
 }
 trap cleanup EXIT
-password=$(openssl rand -hex 18)
-printf '%s\n' "$password" | sudo bash "$repo_dir/scripts/install-docker.sh" \
-    --domain panel.test:18443 --port 18080 --dir "$install_dir" --bundle "$bundle" --password-stdin
+# A fresh install must complete without a domain, terminal, or stdin prompts.
+sudo bash "$repo_dir/scripts/install-docker.sh" \
+    --port 18080 --dir "$install_dir" --bundle "$bundle" </dev/null > "$work/install-output"
+password=$(sed -n 's/^管理员密码：//p' "$work/install-output")
+[[ $password =~ ^[a-f0-9]{48}$ ]]
+sudo grep -Fx 'TFP_ORIGIN=' "$install_dir/.env"
 [[ $(docker inspect --format '{{.Config.User}}' traffic-forwarding-panel) == 65532:65532 ]]
 [[ $(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' traffic-forwarding-panel) == true ]]
 [[ $(docker inspect --format '{{(index (index .HostConfig.PortBindings "8080/tcp") 0).HostIp}}' traffic-forwarding-panel) == 127.0.0.1 ]]
@@ -69,6 +72,9 @@ curl "${curl_options[@]}" -D "$work/headers" -c "$work/cookies" \
     --data-binary @"$work/login.json" "$origin/api/v1/auth/login" | jq -e '.user.role == "admin"' >/dev/null
 grep -qi 'set-cookie:.*Secure' "$work/headers"
 curl "${curl_options[@]}" -b "$work/cookies" "$origin/api/v1/auth/session" | jq -e '.user.username == "admin"' >/dev/null
+curl "${curl_options[@]}" -b "$work/cookies" \
+    -H "Origin: $origin" -H 'X-Requested-With: fetch' -H 'Content-Type: application/json' \
+    --data '{"enabled":false,"plan_id":""}' "$origin/api/v1/auto-renew" | jq -e '.enabled == false' >/dev/null
 status=$(curl --silent --noproxy '*' --cacert "$work/proxy/cert.pem" --resolve panel.test:18443:127.0.0.1 \
     -o /dev/null -w '%{http_code}' -H 'Origin: https://other.test' -H 'X-Requested-With: fetch' \
     -H 'Content-Type: application/json' --data-binary @"$work/login.json" "$origin/api/v1/auth/login")
@@ -87,4 +93,4 @@ sudo docker compose --project-directory "$install_dir" up -d --wait --wait-timeo
 curl "${curl_options[@]}" -b "$work/cookies" "$origin/api/v1/auth/session" | jq -e '.user.username == "admin"' >/dev/null
 sudo bash "$repo_dir/scripts/install-docker.sh" --dir "$install_dir" </dev/null
 curl "${curl_options[@]}" -b "$work/cookies" "$origin/api/v1/auth/session" | jq -e '.user.username == "admin"' >/dev/null
-printf 'Docker install, HTTPS login, CSRF, SSE, restart persistence and repeat install passed on %s\n' "$(uname -m)"
+printf 'Unattended domain-free install, HTTPS login, commerce, CSRF, SSE, restart and repeat install passed on %s\n' "$(uname -m)"

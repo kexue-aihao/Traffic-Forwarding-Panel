@@ -5,15 +5,15 @@
 ## 一键安装
 
 ```sh
-curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.0/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
+curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.1/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
 ```
 
-按提示填写域名（如 `panel.example.com`）及管理员密码（12–72 字节）。脚本自动选择架构、下载镜像包及 SHA256 清单、校验并 `docker load`、配置容器、初始化管理员，等待健康检查通过。管理员用户名默认 `admin`。密码只通过标准输入传给初始化进程，不写入 `.env` 或镜像。
+直接执行，无需域名或交互输入。脚本自动选择架构、下载镜像包及 SHA256 清单、校验并 `docker load`、配置容器、初始化管理员，等待健康检查通过。管理员用户名默认 `admin`，使用系统随机源生成 48 位密码，安装完成时显示；请保存并可在登录后修改。密码只通过标准输入传给初始化进程，不写入 `.env` 或镜像。若终端输出丢失，可使用下文的本机改密命令。
 
-可指定域名、端口、目录及用户名；密码仍交互输入：
+可指定端口、目录及用户名：
 
 ```sh
-sudo bash install-docker.sh --domain panel.example.com --port 18080 \
+sudo bash install-docker.sh --port 18080 \
   --dir /opt/traffic-forwarding-panel --admin admin
 ```
 
@@ -22,11 +22,13 @@ sudo bash install-docker.sh --domain panel.example.com --port 18080 \
 | 路径/配置 | 内容 |
 |---|---|
 | `/opt/traffic-forwarding-panel/compose.yaml` | Compose 服务配置 |
-| `/opt/traffic-forwarding-panel/.env` | 镜像名、HTTPS 公开地址、宿主机端口 |
+| `/opt/traffic-forwarding-panel/.env` | 镜像名、宿主机端口；`TFP_ORIGIN` 默认留空 |
 | `/opt/traffic-forwarding-panel/data/` | SQLite 数据库及 WAL，UID/GID 65532 |
 | `/opt/traffic-forwarding-panel/config/` | 可选支付配置，只读挂载到容器 |
 | `traffic-forwarding-panel` | 容器名；自动重启，根文件系统只读，日志轮转 |
 | `127.0.0.1:18080` | 默认回环端口；无需在防火墙开放 18080 |
+
+如需指定初始密码，可使用 `--password-stdin` 从标准输入传入一行 12–72 字节的密码；默认无需该选项。
 
 重复运行仅启动现有安装，保留账号、数据库和配置。安装器不会自动替换已有版本，也不会清理已有数据。
 
@@ -34,8 +36,8 @@ sudo bash install-docker.sh --domain panel.example.com --port 18080 \
 
 1. 域名解析到服务器。在 **网站 → 创建网站 → 反向代理** 中填写该域名。
 2. 当 OpenResty 使用宿主机网络时，代理地址填 **`http://127.0.0.1:18080`**。
-3. 申请并启用 HTTPS 证书，建议开启 HTTP 跳转 HTTPS；使用与安装时完全一致的域名。容器内部仍使用 HTTP。
-4. 保留请求 Host，启用 WebSocket，关闭代理缓存/缓冲，长连接读取超时设为 3600 秒。
+3. 申请并启用 HTTPS 证书，建议开启 HTTP 跳转 HTTPS；域名只在 1Panel 设置。容器内部仍使用 HTTP。
+4. 保留请求 Host，将 `X-Forwarded-Proto` 设置为 `$scheme`，启用 WebSocket，关闭代理缓存/缓冲，长连接读取超时设为 3600 秒。
 
 随后访问 `https://panel.example.com/admin`；普通用户入口为 `/`。无需访问后台 Docker 端口初始化网站。
 
@@ -54,7 +56,7 @@ proxy_read_timeout 3600s;
 proxy_send_timeout 3600s;
 ```
 
-`TFP_ORIGIN` 是浏览器访问的完整 HTTPS 地址，决定来源校验和 Secure Cookie。改变域名时更新 `.env` 的 `TFP_ORIGIN`，再执行 `docker compose up -d`。实时探针使用 SSE，需要关闭缓冲；节点终端使用 WebSocket。
+Compose 默认启用 `TFP_TRUST_PROXY=true`，从受控代理覆盖的 `X-Forwarded-Proto` 识别 HTTPS，按请求 Host 校验浏览器来源并设置 Secure Cookie；不会使用 `X-Forwarded-Host` 放宽来源校验。`TFP_ORIGIN` 可留空，改变域名只需更新 1Panel。若主动设置 `TFP_ORIGIN`，则仍强制使用该固定公开地址。请保持面板回环端口或受控容器网络，代理应覆盖协议头，不能直接透传客户端值。实时探针使用 SSE，需要关闭缓冲；节点终端使用 WebSocket。
 
 ### OpenResty 使用桥接网络时
 
@@ -107,16 +109,19 @@ chown 65532:65532 config/payments.json
 chmod 600 config/payments.json
 ```
 
-在 `.env` 设置 `TFP_PAYMENTS_FILE=/config/payments.json`，再运行 `docker compose up -d`。不配置支付渠道也可正常登录、管理资源和使用钱包/套餐相关的已有数据；商户实付需另行验收。
+支付渠道需要稳定的回调地址：在 `payments.json` 显式填写各渠道的 `notify_url`、`return_url`，或在 `.env` 设置 `TFP_ORIGIN=https://你的域名` 以生成回调地址。然后设置 `TFP_PAYMENTS_FILE=/config/payments.json`，再运行 `docker compose up -d`。此项只在接入商户支付时需要，容器安装与登录无需配置域名。不配置支付渠道也可正常登录、管理资源和使用钱包/套餐相关的已有数据；商户实付需另行验收。
 
 ## 离线安装和升级
 
-从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.0_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
+从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.1_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
 
 ```sh
-sudo bash install-docker.sh --bundle /path/to/downloads --domain panel.example.com
+sudo bash install-docker.sh --bundle /path/to/downloads
 ```
 
 升级采用显式步骤：备份 → 校验新版本 Docker 包 → `docker load -i 新镜像包.tar.gz` → 修改 `.env` 的 `TFP_IMAGE` 为新版本及当前架构 → `docker compose up -d --wait`。保留数据目录和域名配置，勿重新初始化管理员。数据库迁移可能不兼容旧版程序，回退需要同时恢复升级前备份。
 
 镜像只部署面板服务；Agent 仍需安装在真实入口/出口节点。此处的 HTTPS 反代测试不替代真实 1Panel 安装、Linux 跨机转发、容量与商户实付验收。
+
+
+v0.1.0 在空域名提示处退出时尚未创建安装配置和数据库，直接重新下载 v0.1.1 脚本执行即可。已经成功安装的旧版需按上述升级步骤导入新镜像、更新 Compose 配置；保留 data/ 和管理员账号，按需将 TFP_ORIGIN 留空。

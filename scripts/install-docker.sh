@@ -2,10 +2,9 @@
 set -euo pipefail
 umask 077
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 RELEASE_URL="https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v${VERSION}"
 install_dir=/opt/traffic-forwarding-panel
-domain=
 port=18080
 admin="admin"
 bundle=
@@ -15,21 +14,20 @@ die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 usage() {
     cat <<'HELP'
 用法：sudo bash install-docker.sh [选项]
-  --domain panel.example.com    HTTPS 域名（可带端口，不含路径）
   --port 18080                 宿主机回环端口
   --dir /opt/traffic-forwarding-panel
   --admin admin               首次管理员用户名
   --bundle /path/to/downloads  使用已下载镜像包、compose.yaml 和 docker-SHA256SUMS
   --password-stdin             从标准输入读取首次管理员密码（不写入配置）
 重复运行仅启动现有安装，不重设密码、不覆盖数据库或配置。
+默认自动生成管理员密码，安装完成后显示；域名和 HTTPS 在 1Panel 配置。
 HELP
 }
 while (($#)); do
     case "$1" in
-        --domain|--port|--dir|--admin|--bundle)
+        --port|--dir|--admin|--bundle)
             (($# >= 2)) || die "$1 缺少参数"
             case "$1" in
-                --domain) domain=$2;;
                 --port) port=$2;;
                 --dir) install_dir=$2;;
                 --admin) admin=$2;;
@@ -66,26 +64,12 @@ if [[ -d $install_dir && -n $(find "$install_dir" -mindepth 1 -maxdepth 1 -print
     die '安装目录非空，请使用新的空目录或检查现有安装'
 fi
 docker container inspect traffic-forwarding-panel >/dev/null 2>&1 && die '容器名 traffic-forwarding-panel 已被使用，请先检查现有部署'
-if [[ -z $domain ]]; then
-    read -r -p '面板 HTTPS 域名（例如 panel.example.com）：' domain </dev/tty
-fi
-domain=${domain#https://}
-domain=${domain%/}
-[[ ${#domain} -le 253 && $domain =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?(:[0-9]{1,5})?$ ]] || die '请输入合法域名，可带端口；不含路径、空格或协议'
-if [[ $domain == *:* ]]; then
-    origin_port=${domain##*:}
-    ((10#$origin_port >= 1 && 10#$origin_port <= 65535)) || die '域名端口不合法'
-fi
 [[ $admin =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,63}$ ]] || die '管理员用户名需为 3–64 位字母、数字、下划线、点或短横线'
 if $password_stdin; then
     IFS= read -r password || die '无法从标准输入读取密码'
 else
-    IFS= read -r -s -p '管理员密码（12–72 字节）：' password </dev/tty
-    printf '\n'
-    IFS= read -r -s -p '再次输入密码：' confirmation </dev/tty
-    printf '\n'
-    [[ $password == "$confirmation" ]] || die '两次密码不一致'
-    unset confirmation
+    password=$(od -An -N24 -tx1 /dev/urandom | tr -d '[:space:]')
+    [[ $password =~ ^[a-f0-9]{48}$ ]] || die '无法生成随机管理员密码'
 fi
 password_bytes=$(printf '%s' "$password" | wc -c)
 ((password_bytes >= 12 && password_bytes <= 72)) || die '密码长度需要 12–72 字节'
@@ -123,12 +107,12 @@ docker load -i "$download_dir/$archive"
 install -d -m 700 "$install_dir"
 install -d -m 700 -o 65532 -g 65532 "$install_dir/data" "$install_dir/config"
 install -m 600 "$download_dir/compose.yaml" "$install_dir/compose.yaml"
-printf 'TFP_IMAGE=%s\nTFP_ORIGIN=https://%s\nTFP_PORT=%s\nTFP_PAYMENTS_FILE=\n' \
-    "$image" "$domain" "$port" > "$install_dir/.env"
+printf 'TFP_IMAGE=%s\nTFP_ORIGIN=\nTFP_PORT=%s\nTFP_PAYMENTS_FILE=\n' \
+    "$image" "$port" > "$install_dir/.env"
 cd "$install_dir"
 printf '%s\n' "$password" | docker compose run --rm -T --no-deps panel -init-admin "$admin"
-unset password
 touch .initialized
 docker compose up -d --wait --wait-timeout 120
-printf '\n部署完成。\n1Panel 网站 → 新建反向代理：\n  域名：%s\n  代理地址：http://127.0.0.1:%s\n  启用 HTTPS、WebSocket，关闭代理缓存。\n管理员入口：https://%s/admin\n用户入口：https://%s/\n配置与数据：%s\n' \
-    "$domain" "$port" "$domain" "$domain" "$install_dir"
+printf '\n部署完成。\n管理员账号：%s\n管理员密码：%s\n请保存密码，登录后可修改。\n1Panel 反向代理地址：http://127.0.0.1:%s\n域名和 HTTPS 在 1Panel 配置，保留 Host 并设置 X-Forwarded-Proto。\n管理员入口：你的站点地址/admin\n配置与数据：%s\n' \
+    "$admin" "$password" "$port" "$install_dir"
+unset password

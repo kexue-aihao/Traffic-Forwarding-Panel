@@ -11,7 +11,8 @@ services:
       TFP_ADDR: "0.0.0.0:8080"
       TFP_DATABASE: sqlite
       TFP_DSN: /data/panel.db
-      TFP_ORIGIN: ${TFP_ORIGIN:?Set the public HTTPS origin}
+      TFP_ORIGIN: ${TFP_ORIGIN:-}
+      TFP_TRUST_PROXY: "true"
       TFP_PAYMENTS_FILE: ${TFP_PAYMENTS_FILE:-}
       TZ: Asia/Shanghai
     ports:

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/httporigin"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/payment"
 	"io"
 	"net"
@@ -19,6 +20,7 @@ type HTTPOptions struct {
 	Authenticate func(*http.Request) (contract.User, error)
 	EPay         payment.EPay
 	PublicOrigin string // Explicit canonical origin when behind a trusted reverse proxy.
+	TrustProxy   bool
 	Channels     map[string]Channel
 }
 
@@ -75,10 +77,7 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 			}
 			if r.Method != "GET" && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 				origin, e := url.Parse(r.Header.Get("Origin"))
-				scheme := "http"
-				if r.TLS != nil {
-					scheme = "https"
-				}
+				scheme := httporigin.Scheme(r, o.TrustProxy)
 				expectedOrigin := scheme + "://" + r.Host
 				if o.PublicOrigin != "" {
 					expectedOrigin = o.PublicOrigin

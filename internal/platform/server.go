@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/httporigin"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -29,6 +30,7 @@ type Entitlements interface {
 type Options struct {
 	Origin         string
 	SecureCookies  bool
+	TrustProxy     bool
 	AdminTestBytes int64
 	Entitlements   Entitlements
 	ResourceLimits func(context.Context, *sql.Tx, string) (contract.ResourceLimits, error)
@@ -109,11 +111,7 @@ func (s *Server) csrf(r *http.Request) bool {
 	} // non-browser CLI with explicit custom header
 	expected := s.opts.Origin
 	if expected == "" {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		expected = scheme + "://" + r.Host
+		expected = httporigin.Scheme(r, s.opts.TrustProxy) + "://" + r.Host
 	}
 	u, e := url.Parse(origin)
 	return e == nil && u.Scheme != "" && strings.TrimRight(origin, "/") == strings.TrimRight(expected, "/")
@@ -251,7 +249,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "session unavailable")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "tfp_session", Value: t, Path: "/", HttpOnly: true, Secure: s.opts.SecureCookies || r.TLS != nil, SameSite: http.SameSiteStrictMode, Expires: exp})
+	http.SetCookie(w, &http.Cookie{Name: "tfp_session", Value: t, Path: "/", HttpOnly: true, Secure: s.opts.SecureCookies || httporigin.Scheme(r, s.opts.TrustProxy) == "https", SameSite: http.SameSiteStrictMode, Expires: exp})
 	reply(w, 200, map[string]any{"user": u})
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -268,7 +266,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "logout unavailable")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "tfp_session", Value: "", Path: "/", HttpOnly: true, MaxAge: -1, Secure: s.opts.SecureCookies, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: "tfp_session", Value: "", Path: "/", HttpOnly: true, MaxAge: -1, Secure: s.opts.SecureCookies || httporigin.Scheme(r, s.opts.TrustProxy) == "https", SameSite: http.SameSiteStrictMode})
 	w.WriteHeader(204)
 }
 func (s *Server) Register(mux *http.ServeMux) {

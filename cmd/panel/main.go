@@ -24,7 +24,7 @@ import (
 )
 
 // Version is injected at release build time using -ldflags -X.
-var Version = "0.1.0"
+var Version = "0.1.1"
 
 func main() {
 	if err := run(); err != nil {
@@ -42,6 +42,7 @@ func env(key, fallback string) string {
 func run() error {
 	showVersion := flag.Bool("version", false, "print panel release version")
 	checkHealth := flag.Bool("healthcheck", false, "check the running panel HTTP/database health and exit")
+	trustProxy := flag.Bool("trust-proxy", env("TFP_TRUST_PROXY", "false") == "true", "trust X-Forwarded-Proto from an isolated reverse proxy that overwrites it")
 	addr := flag.String("addr", env("TFP_ADDR", "127.0.0.1:8080"), "HTTP listen address")
 	driver := flag.String("database", env("TFP_DATABASE", "sqlite"), "sqlite, postgres or mysql")
 	dsn := flag.String("dsn", env("TFP_DSN", "data/panel.db"), "database DSN (prefer TFP_DSN for server credentials)")
@@ -106,7 +107,7 @@ func run() error {
 			return e
 		}
 	}
-	application, err := app.New(ctx, store, app.Options{Origin: *origin, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, Channels: channels})
+	application, err := app.New(ctx, store, app.Options{Origin: *origin, TrustProxy: *trustProxy, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, Channels: channels})
 	if err != nil {
 		return err
 	}
