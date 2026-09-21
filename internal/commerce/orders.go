@@ -8,6 +8,11 @@ import (
 )
 
 func (s *Service) CreateOrder(ctx context.Context, user, channel, key string, amount int64, gateway payment.EPay) (Order, error) {
+	if s.PaymentAllowed != nil {
+		if err := s.PaymentAllowed(ctx, amount); err != nil {
+			return Order{}, err
+		}
+	}
 	var o Order
 	if channel != "epay" || amount <= 0 || amount > 100000000 || len(key) == 0 || len(key) > 128 {
 		return o, errors.New("invalid or unavailable channel/amount/key")
@@ -61,11 +66,14 @@ func (s *Service) ConfirmPayment(ctx context.Context, channel, order, transactio
 		if c != channel || actual != amount {
 			return errors.New("payment mismatch")
 		}
-		if status == "paid" {
+		if status == "paid" || status == "paid_late" || status == "refunded" || status == "partially_refunded" {
 			if prev.String != transaction {
 				return ErrConflict
 			}
 			return nil
+		}
+		if status != "pending" && status != "closed" && status != "expired" {
+			return errors.New("order is not payable")
 		}
 		var existing string
 		e = tx.QueryRowContext(ctx, s.q("SELECT id FROM commerce_orders WHERE channel=? AND provider_tx=?"), channel, transaction).Scan(&existing)
@@ -75,10 +83,14 @@ func (s *Service) ConfirmPayment(ctx context.Context, channel, order, transactio
 		if !errors.Is(e, sql.ErrNoRows) {
 			return e
 		}
-		if e = s.post(ctx, tx, user, amount, "recharge", "payment:"+channel+":"+transaction); e != nil {
+		if e = s.post(ctx, tx, user, amount, "recharge", "payment:"+order); e != nil {
 			return e
 		}
-		r, e := tx.ExecContext(ctx, s.q("UPDATE commerce_orders SET status='paid',provider_tx=? WHERE id=? AND status='pending'"), transaction, order)
+		nextStatus := "paid"
+		if status != "pending" {
+			nextStatus = "paid_late"
+		}
+		r, e := tx.ExecContext(ctx, s.q("UPDATE commerce_orders SET status=?,provider_tx=? WHERE id=? AND status IN ('pending','closed','expired')"), nextStatus, transaction, order)
 		if e != nil {
 			return e
 		}

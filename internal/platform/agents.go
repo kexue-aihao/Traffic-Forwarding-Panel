@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -175,6 +176,16 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "lease refresh unavailable or entitlement exhausted")
 		return
 	}
+	var nodePayload string
+	if err := s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT payload FROM cp_nodes WHERE id=?"), node).Scan(&nodePayload); err != nil {
+		fail(w, 500, "config unavailable")
+		return
+	}
+	var nodeInfo contract.Node
+	if json.Unmarshal([]byte(nodePayload), &nodeInfo) != nil {
+		fail(w, 500, "config unavailable")
+		return
+	}
 	cfg := contract.Config{ContractVersion: contract.Version, NodeID: node, ValidUntil: time.Now().UTC().Add(24 * time.Hour), Rules: []contract.Rule{}}
 	// Snapshot transaction prevents an old rule set being labeled with a newer version.
 	tx, e := s.Store.DB.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelSerializable})
@@ -207,7 +218,16 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			fail(w, 500, "config unavailable")
 			return
 		}
-		if disabled != 0 || !rule.Enabled || rule.Lease == nil || !rule.Lease.ExpiresAt.After(time.Now()) || policyDenied(g, rule) || (role != "admin" && !contains(g.UserIDs, rule.UserID)) {
+		if rule.ExitUnavailable || disabled != 0 || !rule.Enabled || rule.Lease == nil || !rule.Lease.ExpiresAt.After(time.Now()) || policyDenied(g, rule) || (role != "admin" && !contains(g.UserIDs, rule.UserID)) {
+			continue
+		}
+		if rule.Lease.Limits != (contract.ResourceLimits{}) && !contains(nodeInfo.Capabilities, "resource-limits-v1") {
+			continue
+		}
+		if rule.ProxyProtocol != nil && !contains(nodeInfo.Capabilities, "proxy-protocol-v1") {
+			continue
+		}
+		if rule.Advanced() && !contains(nodeInfo.Capabilities, "advanced-routing-v1") {
 			continue
 		}
 		rule.BlockedProtocols = applicationBlocks(rule.BlockedProtocols, g.BlockedProtocols)
@@ -226,12 +246,23 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "config unavailable")
 		return
 	}
+	cfg.Rules = filterSharedChildren(cfg.Rules)
 	reply(w, 200, cfg)
 }
 func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 	var in contract.Ack
 	if !decode(w, r, &in) {
 		return
+	}
+	if len(in.Capabilities) > 64 || len(in.AgentVersion) > 64 {
+		fail(w, 400, "too many capabilities")
+		return
+	}
+	for _, capability := range in.Capabilities {
+		if len(capability) > 64 {
+			fail(w, 400, "invalid capability")
+			return
+		}
 	}
 	if len(in.Error) > 2000 || in.Version < 1 || in.AppliedVersion < 0 || in.AppliedVersion > in.Version || (in.Error == "" && in.AppliedVersion != in.Version) {
 		fail(w, 400, "invalid ACK")
@@ -245,7 +276,36 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 		}
 		n, _ := res.RowsAffected()
 		if n != 1 {
-			return errConflict
+			// MySQL reports changed rows: a same-second replay can match without
+			// changing any value. Distinguish it from a stale/unmatched ACK.
+			var matched int
+			if err := tx.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_nodes WHERE id=? AND desired_version=? AND applied_version=? AND apply_error=?`), node, in.Version, in.AppliedVersion, in.Error).Scan(&matched); err != nil {
+				return err
+			}
+			if matched != 1 {
+				return errConflict
+			}
+		}
+		if in.Capabilities != nil {
+			var raw string
+			if err := tx.QueryRowContext(r.Context(), s.q("SELECT payload FROM cp_nodes WHERE id=?"), node).Scan(&raw); err != nil {
+				return err
+			}
+			var info contract.Node
+			if err := json.Unmarshal([]byte(raw), &info); err != nil {
+				return err
+			}
+			if !slices.Equal(info.Capabilities, in.Capabilities) || in.AgentVersion != "" && info.Version != in.AgentVersion {
+				info.Capabilities = in.Capabilities
+				if in.AgentVersion != "" {
+					info.Version = in.AgentVersion
+				}
+				// Capability changes can add/remove eligible rules; publish a new
+				// configuration revision so the previous ACK cannot cover them.
+				if _, err := tx.ExecContext(r.Context(), s.q("UPDATE cp_nodes SET payload=?,desired_version=desired_version+1 WHERE id=?"), strJSON(info), node); err != nil {
+					return err
+				}
+			}
 		}
 		if in.Error == "" {
 			_, e = tx.ExecContext(r.Context(), s.q(`DELETE FROM cp_ports WHERE node_id=? AND rule_id IN(SELECT id FROM cp_rules WHERE node_id=? AND deleted=1 AND release_version<=?)`), node, node, in.AppliedVersion)

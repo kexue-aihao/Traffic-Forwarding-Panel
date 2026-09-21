@@ -31,7 +31,7 @@ func (s *Service) migrateReconciliation(ctx context.Context, conn *sql.Conn) err
 	}
 	// Restartable after MySQL DDL auto-commit, without resetting an existing
 	// schedule. Include legacy orders and attempts left creating by a crash.
-	_, err := conn.ExecContext(ctx, `INSERT INTO commerce_reconciliation(order_id,attempts,next_at) SELECT o.id,0,0 FROM commerce_orders o LEFT JOIN commerce_reconciliation r ON r.order_id=o.id WHERE o.status='pending' AND r.order_id IS NULL`)
+	_, err := conn.ExecContext(ctx, `INSERT INTO commerce_reconciliation(order_id,attempts,next_at) SELECT o.id,0,0 FROM commerce_orders o LEFT JOIN commerce_reconciliation r ON r.order_id=o.id WHERE o.status IN ('pending','closed','expired') AND r.order_id IS NULL`)
 	return err
 }
 
@@ -91,7 +91,7 @@ func (s *Service) ReconcilePending(ctx context.Context, channels map[string]Chan
 		args = append(args, name)
 	}
 	args = append(args, limit)
-	query := "SELECT r.order_id,o.user_id,r.attempts FROM commerce_reconciliation r JOIN commerce_orders o ON o.id=r.order_id WHERE r.next_at<=? AND o.status='pending' AND o.channel IN (" + strings.TrimSuffix(strings.Repeat("?,", len(names)), ",") + ") ORDER BY r.next_at,r.order_id LIMIT ?"
+	query := "SELECT r.order_id,o.user_id,r.attempts FROM commerce_reconciliation r JOIN commerce_orders o ON o.id=r.order_id WHERE r.next_at<=? AND o.status IN ('pending','closed','expired') AND o.channel IN (" + strings.TrimSuffix(strings.Repeat("?,", len(names)), ",") + ") ORDER BY r.next_at,r.order_id LIMIT ?"
 	rows, err := s.DB.QueryContext(ctx, s.q(query), args...)
 	if err != nil {
 		return 0, err
@@ -132,7 +132,7 @@ func (s *Service) ReconcilePending(ctx context.Context, channels map[string]Chan
 			if claimErr := tx.QueryRowContext(ctx, s.q(query), order.id).Scan(&status); claimErr != nil {
 				return claimErr
 			}
-			if status != "pending" {
+			if status != "pending" && status != "closed" && status != "expired" {
 				return nil
 			}
 			now := s.Now()
@@ -170,7 +170,7 @@ func (s *Service) repairReconciliation(ctx context.Context, channels []string, l
 		args = append(args, channel)
 	}
 	args = append(args, limit)
-	query := "SELECT o.id FROM commerce_orders o LEFT JOIN commerce_reconciliation r ON r.order_id=o.id WHERE o.status='pending' AND r.order_id IS NULL AND o.channel IN (" + strings.TrimSuffix(strings.Repeat("?,", len(channels)), ",") + ") ORDER BY o.created_at,o.id LIMIT ?"
+	query := "SELECT o.id FROM commerce_orders o LEFT JOIN commerce_reconciliation r ON r.order_id=o.id WHERE o.status IN ('pending','closed','expired') AND r.order_id IS NULL AND o.channel IN (" + strings.TrimSuffix(strings.Repeat("?,", len(channels)), ",") + ") ORDER BY o.created_at,o.id LIMIT ?"
 	rows, err := s.DB.QueryContext(ctx, s.q(query), args...)
 	if err != nil {
 		return err
@@ -199,7 +199,7 @@ func (s *Service) repairReconciliation(ctx context.Context, channels []string, l
 			if err := tx.QueryRowContext(ctx, s.q(query), order).Scan(&status); err != nil {
 				return err
 			}
-			if status != "pending" {
+			if status != "pending" && status != "closed" && status != "expired" {
 				continue
 			}
 			insert := "INSERT INTO commerce_reconciliation(order_id,attempts,next_at) VALUES(?,0,0) ON CONFLICT(order_id) DO NOTHING"

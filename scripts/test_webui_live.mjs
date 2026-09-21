@@ -210,6 +210,12 @@ try {
       await admin
         .getByLabel("名称", { exact: true })
         .fill(`plan-${browserName}`);
+      await admin.getByLabel("账号规则总数", { exact: true }).fill("3");
+      await admin.getByLabel("每节点最大连接数", { exact: true }).fill("10");
+      await admin.getByLabel("每节点活跃 IP 数", { exact: true }).fill("2");
+      await admin
+        .getByLabel("每节点上下行合计（B/s）", { exact: true })
+        .fill("1048576");
       await admin.getByRole("button", { name: "确认提交" }).click();
       await admin.locator("dialog").waitFor({ state: "detached" });
       assert.equal(
@@ -300,6 +306,41 @@ try {
       );
       await user.getByLabel("目标地址", { exact: true }).fill("127.0.0.1:8081");
       await save(user);
+      await user.getByRole("button", { name: "编辑", exact: true }).click();
+      await user.getByLabel("隧道", { exact: true }).selectOption("tls");
+      await user
+        .getByLabel("隧道端点", { exact: true })
+        .fill("first.example.test:443");
+      await user
+        .getByLabel("隧道凭据", { exact: true })
+        .fill("fixture-chain-first-secret");
+      for (const hop of [2, 3]) {
+        await user
+          .getByRole("button", { name: "添加后续出口", exact: true })
+          .click();
+        await user
+          .getByLabel(`出口 ${hop} 端点`, { exact: true })
+          .fill(`exit${hop}.example.test:443`);
+        await user
+          .getByLabel(`出口 ${hop} 凭据`, { exact: true })
+          .fill(`fixture-chain-${hop}-secret`);
+      }
+      await save(user);
+      const chainedRules = await (
+        await user.request.get(base + "/api/v1/rules")
+      ).json();
+      assert.equal(chainedRules.items[0].tunnel.chain.length, 2);
+      assert.equal(chainedRules.items[0].tunnel.chain[0].token, undefined);
+      await user.getByRole("button", { name: "编辑", exact: true }).click();
+      assert.equal(
+        await user.getByLabel("出口 2 端点", { exact: true }).inputValue(),
+        "exit2.example.test:443",
+      );
+      assert.equal(
+        await user.getByLabel("出口 2 凭据", { exact: true }).inputValue(),
+        "",
+      );
+      await save(user);
       await user.getByRole("button", { name: "删除", exact: true }).click();
       await user.getByRole("button", { name: "确认删除", exact: true }).click();
       await user.locator("dialog").waitFor({ state: "detached" });
@@ -314,6 +355,275 @@ try {
         .getByText("可用余额不足，请核对钱包余额。", { exact: true })
         .waitFor();
       await user.getByRole("button", { name: "关闭对话框" }).click();
+      // Real operation APIs: issue and redeem a code, create/poll a task,
+      // and validate user/admin page boundaries on all three browser engines.
+      await admin
+        .getByRole("link", { name: "运营与任务", exact: true })
+        .click();
+      await admin.getByLabel("离线宽限（秒）", { exact: true }).fill("120");
+      await admin
+        .getByRole("button", { name: "保存告警设置", exact: true })
+        .click();
+      await admin.getByText("告警设置已保存。", { exact: false }).waitFor();
+      assert.equal(
+        (await (await admin.request.get(base + "/api/v1/alert-policy")).json())
+          .offline_seconds,
+        120,
+      );
+      await admin.getByLabel("充值金额（分）", { exact: true }).fill("10000");
+      await admin
+        .getByRole("button", { name: "生成兑换码", exact: true })
+        .click();
+      await admin
+        .getByRole("heading", { name: "兑换码（仅显示本次）", exact: true })
+        .waitFor();
+      const redeemCode = (await admin.locator(".mono").innerText()).trim();
+      await user.getByRole("link", { name: "运营与任务", exact: true }).click();
+      assert.equal(
+        await user
+          .getByRole("heading", { name: "充值退款", exact: true })
+          .count(),
+        0,
+      );
+      await user.getByLabel("兑换码", { exact: true }).fill(redeemCode);
+      await user.getByRole("button", { name: "兑换", exact: true }).click();
+      await user
+        .getByText("兑换成功，请在套餐与钱包页面查看权益。", { exact: false })
+        .waitFor();
+      const fundedWallet = await (
+        await user.request.get(base + "/api/v1/wallet")
+      ).json();
+      assert.equal(fundedWallet.balance_cents, "10000");
+      await user
+        .getByLabel("接收地址", { exact: true })
+        .fill("https://hooks.example.test/events");
+      await user
+        .getByRole("button", { name: "添加通知地址", exact: true })
+        .click();
+      await user
+        .getByRole("heading", {
+          name: "通知签名密钥（仅显示本次）",
+          exact: true,
+        })
+        .waitFor();
+      await user
+        .getByRole("button", { name: "已保存，关闭", exact: true })
+        .click();
+      await user
+        .getByRole("button", { name: "静默一小时", exact: true })
+        .click();
+      await user
+        .getByRole("button", { name: "解除静默", exact: true })
+        .waitFor();
+      const mutedHooks = await (
+        await user.request.get(base + "/api/v1/webhooks")
+      ).json();
+      assert.ok(Date.parse(mutedHooks.items[0].muted_until) > Date.now());
+      await user.getByRole("button", { name: "解除静默", exact: true }).click();
+      await user
+        .getByRole("button", { name: "静默一小时", exact: true })
+        .waitFor();
+      await user.getByRole("button", { name: "停用通知", exact: true }).click();
+      await user
+        .getByRole("button", { name: "启用通知", exact: true })
+        .waitFor();
+      await user.getByRole("button", { name: "启用通知", exact: true }).click();
+      await user
+        .getByRole("button", { name: "停用通知", exact: true })
+        .waitFor();
+      await user
+        .getByRole("heading", { name: "最近事件", exact: true })
+        .waitFor();
+      assert.equal(
+        await user
+          .getByRole("heading", { name: "告警设置", exact: true })
+          .count(),
+        0,
+      );
+      await user.getByRole("button", { name: "删除地址", exact: true }).click();
+      await user.getByText("暂无通知地址。", { exact: true }).waitFor();
+      await user
+        .getByRole("button", { name: "创建导出任务", exact: true })
+        .click();
+      await user
+        .getByRole("button", { name: "查看结果", exact: true })
+        .first()
+        .waitFor();
+      const taskList = await (
+        await user.request.get(base + "/api/v1/tasks")
+      ).json();
+      for (let attempt = 0; attempt < 30; attempt++) {
+        const task = await (
+          await user.request.get(base + "/api/v1/tasks/" + taskList.items[0].id)
+        ).json();
+        if (task.status === "completed") break;
+        if (attempt === 29) throw Error("export task did not complete");
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      await user
+        .getByRole("button", { name: "查看结果", exact: true })
+        .first()
+        .click();
+      await user
+        .getByRole("button", { name: "下载 JSON", exact: true })
+        .waitFor();
+      await user.getByRole("link", { name: "套餐与钱包", exact: true }).click();
+      await user
+        .getByLabel("自动续费套餐", { exact: true })
+        .selectOption({ index: 1 });
+      await user.locator(".toggle-row input").check();
+      await user.getByText("已开启", { exact: true }).waitFor();
+      await user.locator(".toggle-row input").uncheck();
+      await user.getByText("已关闭", { exact: true }).waitFor();
+      await user
+        .getByRole("button", { name: "余额购买", exact: true })
+        .first()
+        .click();
+      await user.getByRole("button", { name: "确认提交", exact: true }).click();
+      await user.locator("dialog").waitFor({ state: "detached" });
+      const beforeAddon = await (
+        await user.request.get(base + "/api/v1/entitlement")
+      ).json();
+      assert.equal(beforeAddon.limits.max_rules, 3);
+      assert.equal(beforeAddon.limits.max_connections_per_node, 10);
+      assert.equal(beforeAddon.limits.max_ips_per_node, 2);
+      assert.equal(beforeAddon.limits.bytes_per_second_per_node, "1048576");
+      await admin
+        .getByRole("link", { name: "套餐与钱包", exact: true })
+        .click();
+      await admin
+        .getByRole("button", { name: "新增套餐", exact: true })
+        .click();
+      await admin.getByLabel("套餐类型").selectOption("addon");
+      await admin
+        .getByLabel("名称", { exact: true })
+        .fill(`addon-${browserName}`);
+      await admin.getByLabel("价格（分）", { exact: true }).fill("100");
+      await admin.getByLabel("流量配额（字节）", { exact: true }).fill("1024");
+      await admin
+        .getByRole("button", { name: "确认提交", exact: true })
+        .click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      const addonCard = admin
+        .locator("article")
+        .filter({
+          has: admin.getByRole("heading", {
+            name: `addon-${browserName}`,
+            exact: true,
+          }),
+        });
+      await addonCard
+        .getByRole("button", { name: "编辑套餐", exact: true })
+        .click();
+      await admin.getByLabel("价格（分）", { exact: true }).fill("200");
+      await admin
+        .getByRole("button", { name: "确认提交", exact: true })
+        .click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      await user.getByRole("button", { name: "刷新状态", exact: true }).click();
+      const userAddon = user
+        .locator("article")
+        .filter({
+          has: user.getByRole("heading", {
+            name: `addon-${browserName}`,
+            exact: true,
+          }),
+        });
+      await userAddon
+        .getByRole("button", { name: "购买叠加包", exact: true })
+        .click();
+      await user
+        .getByText("叠加包增加当前周期配额，到期时间保持不变。", {
+          exact: true,
+        })
+        .waitFor();
+      await user.getByRole("button", { name: "确认提交", exact: true }).click();
+      await user.locator("dialog").waitFor({ state: "detached" });
+      const afterAddon = await (
+        await user.request.get(base + "/api/v1/entitlement")
+      ).json();
+      assert.equal(afterAddon.expires_at, beforeAddon.expires_at);
+      assert.equal(
+        BigInt(afterAddon.quota_bytes),
+        BigInt(beforeAddon.quota_bytes) + 1024n,
+      );
+      // Functional completion: real APIs and embedded pages, no external gateways.
+      await admin.getByRole("link", {name:"站点设置",exact:true}).click();
+      await admin.getByLabel("公告",{exact:true}).fill(`功能测试 ${browserName}`);
+      await admin.getByLabel("注册策略",{exact:true}).selectOption("invite");
+      await admin.getByRole("button",{name:"保存站点设置",exact:true}).click();
+      await admin.getByText("站点设置已保存，刷新页面可查看品牌更新。",{exact:false}).waitFor();
+      await admin.getByRole("button",{name:"生成注册邀请码",exact:true}).click();
+      const siteInvite=await admin.getByLabel("请保存邀请码",{exact:true}).inputValue();
+      const registrationContext=await browser.newContext();
+      const visitor=await registrationContext.newPage();
+      await visitor.goto(base+"/");
+      await visitor.getByRole("button",{name:"注册账号",exact:true}).click();
+      await visitor.getByLabel("用户名",{exact:true}).fill(`self-${browserName}`);
+      await visitor.getByLabel("密码",{exact:true}).fill(randomUUID());
+      await visitor.getByLabel("注册邀请码",{exact:true}).fill(siteInvite);
+      await visitor.getByRole("button",{name:"创建账号",exact:true}).click();
+      await visitor.getByText("注册成功，请登录。",{exact:false}).waitFor();
+      await registrationContext.close();
+      await admin.getByLabel("注册策略",{exact:true}).selectOption("closed");
+      await admin.getByRole("button",{name:"保存站点设置",exact:true}).click();
+      await admin.getByRole("button",{name:"保存站点设置",exact:true}).waitFor();
+      // A second registered fixture node is used only as an exit directory entry.
+      const fixtureHeaders={Origin:base,"X-Requested-With":"fetch"};
+      const exitEnrollment=await (await admin.request.post(base+"/api/v1/nodes/enrollment",{headers:fixtureHeaders,data:{name:`exit-${browserName}`,group_ids:[savedGroup.id]}})).json();
+      const exitRegistration=await (await admin.request.post(base+"/api/v1/agent/register",{data:{token:exitEnrollment.token,name:`exit-${browserName}`,capabilities:["tcp","tls"]}})).json();
+      await admin.request.post(base+"/api/v1/agent/probe",{headers:{Authorization:`Bearer ${exitRegistration.token}`},data:{sampled_at:new Date().toISOString()}});
+      await admin.getByRole("link",{name:"出口管理",exact:true}).click();
+      await admin.getByRole("button",{name:"新增出口",exact:true}).click();
+      await admin.getByLabel("出口名称",{exact:true}).fill(`managed-${browserName}`);
+      await admin.getByLabel("出口设备组",{exact:true}).selectOption(savedGroup.id);
+      await admin.getByLabel("出口服务器",{exact:true}).selectOption(exitRegistration.node_id);
+      await admin.getByLabel("出口端点",{exact:true}).fill("exit.example.test:443");
+      await admin.getByLabel("TLS 服务器名称",{exact:true}).fill("exit.example.test");
+      await admin.getByLabel("出口凭据",{exact:true}).fill("fixture-exit-secret-only");
+      await admin.getByRole("button",{name:"保存出口",exact:true}).click();
+      await admin.locator("dialog").waitFor({state:"detached"});
+      await user.getByRole("link",{name:"转发规则",exact:true}).click();
+      await user.getByRole("button",{name:"新增",exact:true}).click();
+      await user.getByLabel("名称",{exact:true}).fill("managed draft");
+      await user.getByLabel("入口服务器",{exact:true}).selectOption(registered.node_id);
+      await user.getByLabel("设备组",{exact:true}).selectOption(savedGroup.id);
+      await user.getByLabel("出口选择",{exact:true}).selectOption(savedGroup.id);
+      await user.getByLabel("监听地址",{exact:true}).fill(":10022");
+      await user.getByLabel("目标地址",{exact:true}).fill("target.example.test:443");
+      await user.getByLabel("启用规则",{exact:true}).uncheck();
+      await user.getByRole("group",{name:"Proxy Protocol",exact:true}).getByLabel("发送",{exact:true}).selectOption("v2");
+      await save(user);
+      const managedRules=await (await user.request.get(base+"/api/v1/rules")).json();
+      const managedRule=managedRules.items.find(x=>x.name==="managed draft");
+      assert.ok(managedRule.selected_exit_id);assert.equal(managedRule.tunnel,undefined);assert.equal(managedRule.proxy_protocol.send,"v2");
+      await user.getByRole("link",{name:"运营与任务",exact:true}).click();
+      await user.getByText("导入规则",{exact:true}).click();
+      const importDraft={name:"preview draft",node_id:registered.node_id,group_id:savedGroup.id,network:"tcp",transport:"direct",listen:":10023",target:"127.0.0.1:8080",enabled:false};
+      await user.getByLabel("规则 JSON",{exact:true}).fill(JSON.stringify([importDraft]));
+      await user.getByRole("button",{name:"预览导入",exact:true}).click();
+      await user.getByText("第 1 条 · 将新增",{exact:false}).waitFor();
+      assert.equal((await (await user.request.get(base+"/api/v1/rules")).json()).items.some(x=>x.name==="preview draft"),false);
+      await user.getByRole("button",{name:"确认并创建导入任务",exact:true}).click();
+      await user.getByText("导入任务已创建。",{exact:false}).waitFor();
+      let imported;
+      for(let attempt=0;attempt<50;attempt++){imported=(await (await user.request.get(base+"/api/v1/rules")).json()).items.find(x=>x.name==="preview draft");if(imported)break;await user.waitForTimeout(100)}
+      assert.ok(imported);
+      await user.getByLabel("导入方式",{exact:true}).selectOption("update_by_port");
+      await user.getByLabel("规则 JSON",{exact:true}).fill(JSON.stringify([{...importDraft,name:"updated draft",target:"127.0.0.1:8081"}]));
+      await user.getByRole("button",{name:"预览导入",exact:true}).click();
+      await user.getByText("第 1 条 · 将更新",{exact:false}).waitFor();
+      await user.getByRole("button",{name:"确认并创建导入任务",exact:true}).click();
+      let updated;
+      for(let attempt=0;attempt<50;attempt++){updated=(await (await user.request.get(base+"/api/v1/rules")).json()).items.find(x=>x.id===imported.id&&x.target==="127.0.0.1:8081");if(updated)break;await user.waitForTimeout(100)}
+      assert.ok(updated);
+      await admin.getByRole("link",{name:"运营与任务",exact:true}).click();
+      await admin.getByLabel("购买记录 ID",{exact:true}).fill(beforeAddon.id);
+      await admin.getByLabel("退回金额（分）",{exact:true}).fill("100");
+      await admin.getByLabel("套餐退款原因",{exact:true}).fill("browser functional regression");
+      await admin.getByRole("button",{name:"退回钱包并调整佣金",exact:true}).click();
+      await admin.getByText("套餐退款已入钱包，配额和相关佣金已同步调整。",{exact:false}).waitFor();
+      assert.ok((await (await admin.request.get(base+`/api/v1/purchases/${beforeAddon.id}/funding`)).json()).items.some(x=>x.refunded_cents==="100"));
       await user.getByRole("link", { name: "账号与 API", exact: true }).click();
       await user.getByRole("button", { name: "创建 Token" }).click();
       await user
@@ -379,6 +689,7 @@ try {
             ["overview", "概览"],
             ["commerce", "套餐与钱包"],
             ["account", "账号与 API"],
+            ["operations", "运营与任务"],
             ["probes", "实时探针"],
           ]) {
             await page.getByRole("link", { name: label, exact: true }).click();
@@ -423,7 +734,7 @@ try {
       await user.getByRole("button", { name: "登录控制台" }).waitFor();
       assert.deepEqual(exceptions, []);
       console.log(
-        `${browserName}: REAL Go/SQLite/embedded UI PASS (login, user/group/enrollment, simulated Agent/probe privacy, persisted history fixture API/permissions/chart, zero wallet + insufficient funds, Token isolation/revocation, password, disable + session revoke)`,
+        `${browserName}: REAL Go/SQLite/embedded UI PASS (login, user/group/enrollment, simulated Agent/probe privacy, persisted history fixture API/permissions/chart, zero wallet + insufficient funds, redeem credit, webhook CRUD/mute/enable + alert policy/events, export task result, auto-renew toggle, plan limits/edit/add-on purchase, site/invitation registration, managed exits + Proxy Protocol editor, import preview/port update, purchase refund funding, three-hop editor, Token isolation/revocation, password, disable + session revoke)`,
       );
       await userContext.close();
     } finally {

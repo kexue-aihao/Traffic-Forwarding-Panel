@@ -21,6 +21,11 @@ var ErrPaymentUncertain = errors.New("payment creation uncertain; reconcile this
 // CreateAdapterOrder durably allocates an order before calling any gateway.
 // An ambiguous creation is never retried as a new external order automatically.
 func (s *Service) CreateAdapterOrder(ctx context.Context, user, channel, key string, amount int64, configured Channel, clientIP string) (Order, error) {
+	if s.PaymentAllowed != nil {
+		if err := s.PaymentAllowed(ctx, amount); err != nil {
+			return Order{}, err
+		}
+	}
 	var order Order
 	if configured.Adapter == nil || amount <= 0 || amount > 100000000 || key == "" || len(key) > 128 {
 		return order, errors.New("invalid or unavailable channel/amount/key")
@@ -105,7 +110,7 @@ func (s *Service) ReconcileOrder(ctx context.Context, user, orderID string, chan
 	}
 	order.Currency = "CNY"
 	order.CreatedAt = parse(created)
-	if order.Status == "paid" {
+	if order.Status == "paid" || order.Status == "paid_late" || order.Status == "refunded" || order.Status == "partially_refunded" {
 		return order, nil
 	}
 	c, ok := channels[order.Channel]
@@ -125,7 +130,9 @@ func (s *Service) ReconcileOrder(ctx context.Context, user, orderID string, chan
 		if err = s.ConfirmStatus(ctx, order.Channel, status); err != nil {
 			return order, err
 		}
-		order.Status = "paid"
+		if err = s.DB.QueryRowContext(ctx, s.q("SELECT status FROM commerce_orders WHERE id=?"), orderID).Scan(&order.Status); err != nil {
+			return order, err
+		}
 	}
 	// Pending/expired gateway states never discard a subsequently valid receipt.
 	return order, nil

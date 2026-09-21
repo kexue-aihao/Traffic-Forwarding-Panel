@@ -1,13 +1,16 @@
 package commerce
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 func (s *Service) PlansPage(ctx context.Context, page, size int) ([]Plan, int, error) {
 	var total int
 	if e := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM commerce_plans").Scan(&total); e != nil {
 		return nil, 0, e
 	}
-	rows, e := s.DB.QueryContext(ctx, s.q("SELECT id,name,price,quota,months FROM commerce_plans ORDER BY id LIMIT ? OFFSET ?"), size, (page-1)*size)
+	rows, e := s.DB.QueryContext(ctx, s.q("SELECT p.id,p.name,p.price,p.quota,p.months,COALESCE(st.active,1),COALESCE(st.version,1),COALESCE(st.kind,'period'),COALESCE(lim.payload,'{}') FROM commerce_plans p LEFT JOIN commerce_plan_states st ON st.plan_id=p.id LEFT JOIN commerce_plan_limits lim ON lim.plan_id=p.id ORDER BY p.id LIMIT ? OFFSET ?"), size, (page-1)*size)
 	if e != nil {
 		return nil, 0, e
 	}
@@ -15,7 +18,11 @@ func (s *Service) PlansPage(ctx context.Context, page, size int) ([]Plan, int, e
 	items := []Plan{}
 	for rows.Next() {
 		var p Plan
-		if e = rows.Scan(&p.ID, &p.Name, &p.Price, &p.Quota, &p.Months); e != nil {
+		var rawLimits string
+		if e = rows.Scan(&p.ID, &p.Name, &p.Price, &p.Quota, &p.Months, &p.Active, &p.Version, &p.Kind, &rawLimits); e != nil {
+			return nil, 0, e
+		}
+		if e = json.Unmarshal([]byte(rawLimits), &p.Limits); e != nil {
 			return nil, 0, e
 		}
 		items = append(items, p)

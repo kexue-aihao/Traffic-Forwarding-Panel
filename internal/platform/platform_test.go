@@ -9,6 +9,7 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/testdb"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -121,6 +122,23 @@ func TestConcurrentPortAndACKRelease(t *testing.T) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	read[contract.Rule](t, f.req("POST", "/rules", ruleFor(g, n), ""), 201)
+}
+
+func TestRuleExportTaskReturnsRedactedRules(t *testing.T) {
+	f := setup(t)
+	g, n := f.node()
+	read[contract.Rule](t, f.req("POST", "/rules", ruleFor(g, n), ""), 201)
+	r := read[Task](t, f.req("POST", "/tasks/rules/export", map[string]any{"rule_ids": []string{}, "idempotency_key": "export-test"}, ""), 202)
+	if r.Status != "pending" || r.Kind != "rules.export" {
+		t.Fatal(r)
+	}
+	if n, err := f.s.RunTasks(context.Background(), 10); err != nil || n != 1 {
+		t.Fatal(n, err)
+	}
+	result := read[Task](t, f.req("GET", "/tasks/"+r.ID, nil, ""), 200)
+	if result.Status != "completed" || result.Result == "" || strings.Contains(result.Result, `"token"`) {
+		t.Fatal(result)
+	}
 }
 func TestUsageAtomicDedupAndOverrun(t *testing.T) {
 	f := setup(t)

@@ -23,6 +23,9 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 )
 
+// Version is injected at release build time using -ldflags -X.
+var Version = "0.1.0-beta.1"
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
@@ -37,6 +40,7 @@ func env(key, fallback string) string {
 }
 
 func run() error {
+	showVersion := flag.Bool("version", false, "print panel release version")
 	addr := flag.String("addr", env("TFP_ADDR", "127.0.0.1:8080"), "HTTP listen address")
 	driver := flag.String("database", env("TFP_DATABASE", "sqlite"), "sqlite, postgres or mysql")
 	dsn := flag.String("dsn", env("TFP_DSN", "data/panel.db"), "database DSN (prefer TFP_DSN for server credentials)")
@@ -47,6 +51,10 @@ func run() error {
 	backupPath := flag.String("backup", "", "export a consistent sensitive database snapshot to a new JSONL file, then exit")
 	restorePath := flag.String("restore", "", "restore JSONL into an empty database, then exit; stop panel before use")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(Version)
+		return nil
+	}
 	commands := 0
 	for _, v := range []string{*initAdmin, *resetPassword, *backupPath, *restorePath} {
 		if v != "" {

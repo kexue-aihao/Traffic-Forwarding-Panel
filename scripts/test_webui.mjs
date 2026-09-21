@@ -91,6 +91,8 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify(value));
   };
   if (url.pathname.startsWith("/api/")) {
+    if (path === "/site") return json({name:"流量控制台",announcement:"",registration:"closed",captcha:false,accent:"blue"});
+
     if (path === "/auth/login") {
       authorized = true;
       expire = false;
@@ -188,6 +190,7 @@ const server = createServer(async (req, res) => {
       }
       return json({ items, total: items.length });
     }
+    if (path === "/auto-renew") return json({enabled:false});
     const maps = {
       "/rules": rules,
       "/nodes": [node],
@@ -214,6 +217,9 @@ const server = createServer(async (req, res) => {
         {
           id: "p1",
           name: "Fixture plan",
+          active: true,
+          version: 1,
+          kind: "period",
           price_cents: "1000",
           quota_bytes: "10737418240",
           months: 1,
@@ -295,6 +301,7 @@ try {
         if (m.type() === "error") errors.push(m.text());
       });
       await page.goto(base + "/admin");
+      await page.getByLabel("用户名", { exact: true }).waitFor({timeout:10000}).catch(async (e)=>{throw new Error(`${e.message}\n${await page.locator("body").innerText()}\n${errors.join("\n")}`)});
       await page.getByLabel("用户名", { exact: true }).fill("fixture-admin");
       await page.getByLabel("密码", { exact: true }).fill("fixture-password");
       await page.getByRole("button", { name: "登录控制台" }).click();

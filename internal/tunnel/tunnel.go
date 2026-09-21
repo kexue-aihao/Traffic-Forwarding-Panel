@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/hashicorp/yamux"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
 
@@ -153,10 +154,14 @@ type openRequest struct {
 	Target  string               `json:"target"`
 	Chain   []contract.TunnelHop `json:"chain,omitempty"`
 	Visited []string             `json:"visited,omitempty"`
+	Reverse string               `json:"reverse,omitempty"`
 }
 type Client struct {
 	TLS     *tls.Config
 	Timeout time.Duration
+	Pool    *MuxPool
+	useMux  bool
+	reverse string
 }
 
 func (c Client) Dial(ctx context.Context, transport, endpoint, serverName, token, network, target string) (*Session, error) {
@@ -172,6 +177,9 @@ func (c Client) DialChain(ctx context.Context, transport, endpoint, serverName, 
 	return c.dial(ctx, transport, endpoint, serverName, token, network, target, chain, nil)
 }
 func (c Client) dial(ctx context.Context, transport, endpoint, serverName, token, network, target string, chain []contract.TunnelHop, visited []string) (*Session, error) {
+	if c.useMux {
+		return c.dialMux(ctx, transport, endpoint, serverName, token, network, target, chain, visited)
+	}
 	timeout := c.Timeout
 	if timeout == 0 {
 		timeout = 10 * time.Second
@@ -261,20 +269,8 @@ func (c Client) dial(ctx context.Context, transport, endpoint, serverName, token
 		}
 		conn = t
 	}
-	version := 1
-	if len(chain) > 0 || len(visited) > 0 {
-		version = 2
-	}
-	p, _ := json.Marshal(openRequest{Version: version, Token: token, Network: network, Target: target, Chain: chain, Visited: visited})
-	if err = writeFrame(conn, openFrame, p); err != nil {
+	if err = c.open(conn, token, network, target, chain, visited); err != nil {
 		return nil, err
-	}
-	k, p, err := readFrame(conn)
-	if err != nil {
-		return nil, err
-	}
-	if k != readyFrame || string(p) != "ok" {
-		return nil, errors.New("tunnel authorization or target rejected")
 	}
 	if !stopCancel() || ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -356,6 +352,7 @@ type Server struct {
 	slots       chan struct{}
 	ctx         context.Context
 	cancel      context.CancelFunc
+	reverse     map[string]*yamux.Session
 }
 
 func (s *Server) Serve(l net.Listener, transport string) error {
@@ -497,6 +494,11 @@ func (s *Server) handle(raw net.Conn, transport string) {
 		}
 		conn = t
 	}
+	s.serveRequest(conn, true)
+}
+
+func (s *Server) serveRequest(conn net.Conn, special bool) {
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
 	k, p, e := readFrame(conn)
 	if e != nil || k != openFrame || len(p) > 8192 {
 		return
@@ -504,10 +506,17 @@ func (s *Server) handle(raw net.Conn, transport string) {
 	var req openRequest
 	dec := json.NewDecoder(strings.NewReader(string(p)))
 	dec.DisallowUnknownFields()
-	if e = dec.Decode(&req); e != nil || (req.Version != 1 && req.Version != 2) || subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) != 1 || !s.Allowed[req.Network+"|"+req.Target] || (req.Network != "tcp" && req.Network != "udp") {
+	if e = dec.Decode(&req); e != nil || (req.Version != 1 && req.Version != 2) || subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) != 1 {
 		return
 	}
 	if dec.Decode(new(any)) != io.EOF {
+		return
+	}
+	if special && (req.Network == "mux" || req.Network == "reverse") {
+		s.serveMultiplex(conn, req)
+		return
+	}
+	if !s.Allowed[req.Network+"|"+req.Target] || (req.Network != "tcp" && req.Network != "udp") {
 		return
 	}
 	if s.validateRoute(req) != nil {
@@ -515,7 +524,13 @@ func (s *Server) handle(raw net.Conn, transport string) {
 	}
 	var target net.Conn
 	var next *Session
-	if len(req.Chain) > 0 {
+	if req.Reverse != "" {
+		if len(req.Chain) > 0 {
+			return
+		}
+		next, e = s.openReverse(req)
+		target = next
+	} else if len(req.Chain) > 0 {
 		hop, allowed := s.authorizedNext(req.Chain[0])
 		if !allowed {
 			return

@@ -20,6 +20,7 @@ type Group struct {
 	Multiplier       string   `json:"multiplier"`
 	PortMin          int      `json:"port_min"`
 	PortMax          int      `json:"port_max"`
+	MaxRules         int      `json:"max_rules"`
 	Version          int64    `json:"version"`
 }
 
@@ -42,6 +43,8 @@ type Tunnel struct {
 	Endpoint   string `json:"endpoint"`
 	ServerName string `json:"server_name"`
 	Token      string `json:"token,omitempty"`
+	Mux        bool   `json:"mux,omitempty"`
+	Reverse    string `json:"reverse,omitempty"`
 	// Chain lists the remaining exits after Endpoint; at most two are allowed.
 	Chain []TunnelHop `json:"chain,omitempty"`
 }
@@ -55,28 +58,37 @@ type TunnelHop struct {
 }
 
 type Rule struct {
-	ID               string   `json:"id"`
-	UserID           string   `json:"user_id"`
-	Name             string   `json:"name"`
-	NodeID           string   `json:"node_id"`
-	GroupID          string   `json:"group_id"`
-	Network          string   `json:"network"`
-	Transport        string   `json:"transport"`
-	Listen           string   `json:"listen"`
-	Target           string   `json:"target"`
-	Enabled          bool     `json:"enabled"`
-	Version          int64    `json:"version"`
-	BlockedProtocols []string `json:"blocked_protocols"`
-	Tunnel           *Tunnel  `json:"tunnel,omitempty"`
-	Lease            *Lease   `json:"lease,omitempty"`
+	ExitGroupID       string         `json:"exit_group_id,omitempty"`
+	ExitID            string         `json:"exit_id,omitempty"`
+	SelectedExitID    string         `json:"selected_exit_id,omitempty"`
+	BillingMultiplier string         `json:"billing_multiplier,omitempty"`
+	ExitUnavailable   bool           `json:"exit_unavailable,omitempty"`
+	ProxyProtocol     *ProxyProtocol `json:"proxy_protocol,omitempty"`
+	ID                string         `json:"id"`
+	UserID            string         `json:"user_id"`
+	Name              string         `json:"name"`
+	NodeID            string         `json:"node_id"`
+	GroupID           string         `json:"group_id"`
+	Network           string         `json:"network"`
+	Transport         string         `json:"transport"`
+	Listen            string         `json:"listen"`
+	Target            string         `json:"target"`
+	Enabled           bool           `json:"enabled"`
+	Version           int64          `json:"version"`
+	BlockedProtocols  []string       `json:"blocked_protocols"`
+	Tunnel            *Tunnel        `json:"tunnel,omitempty"`
+	Lease             *Lease         `json:"lease,omitempty"`
+	Backends          []Backend      `json:"backends,omitempty"`
+	SharedTLS         *SharedTLS     `json:"shared_tls,omitempty"`
 }
 
 // Lease is a finite node allocation; expired/unallocated bytes cannot be spent.
 type Lease struct {
-	ID            string    `json:"id"`
-	EntitlementID string    `json:"entitlement_id"`
-	ExpiresAt     time.Time `json:"expires_at"`
-	Bytes         int64     `json:"bytes,string"`
+	ID            string         `json:"id"`
+	EntitlementID string         `json:"entitlement_id"`
+	ExpiresAt     time.Time      `json:"expires_at"`
+	Bytes         int64          `json:"bytes,string"`
+	Limits        ResourceLimits `json:"limits"`
 }
 
 type Config struct {
@@ -88,9 +100,11 @@ type Config struct {
 }
 
 type Ack struct {
-	Version        int64  `json:"version"`
-	AppliedVersion int64  `json:"applied_version"`
-	Error          string `json:"error"`
+	AgentVersion   string   `json:"agent_version,omitempty"`
+	Capabilities   []string `json:"capabilities,omitempty"`
+	Version        int64    `json:"version"`
+	AppliedVersion int64    `json:"applied_version"`
+	Error          string   `json:"error"`
 }
 
 type Registration struct {

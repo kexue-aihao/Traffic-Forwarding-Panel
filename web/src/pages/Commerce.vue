@@ -5,12 +5,34 @@ import Modal from "../components/Modal.vue";
 import { api, ApiError, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
 import { displayTimeZoneLabel, formatDateTime } from "../core/format";
+interface ResourceLimits {
+  max_rules: number;
+  max_connections_per_node: number;
+  max_ips_per_node: number;
+  bytes_per_second_per_node: string;
+}
+function emptyLimits(): ResourceLimits {
+  return {
+    max_rules: 0,
+    max_connections_per_node: 0,
+    max_ips_per_node: 0,
+    bytes_per_second_per_node: "0",
+  };
+}
+function limitsText(limits?: ResourceLimits) {
+  const l = limits || emptyLimits();
+  return `规则 ${l.max_rules || "不限"} · 每节点连接 ${l.max_connections_per_node || "不限"} · 每节点活跃 IP ${l.max_ips_per_node || "不限"} · 每节点合计带宽 ${l.bytes_per_second_per_node && l.bytes_per_second_per_node !== "0" ? l.bytes_per_second_per_node + " B/s" : "不限"}`;
+}
 interface Plan {
+  limits?: ResourceLimits;
   id: string;
   name: string;
   price_cents: string;
   quota_bytes: string;
   months: number;
+  active: boolean;
+  version: number;
+  kind: "period" | "addon";
 }
 interface Order {
   id: string;
@@ -29,6 +51,7 @@ interface Channel {
   reason: string;
 }
 interface Entitlement {
+  limits?: ResourceLimits;
   id: string;
   plan_id: string;
   version: number;
@@ -44,18 +67,28 @@ interface Ledger {
   reference: string;
   created_at: string;
 }
+interface AutoRenew {
+  enabled: boolean;
+  plan_id?: string;
+  last_error?: string;
+}
 const plans = ref<Plan[]>([]);
 const orders = ref<Order[]>([]);
 const channels = ref<Channel[]>([]);
 const ledger = ref<Ledger[]>([]);
 const wallet = ref<{ balance_cents: string; currency: string } | null>(null);
 const entitlement = ref<Entitlement | null>(null);
+const autoRenew = ref<AutoRenew>({ enabled: false });
 const error = ref("");
+const renewBusy = ref(false);
+const renewError = ref("");
+const renewPlan = ref("");
 const busy = ref(false);
 const loading = ref(false);
 const selected = ref<Plan | null>(null);
 const charging = ref(false);
 const creating = ref(false);
+const editingPlan = ref<Plan | null>(null);
 const amount = ref("1000");
 const channel = ref("");
 const formError = ref("");
@@ -119,7 +152,14 @@ function turnPage(kind: "plans" | "orders" | "ledger", page: number) {
 let loadVersion = 0;
 const ledgerKinds: Record<string, string> = {
   payment: "充值到账",
+  recharge: "充值到账",
+  redeem: "兑换到账",
+  commission: "佣金结算",
+  refund_reserve: "退款预留",
+  refund_release: "取消退款返还",
   purchase: "套餐购买",
+  addon: "流量叠加包",
+  commission_reversal: "佣金回冲",
   adjustment: "人工调整",
   refund: "退款",
 };
@@ -129,7 +169,6 @@ const channelNames: Record<string, string> = {
   bepusdt: "BEpusdt（兼容版）",
   tokenpay: "TokenPay",
   cryptomus: "Cryptomus",
-  cyber: "Cyber",
 };
 function channelName(id: string) {
   return channelNames[id] || "其他支付渠道";
@@ -159,6 +198,8 @@ function orderState(order: Order) {
         closed: "已关闭",
         failed: "处理失败",
         refunded: "已退款",
+        partially_refunded: "部分退款",
+        paid_late: "晚到已到账",
       } as Record<string, string>
     )[order.status] || "状态待核实"
   );
@@ -178,10 +219,12 @@ function businessError(error: unknown) {
   );
 }
 const planForm = ref({
+  limits: emptyLimits(),
   name: "",
   price_cents: "1000",
   quota_bytes: "10737418240",
   months: 1,
+  kind: "period" as "period" | "addon",
 });
 function money(cents: string) {
   const n = BigInt(cents);
@@ -230,6 +273,11 @@ async function load() {
       ledger.value = x.items;
       totals.value.ledger = x.total;
     }),
+    api<AutoRenew>("/auto-renew").then((x) => {
+      if (version !== loadVersion) return;
+      autoRenew.value = x;
+      renewPlan.value = x.plan_id || entitlement.value?.plan_id || "";
+    }),
   ]);
   if (version !== loadVersion) return;
   financialReady.value =
@@ -241,6 +289,63 @@ async function load() {
     error.value = `部分商业功能暂不可用：${failures.map((f) => businessError(f.reason)).join("；")}`;
   loading.value = false;
 }
+async function saveAutoRenew(enabled: boolean) {
+  if (renewBusy.value) return;
+  const plan = renewPlan.value;
+  renewError.value = "";
+  if (enabled && !plan) {
+    renewError.value = "请选择自动续费套餐。";
+    return;
+  }
+  renewBusy.value = true;
+  try {
+    autoRenew.value = await api<AutoRenew>("/auto-renew", "POST", {
+      enabled,
+      plan_id: enabled ? plan : "",
+    });
+    notice(
+      enabled ? "自动续费已开启，到期后使用钱包余额购买。" : "自动续费已关闭。",
+    );
+  } catch (e) {
+    renewError.value = businessError(e);
+  } finally {
+    renewBusy.value = false;
+  }
+}
+async function toggleAutoRenew(event: Event) {
+  const target = event.target;
+  if (target instanceof HTMLInputElement) {
+    await saveAutoRenew(target.checked);
+    target.checked = autoRenew.value.enabled;
+  }
+}
+async function setPlanActive(plan: Plan) {
+  if (busy.value) return;
+  busy.value = true;
+  error.value = "";
+  try {
+    await api(`/plans/${encodeURIComponent(plan.id)}`, "PATCH", {
+      active: !plan.active,
+    });
+    await load();
+  } catch (e) {
+    error.value = businessError(e);
+  } finally {
+    busy.value = false;
+  }
+}
+async function closeOrder(order: Order) {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    await api(`/orders/${encodeURIComponent(order.id)}/close`, "POST", {});
+    await load();
+  } catch (e) {
+    orderError.value[order.id] = businessError(e);
+  } finally {
+    busy.value = false;
+  }
+}
 function startCharge() {
   charging.value = true;
   if (chargeDraft.value) {
@@ -249,6 +354,19 @@ function startCharge() {
   }
   key.value = chargeDraft.value?.idempotency_key || crypto.randomUUID();
   formError.value = "";
+}
+function editPlan(plan: Plan) {
+  editingPlan.value = plan;
+  creating.value = true;
+  formError.value = "";
+  planForm.value = {
+    name: plan.name,
+    price_cents: plan.price_cents,
+    quota_bytes: plan.quota_bytes,
+    months: plan.months || 1,
+    kind: plan.kind,
+    limits: { ...(plan.limits || emptyLimits()) },
+  };
 }
 function buy(plan: Plan) {
   selected.value = plan;
@@ -261,11 +379,16 @@ async function submit() {
   formError.value = "";
   try {
     if (selected.value) {
-      await api("/purchases", "POST", {
-        plan_id: selected.value.id,
-        expected_version: entitlement.value?.version || 0,
-        idempotency_key: key.value,
-      });
+      await api(
+        selected.value.kind === "addon" ? "/addon-purchases" : "/purchases",
+        "POST",
+        {
+          plan_id: selected.value.id,
+          expected_plan_version: selected.value.version,
+          expected_version: entitlement.value?.version || 0,
+          idempotency_key: key.value,
+        },
+      );
       selected.value = null;
       notice("购买已由服务端确认，请查看更新后的权益。");
     } else if (charging.value) {
@@ -285,9 +408,25 @@ async function submit() {
           : "充值订单已创建，到账以服务端支付核实结果为准。",
       );
     } else {
-      await api("/plans", "POST", planForm.value);
+      const payload = {
+        ...planForm.value,
+        limits:
+          planForm.value.kind === "addon"
+            ? emptyLimits()
+            : planForm.value.limits,
+        months: planForm.value.kind === "addon" ? 0 : planForm.value.months,
+        ...(editingPlan.value ? { version: editingPlan.value.version } : {}),
+      };
+      await api(
+        editingPlan.value
+          ? `/plans/${encodeURIComponent(editingPlan.value.id)}`
+          : "/plans",
+        editingPlan.value ? "PUT" : "POST",
+        payload,
+      );
+      editingPlan.value = null;
       creating.value = false;
-      notice("套餐已创建。");
+      notice("套餐已保存。");
     }
     await load();
   } catch (e) {
@@ -311,7 +450,7 @@ async function reconcile(order: Order) {
       {},
     );
     notice(
-      result.status === "paid"
+      ["paid", "paid_late"].includes(result.status)
         ? "支付已由服务端确认，正在更新钱包。"
         : "尚未确认到账，请勿重复付款。",
     );
@@ -364,6 +503,7 @@ watch(
           v-if="adminSite && state.user?.role === 'admin'"
           @click="
             creating = true;
+            editingPlan = null;
             formError = '';
           "
         >
@@ -403,7 +543,48 @@ watch(
           }}
         </p>
       </div>
+      <div class="card">
+        <h2>自动续费</h2>
+        <p class="muted">
+          到期后使用钱包余额购买所选套餐，并从成功时刻重置周期；余额不足时每小时重试。
+        </p>
+        <label for="renew-plan">自动续费套餐</label
+        ><select
+          id="renew-plan"
+          v-model="renewPlan"
+          :disabled="renewBusy || loading || autoRenew.enabled"
+        >
+          <option value="">请选择套餐</option>
+          <option
+            v-for="p in plans.filter((p) => p.active && p.kind !== 'addon')"
+            :key="p.id"
+            :value="p.id"
+          >
+            {{ p.name }}
+          </option>
+        </select>
+        <p v-if="renewError" role="alert" class="error">{{ renewError }}</p>
+        <p v-if="autoRenew.last_error" class="warning">
+          {{
+            autoRenew.last_error === "insufficient_funds"
+              ? "余额不足，等待下次重试。"
+              : "上次续费未完成，请检查套餐或联系管理员。"
+          }}
+        </p>
+        <label class="toggle-row">
+          <input
+            type="checkbox"
+            :checked="autoRenew.enabled"
+            :disabled="loading || busy || renewBusy"
+            @change="toggleAutoRenew"
+          />
+          <span>{{ autoRenew.enabled ? "已开启" : "已关闭" }}</span>
+        </label>
+      </div>
     </div>
+    <p v-if="entitlement" class="muted small">
+      当前权益限制：{{ limitsText(entitlement.limits) }}
+    </p>
     <h2>可选套餐</h2>
     <p v-if="!plans.length" class="muted">暂无可购买套餐。</p>
     <div class="probe-grid">
@@ -411,14 +592,44 @@ watch(
         <h3>{{ plan.name }}</h3>
         <p class="price">¥ {{ money(plan.price_cents) }}</p>
         <p class="muted">
-          {{ plan.months }} 个月 · {{ plan.quota_bytes }} 字节
+          {{ plan.kind === "addon" ? "流量叠加包" : `${plan.months} 个月` }} ·
+          {{ plan.quota_bytes }} 字节
         </p>
         <button
           class="primary"
-          :disabled="!wallet || !financialReady || loading"
+          :disabled="
+            !plan.active ||
+            !wallet ||
+            !financialReady ||
+            loading ||
+            (plan.kind === 'addon' && !entitlement)
+          "
           @click="buy(plan)"
         >
-          余额购买
+          {{
+            !plan.active
+              ? "暂停售"
+              : plan.kind === "addon"
+                ? "购买叠加包"
+                : "余额购买"
+          }}
+        </button>
+        <p v-if="plan.kind !== 'addon'" class="small muted">
+          {{ limitsText(plan.limits) }}
+        </p>
+        <button
+          v-if="adminSite && state.user?.role === 'admin'"
+          :disabled="busy"
+          @click="editPlan(plan)"
+        >
+          编辑套餐
+        </button>
+        <button
+          v-if="adminSite && state.user?.role === 'admin'"
+          :disabled="busy"
+          @click="setPlanActive(plan)"
+        >
+          {{ plan.active ? "停售" : "重新上架" }}
         </button>
       </article>
     </div>
@@ -482,11 +693,18 @@ watch(
                 >请核实订单，勿重复付款。</span
               >
               <button
-                v-if="o.status === 'pending'"
+                v-if="['pending', 'closed', 'expired'].includes(o.status)"
                 :disabled="!!reconciling || loading"
                 @click="reconcile(o)"
               >
                 {{ reconciling === o.id ? "正在查单…" : "核实支付状态" }}
+              </button>
+              <button
+                v-if="o.status === 'pending'"
+                :disabled="busy"
+                @click="closeOrder(o)"
+              >
+                关闭订单
               </button>
               <p v-if="orderError[o.id]" role="alert" class="error small">
                 {{ orderError[o.id] }}
@@ -550,20 +768,33 @@ watch(
     </div>
     <Modal
       v-if="selected || charging || creating"
-      :title="selected ? '确认购买' : charging ? '充值钱包' : '新增套餐'"
+      :title="
+        selected
+          ? '确认购买'
+          : charging
+            ? '充值钱包'
+            : editingPlan
+              ? '编辑套餐'
+              : '新增套餐'
+      "
       :busy="busy"
       :dirty="charging || creating"
       @close="
         selected = null;
         charging = false;
         creating = false;
+        editingPlan = null;
       "
       ><form @submit.prevent="submit">
         <p v-if="formError" class="error" role="alert">{{ formError }}</p>
         <template v-if="selected"
           ><p>{{ selected.name }} · ¥ {{ money(selected.price_cents) }}</p>
           <p class="warning">
-            购买将立即开始新周期和有效期，替换当前权益。原有使用记录保留。
+            {{
+              selected.kind === "addon"
+                ? "叠加包增加当前周期配额，到期时间保持不变。"
+                : "购买将立即开始新周期和有效期，替换当前权益。原有使用记录保留。"
+            }}
           </p></template
         ><template v-else-if="charging"
           ><label
@@ -593,6 +824,11 @@ watch(
             创建订单不会增加余额，完成支付后由服务端确认到账。
           </p></template
         ><template v-else
+          ><label
+            >套餐类型<select v-model="planForm.kind" :disabled="!!editingPlan">
+              <option value="period">周期套餐</option>
+              <option value="addon">流量叠加包</option>
+            </select></label
           ><label>名称<input v-model="planForm.name" required /></label
           ><label
             >价格（分）<input
@@ -605,8 +841,47 @@ watch(
               v-model="planForm.quota_bytes"
               inputmode="numeric"
               pattern="[1-9][0-9]*"
-              required /></label
-          ><label
+              required
+          /></label>
+          <fieldset v-if="planForm.kind === 'period'">
+            <legend>套餐限制</legend>
+            <p class="small muted">
+              0 表示不限。规则数包含停用规则，按账号跨节点统计；连接、活跃 IP
+              和上下行合计带宽由同一账号在每个节点的所有规则共享。编辑仅影响后续购买或兑换。
+            </p>
+            <label
+              >账号规则总数<input
+                v-model.number="planForm.limits.max_rules"
+                type="number"
+                min="0"
+                max="100000"
+                required
+            /></label>
+            <label
+              >每节点最大连接数<input
+                v-model.number="planForm.limits.max_connections_per_node"
+                type="number"
+                min="0"
+                max="1000000"
+                required
+            /></label>
+            <label
+              >每节点活跃 IP 数<input
+                v-model.number="planForm.limits.max_ips_per_node"
+                type="number"
+                min="0"
+                max="1000000"
+                required
+            /></label>
+            <label
+              >每节点上下行合计（B/s）<input
+                v-model="planForm.limits.bytes_per_second_per_node"
+                inputmode="numeric"
+                pattern="[0-9]+"
+                required
+            /></label>
+          </fieldset>
+          <label v-if="planForm.kind === 'period'"
             >有效月数<input
               v-model.number="planForm.months"
               type="number"

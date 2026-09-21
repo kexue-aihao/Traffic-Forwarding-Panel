@@ -303,6 +303,8 @@ func TestRegistrationConfigAckProbeAndRestart(t *testing.T) {
 				t.Error("enrollment not sent")
 			}
 			json.NewEncoder(w).Encode(contract.Registered{NodeID: "registered-node", Token: "persisted-secret"})
+		case "/api/v1/agent/diagnostics":
+			json.NewEncoder(w).Encode(map[string]any{"diagnostic": nil})
 		case "/api/v1/agent/config":
 			json.NewEncoder(w).Encode(cfg)
 		case "/api/v1/agent/ack":

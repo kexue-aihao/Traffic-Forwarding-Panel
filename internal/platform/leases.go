@@ -15,6 +15,9 @@ import (
 // Allocation and publication share one transaction. Failures preserve the old
 // configuration and never create an unmetered rule.
 func (s *Server) refreshLeases(ctx context.Context, node string) error {
+	if err := s.refreshExits(ctx, node); err != nil {
+		return err
+	}
 	return s.Store.Write(ctx, storage.Critical, func(tx *sql.Tx) error {
 		rows, e := tx.QueryContext(ctx, s.q(`SELECT r.payload,g.payload,u.disabled,u.role FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
 		if e != nil {
@@ -50,13 +53,26 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 			return e
 		}
 		changed := false
+		policies := map[string]contract.ResourceLimits{}
 		for _, it := range items {
 			rule := it.rule
 			g := it.group
-			if !rule.Enabled || it.disabled != 0 || policyDenied(g, rule) || (it.role != "admin" && !contains(g.UserIDs, rule.UserID)) {
+			if rule.ExitUnavailable || !rule.Enabled || it.disabled != 0 || policyDenied(g, rule) || (it.role != "admin" && !contains(g.UserIDs, rule.UserID)) {
 				continue
 			}
-			valid := rule.Lease != nil && rule.Lease.ExpiresAt.After(time.Now())
+			limits, cached := policies[rule.UserID]
+			if !cached {
+				limits, e = s.accountLimits(ctx, tx, rule.UserID)
+				if e != nil {
+					return e
+				}
+				policies[rule.UserID] = limits
+			}
+			allowed, err := s.withinPlanRuleLimit(ctx, tx, rule, limits.MaxRules)
+			if err != nil {
+				return err
+			}
+			valid := allowed && rule.Lease != nil && rule.Lease.ExpiresAt.After(time.Now())
 			if valid {
 				var retired int
 				if e = tx.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_lease_retirements WHERE id=?`), rule.Lease.ID).Scan(&retired); e != nil {
@@ -78,13 +94,13 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 			}
 			oldLease := rule.Lease
 			rule.Lease = nil
-			if s.opts.Entitlements != nil {
+			if allowed && s.opts.Entitlements != nil {
 				if a, ok := s.opts.Entitlements.(interface {
 					AllocateWithMultiplier(context.Context, *sql.Tx, string, string, string, string) (*contract.Lease, error)
 				}); ok {
-					rule.Lease, e = a.AllocateWithMultiplier(ctx, tx, rule.UserID, rule.ID, node, g.Multiplier)
+					rule.Lease, e = a.AllocateWithMultiplier(ctx, tx, rule.UserID, rule.ID, node, leaseMultiplier(rule, g))
 				} else {
-					if g.Multiplier != "1" {
+					if leaseMultiplier(rule, g) != "1" {
 						return errors.New("multiplier allocator required")
 					}
 					rule.Lease, e = s.opts.Entitlements.Allocate(ctx, tx, rule.UserID, rule.ID, node)
@@ -181,4 +197,11 @@ func (s *Server) retireLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func leaseMultiplier(rule contract.Rule, g contract.Group) string {
+	if rule.ExitGroupID != "" {
+		return rule.BillingMultiplier
+	}
+	return g.Multiplier
 }

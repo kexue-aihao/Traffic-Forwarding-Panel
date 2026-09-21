@@ -104,7 +104,7 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &g) {
 		return
 	}
-	if strings.TrimSpace(g.Name) == "" || len(g.Name) > 190 || g.PortMin < 1 || g.PortMax > 65535 || g.PortMax < g.PortMin {
+	if strings.TrimSpace(g.Name) == "" || len(g.Name) > 190 || g.PortMin < 1 || g.PortMax > 65535 || g.PortMax < g.PortMin || g.MaxRules < 0 {
 		fail(w, 400, "invalid group name or port range")
 		return
 	}
@@ -206,6 +206,9 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 	reply(w, 200, map[string]any{"items": items, "total": total})
 }
 func redact(rule *contract.Rule) {
+	if rule.ExitGroupID != "" {
+		rule.Tunnel = nil
+	}
 	rule.Lease = nil
 	if rule.Tunnel != nil {
 		rule.Tunnel.Token = ""
@@ -248,6 +251,9 @@ func validateRule(rule contract.Rule) (int, error) {
 			return 0, e
 		}
 	}
+	if err := rule.ValidateAdvanced(); err != nil {
+		return 0, err
+	}
 	return port, nil
 }
 func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
@@ -265,119 +271,8 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 		rule.UserID = actor.ID
 	}
 	rule.Lease = nil
-	oldVersion := rule.Version
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
-		var old contract.Rule
-		if !create {
-			var payload string
-			var deleted int
-			if e := tx.QueryRowContext(r.Context(), s.q(`SELECT payload,deleted FROM cp_rules WHERE id=?`), rule.ID).Scan(&payload, &deleted); e != nil {
-				return e
-			}
-			if e := json.Unmarshal([]byte(payload), &old); e != nil {
-				return e
-			}
-			if deleted != 0 || old.Version != oldVersion || (actor.Role != "admin" && old.UserID != actor.ID) {
-				return errConflict
-			}
-			if rule.NodeID != old.NodeID || rule.GroupID != old.GroupID || rule.UserID != old.UserID || rule.Listen != old.Listen || rule.Network != old.Network {
-				return errors.New("listener, owner and placement are immutable; delete and recreate after ACK")
-			}
-			if rule.Tunnel != nil && old.Tunnel != nil {
-				if rule.Tunnel.Token == "" && rule.Transport == old.Transport && rule.Tunnel.Endpoint == old.Tunnel.Endpoint && rule.Tunnel.ServerName == old.Tunnel.ServerName {
-					rule.Tunnel.Token = old.Tunnel.Token
-				}
-				for i, hop := range rule.Tunnel.Chain {
-					if i < len(old.Tunnel.Chain) {
-						prior := old.Tunnel.Chain[i]
-						if hop.Token == "" && hop.Transport == prior.Transport && hop.Endpoint == prior.Endpoint && hop.ServerName == prior.ServerName {
-							rule.Tunnel.Chain[i].Token = prior.Token
-						}
-					}
-				}
-			}
-			rule.Lease = old.Lease
-		}
-		port, e := validateRule(rule)
-		if e != nil {
-			return e
-		}
-		var payload string
-		if e = tx.QueryRowContext(r.Context(), s.q(`SELECT g.payload FROM cp_groups g JOIN cp_node_groups ng ON ng.group_id=g.id WHERE g.id=? AND ng.node_id=?`), rule.GroupID, rule.NodeID).Scan(&payload); e != nil {
-			return errors.New("node not in group")
-		}
-		var g contract.Group
-		if e = json.Unmarshal([]byte(payload), &g); e != nil {
-			return e
-		}
-		if actor.Role != "admin" && !contains(g.UserIDs, actor.ID) {
-			return errors.New("group not authorized")
-		}
-		if port < g.PortMin || port > g.PortMax || policyDenied(g, rule) {
-			return errors.New("group policy denied")
-		}
-		for _, p := range rule.BlockedProtocols {
-			if !contains([]string{"http", "socks", "app:http", "app:socks"}, p) {
-				return errors.New("unsupported rule protocol policy")
-			}
-		}
-		rule.BlockedProtocols = applicationBlocks(rule.BlockedProtocols, nil)
-		if create {
-			rule.Version = 1
-		} else {
-			rule.Version = oldVersion + 1
-		}
-		if rule.Enabled && rule.Lease == nil {
-			if s.opts.Entitlements != nil {
-				if a, ok := s.opts.Entitlements.(interface {
-					AllocateWithMultiplier(context.Context, *sql.Tx, string, string, string, string) (*contract.Lease, error)
-				}); ok {
-					rule.Lease, e = a.AllocateWithMultiplier(r.Context(), tx, rule.UserID, rule.ID, rule.NodeID, g.Multiplier)
-				} else {
-					if g.Multiplier != "1" {
-						return errors.New("multiplier allocator required")
-					}
-					rule.Lease, e = s.opts.Entitlements.Allocate(r.Context(), tx, rule.UserID, rule.ID, rule.NodeID)
-				}
-			} else if actor.Role == "admin" && s.opts.AdminTestBytes > 0 {
-				rule.Lease = &contract.Lease{ID: id(), EntitlementID: "admin-test", ExpiresAt: time.Now().UTC().Add(24 * time.Hour), Bytes: s.opts.AdminTestBytes}
-			} else {
-				return errors.New("funded entitlement required")
-			}
-			if e != nil {
-				return e
-			}
-			if rule.Lease == nil || rule.Lease.Bytes <= 0 || !rule.Lease.ExpiresAt.After(time.Now()) || rule.Lease.ExpiresAt.After(time.Now().Add(24*time.Hour+time.Second)) {
-				return errors.New("invalid finite lease")
-			}
-			_, e = tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_rule_leases(id,rule_id,node_id,entitlement_id,bytes_allocated,bytes_used,expires_at) VALUES(?,?,?,?,?,0,?)`), rule.Lease.ID, rule.ID, rule.NodeID, rule.Lease.EntitlementID, rule.Lease.Bytes, rule.Lease.ExpiresAt.Unix())
-			if e != nil {
-				return e
-			}
-		}
-		if create {
-			_, e = tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_rules(id,user_id,node_id,group_id,payload,version,deleted,release_version) VALUES(?,?,?,?,?,?,0,0)`), rule.ID, rule.UserID, rule.NodeID, rule.GroupID, strJSON(rule), rule.Version)
-			if e != nil {
-				return e
-			}
-			_, e = tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_ports(node_id,network,port,rule_id) VALUES(?,?,?,?)`), rule.NodeID, rule.Network, port, rule.ID)
-			if e != nil {
-				return errors.New("physical machine port reserved (all IP addresses)")
-			}
-		} else {
-			res, err := tx.ExecContext(r.Context(), s.q(`UPDATE cp_rules SET payload=?,version=? WHERE id=? AND version=? AND deleted=0`), strJSON(rule), rule.Version, rule.ID, oldVersion)
-			if err != nil {
-				return err
-			}
-			n, _ := res.RowsAffected()
-			if n != 1 {
-				return errConflict
-			}
-		}
-		if _, e = tx.ExecContext(r.Context(), s.q(`UPDATE cp_nodes SET desired_version=desired_version+1 WHERE id=?`), rule.NodeID); e != nil {
-			return e
-		}
-		return s.AuditTx(r.Context(), tx, actor.ID, "rule.save", rule.ID)
+		return s.saveRuleTx(r.Context(), tx, actor, &rule, create)
 	})
 	if e != nil {
 		fail(w, 409, e.Error())
@@ -390,6 +285,163 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 	}
 	reply(w, status, rule)
 }
+func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User, rule *contract.Rule, create bool) error {
+	oldVersion := rule.Version
+	if err := s.lockRuleOwner(ctx, tx, rule.UserID); err != nil {
+		return err
+	}
+	var old contract.Rule
+	if !create {
+		var payload string
+		var deleted int
+		if e := tx.QueryRowContext(ctx, s.q(`SELECT payload,deleted FROM cp_rules WHERE id=?`), rule.ID).Scan(&payload, &deleted); e != nil {
+			return e
+		}
+		if e := json.Unmarshal([]byte(payload), &old); e != nil {
+			return e
+		}
+		if deleted != 0 || old.Version != oldVersion || (actor.Role != "admin" && old.UserID != actor.ID) {
+			return errConflict
+		}
+		if rule.NodeID != old.NodeID || rule.GroupID != old.GroupID || rule.UserID != old.UserID || rule.Listen != old.Listen || rule.Network != old.Network {
+			return errors.New("listener, owner and placement are immutable; delete and recreate after ACK")
+		}
+		if sharedParent(*rule) != sharedParent(old) {
+			return errors.New("shared TLS parent is immutable")
+		}
+		if rule.ExitGroupID == "" && old.ExitGroupID == "" && rule.Tunnel != nil && old.Tunnel != nil {
+			if rule.Tunnel.Token == "" && rule.Transport == old.Transport && rule.Tunnel.Endpoint == old.Tunnel.Endpoint && rule.Tunnel.ServerName == old.Tunnel.ServerName {
+				rule.Tunnel.Token = old.Tunnel.Token
+			}
+			for i, hop := range rule.Tunnel.Chain {
+				if i < len(old.Tunnel.Chain) {
+					prior := old.Tunnel.Chain[i]
+					if hop.Token == "" && hop.Transport == prior.Transport && hop.Endpoint == prior.Endpoint && hop.ServerName == prior.ServerName {
+						rule.Tunnel.Chain[i].Token = prior.Token
+					}
+				}
+			}
+		}
+		rule.Lease = old.Lease
+	}
+	exitMultiplier, e := s.resolveExitTx(ctx, tx, rule)
+	if e != nil {
+		return e
+	}
+	rule.ExitUnavailable = false
+	port, e := validateRule(*rule)
+	if e != nil {
+		return e
+	}
+	var payload string
+	groupQuery := `SELECT g.payload FROM cp_groups g WHERE g.id=? AND EXISTS(SELECT 1 FROM cp_node_groups ng WHERE ng.group_id=g.id AND ng.node_id=?)`
+	if s.Store.Dialect != "sqlite" {
+		groupQuery += " FOR UPDATE"
+	}
+	if e = tx.QueryRowContext(ctx, s.q(groupQuery), rule.GroupID, rule.NodeID).Scan(&payload); e != nil {
+		return errors.New("node not in group")
+	}
+	var g contract.Group
+	if e = json.Unmarshal([]byte(payload), &g); e != nil {
+		return e
+	}
+	if actor.Role != "admin" && !contains(g.UserIDs, actor.ID) {
+		return errors.New("group not authorized")
+	}
+	previousMultiplier := old.BillingMultiplier
+	rule.BillingMultiplier, e = effectiveMultiplier(g.Multiplier, exitMultiplier)
+	if e != nil {
+		return e
+	}
+	if !create && (previousMultiplier != rule.BillingMultiplier || old.ExitGroupID != rule.ExitGroupID || old.SelectedExitID != rule.SelectedExitID) {
+		rule.Lease = nil
+	}
+	if create {
+		if e = s.checkRuleLimit(ctx, tx, rule.UserID, g); e != nil {
+			return e
+		}
+	}
+	if port < g.PortMin || port > g.PortMax || policyDenied(g, *rule) {
+		return errors.New("group policy denied")
+	}
+	for _, p := range rule.BlockedProtocols {
+		if !contains([]string{"http", "socks", "app:http", "app:socks"}, p) {
+			return errors.New("unsupported rule protocol policy")
+		}
+	}
+	rule.BlockedProtocols = applicationBlocks(rule.BlockedProtocols, nil)
+	if e = s.validateSharedTx(ctx, tx, *rule); e != nil {
+		return e
+	}
+	if rule.Enabled {
+		supported, err := s.resourceCapabilities(ctx, tx, *rule)
+		if err != nil {
+			return err
+		}
+		if !supported {
+			return errors.New("upgrade Agent to enforce plan limits before enabling this rule")
+		}
+	}
+	if create {
+		rule.Version = 1
+	} else {
+		rule.Version = oldVersion + 1
+	}
+	if rule.Enabled && rule.Lease == nil {
+		if s.opts.Entitlements != nil {
+			if a, ok := s.opts.Entitlements.(interface {
+				AllocateWithMultiplier(context.Context, *sql.Tx, string, string, string, string) (*contract.Lease, error)
+			}); ok {
+				rule.Lease, e = a.AllocateWithMultiplier(ctx, tx, rule.UserID, rule.ID, rule.NodeID, rule.BillingMultiplier)
+			} else {
+				if rule.BillingMultiplier != "1" {
+					return errors.New("multiplier allocator required")
+				}
+				rule.Lease, e = s.opts.Entitlements.Allocate(ctx, tx, rule.UserID, rule.ID, rule.NodeID)
+			}
+		} else if actor.Role == "admin" && s.opts.AdminTestBytes > 0 {
+			rule.Lease = &contract.Lease{ID: id(), EntitlementID: "admin-test", ExpiresAt: time.Now().UTC().Add(24 * time.Hour), Bytes: s.opts.AdminTestBytes}
+		} else {
+			return errors.New("funded entitlement required")
+		}
+		if e != nil {
+			return e
+		}
+		if rule.Lease == nil || rule.Lease.Bytes <= 0 || !rule.Lease.ExpiresAt.After(time.Now()) || rule.Lease.ExpiresAt.After(time.Now().Add(24*time.Hour+time.Second)) {
+			return errors.New("invalid finite lease")
+		}
+		_, e = tx.ExecContext(ctx, s.q(`INSERT INTO cp_rule_leases(id,rule_id,node_id,entitlement_id,bytes_allocated,bytes_used,expires_at) VALUES(?,?,?,?,?,0,?)`), rule.Lease.ID, rule.ID, rule.NodeID, rule.Lease.EntitlementID, rule.Lease.Bytes, rule.Lease.ExpiresAt.Unix())
+		if e != nil {
+			return e
+		}
+	}
+	if create {
+		_, e = tx.ExecContext(ctx, s.q(`INSERT INTO cp_rules(id,user_id,node_id,group_id,payload,version,deleted,release_version) VALUES(?,?,?,?,?,?,0,0)`), rule.ID, rule.UserID, rule.NodeID, rule.GroupID, strJSON(rule), rule.Version)
+		if e != nil {
+			return e
+		}
+		if sharedParent(*rule) == "" {
+			_, e = tx.ExecContext(ctx, s.q(`INSERT INTO cp_ports(node_id,network,port,rule_id) VALUES(?,?,?,?)`), rule.NodeID, rule.Network, port, rule.ID)
+			if e != nil {
+				return errors.New("physical machine port reserved (all IP addresses)")
+			}
+		}
+	} else {
+		res, err := tx.ExecContext(ctx, s.q(`UPDATE cp_rules SET payload=?,version=? WHERE id=? AND version=? AND deleted=0`), strJSON(rule), rule.Version, rule.ID, oldVersion)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n != 1 {
+			return errConflict
+		}
+	}
+	if _, e = tx.ExecContext(ctx, s.q(`UPDATE cp_nodes SET desired_version=desired_version+1 WHERE id=?`), rule.NodeID); e != nil {
+		return e
+	}
+	return s.AuditTx(ctx, tx, actor.ID, "rule.save", rule.ID)
+}
+
 func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 	actor, _ := UserFromContext(r.Context())
 	version, e := strconv.ParseInt(r.URL.Query().Get("version"), 10, 64)
@@ -404,6 +456,9 @@ func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 		}
 		if actor.Role != "admin" && actor.ID != owner {
 			return errConflict
+		}
+		if err := s.validateSharedTx(r.Context(), tx, contract.Rule{ID: r.PathValue("id"), NodeID: node}); err != nil {
+			return err
 		}
 		if _, e := tx.ExecContext(r.Context(), s.q(`UPDATE cp_nodes SET desired_version=desired_version+1 WHERE id=?`), node); e != nil {
 			return e
@@ -427,4 +482,124 @@ func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func (s *Server) diagnoseRule(w http.ResponseWriter, r *http.Request) {
+	actor, _ := UserFromContext(r.Context())
+	var owner, nodeID, rulePayload, applyError string
+	var desired, applied, lastSeen int64
+	if err := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT r.user_id,r.node_id,r.payload,n.desired_version,n.applied_version,n.apply_error,n.last_seen FROM cp_rules r JOIN cp_nodes n ON n.id=r.node_id WHERE r.id=? AND r.deleted=0`), r.PathValue("id")).Scan(&owner, &nodeID, &rulePayload, &desired, &applied, &applyError, &lastSeen); err != nil {
+		fail(w, 404, "rule not found")
+		return
+	}
+	if actor.Role != "admin" && actor.ID != owner {
+		fail(w, 404, "rule not found")
+		return
+	}
+	var rule contract.Rule
+	if json.Unmarshal([]byte(rulePayload), &rule) != nil {
+		fail(w, 500, "diagnostic unavailable")
+		return
+	}
+	now := time.Now().UTC()
+	checks := []map[string]any{}
+	add := func(name string, ok bool, detail string) {
+		checks = append(checks, map[string]any{"name": name, "ok": ok, "detail": detail})
+	}
+	var disabled, membership int
+	if err := s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT disabled FROM cp_users WHERE id=?"), owner).Scan(&disabled); err != nil {
+		fail(w, 500, "diagnostic unavailable")
+		return
+	}
+	if err := s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT COUNT(*) FROM cp_group_users WHERE user_id=? AND group_id=?"), owner, rule.GroupID).Scan(&membership); err != nil {
+		fail(w, 500, "diagnostic unavailable")
+		return
+	}
+	add("account", disabled == 0, "account enabled")
+	add("group_authorization", membership > 0 || actor.Role == "admin", "current group membership")
+	add("enabled", rule.Enabled, "rule enabled")
+	var supported, withinLimit bool
+	err := s.Store.Write(r.Context(), storage.Background, func(tx *sql.Tx) error {
+		var err error
+		supported, err = s.resourceCapabilities(r.Context(), tx, rule)
+		if err != nil {
+			return err
+		}
+		limits, err := s.accountLimits(r.Context(), tx, owner)
+		if err != nil {
+			return err
+		}
+		withinLimit, err = s.withinPlanRuleLimit(r.Context(), tx, rule, limits.MaxRules)
+		return err
+	})
+	if err != nil {
+		fail(w, 500, "diagnostic unavailable")
+		return
+	}
+	add("plan_rule_limit", withinLimit, "rule eligible within current plan limit")
+	add("agent_limits_capability", supported, "Agent must support current plan limits")
+	lastSeenAt := time.Unix(lastSeen, 0).UTC()
+	add("node_online", lastSeen > 0 && now.Sub(lastSeenAt) <= 90*time.Second, lastSeenAt.Format(time.RFC3339))
+	add("configuration_ack", desired == applied && applyError == "", map[bool]string{true: "applied", false: "pending or failed"}[desired == applied && applyError == ""])
+	leaseOK := rule.Lease != nil && rule.Lease.ExpiresAt.After(now)
+	leaseDetail := "missing or expired"
+	if rule.Lease != nil {
+		leaseDetail = rule.Lease.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	add("lease", leaseOK, leaseDetail)
+	if actor.Role != "admin" && applyError != "" {
+		applyError = "node reported a configuration error"
+	}
+	add("agent_error", applyError == "", applyError)
+	reply(w, 200, map[string]any{"rule_id": rule.ID, "node_id": nodeID, "desired_version": desired, "applied_version": applied, "checks": checks, "generated_at": now})
+}
+
+// Callers hold the group row lock. A locking read avoids stale MySQL snapshots.
+func (s *Server) checkRuleLimit(ctx context.Context, tx *sql.Tx, user string, group contract.Group) error {
+	limits, err := s.accountLimits(ctx, tx, user)
+	if err != nil {
+		return err
+	}
+	if limits.MaxRules > 0 {
+		q := "SELECT id FROM cp_rules WHERE user_id=? AND deleted=0"
+		if s.Store.Dialect != "sqlite" {
+			q += " FOR UPDATE"
+		}
+		rows, err := tx.QueryContext(ctx, s.q(q), user)
+		if err != nil {
+			return err
+		}
+		count := 0
+		for rows.Next() {
+			count++
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if count >= limits.MaxRules {
+			return errors.New("plan rule limit reached")
+		}
+	}
+	if group.MaxRules <= 0 {
+		return nil
+	}
+	q := "SELECT id FROM cp_rules WHERE user_id=? AND group_id=? AND deleted=0"
+	if s.Store.Dialect != "sqlite" {
+		q += " FOR UPDATE"
+	}
+	rows, err := tx.QueryContext(ctx, s.q(q), user, group.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		count++
+		if count >= group.MaxRules {
+			return errors.New("rule limit reached")
+		}
+	}
+	return rows.Err()
 }

@@ -181,6 +181,17 @@ nav a:hover {
   font-size: 12px;
   letter-spacing: 0;
 }
+.toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.toggle-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
 .intro {
   margin-top: 16px;
   min-height: 190px;
@@ -558,3 +569,17 @@ summary {
     border-width: 2px;
   }
 }
+
+.operation-result { max-height: 24rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-row { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; padding-block: .5rem; }
+ .terminal-output {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: 13px/1.6 ui-monospace, monospace;
+ }
+ .operation-item { margin-block: 16px; }

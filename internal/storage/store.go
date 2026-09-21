@@ -206,14 +206,18 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 		defer conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock(821736501)")
 	case "mysql":
+		lockName, e := mysqlMigrationLock(ctx, conn, "cp")
+		if e != nil {
+			return e
+		}
 		var locked int
-		if err = conn.QueryRowContext(ctx, "SELECT GET_LOCK('tfp_schema', 20)").Scan(&locked); err != nil {
+		if err = conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 20)", lockName).Scan(&locked); err != nil {
 			return err
 		}
 		if locked != 1 {
 			return errors.New("migration lock unavailable")
 		}
-		defer conn.ExecContext(context.Background(), "SELECT RELEASE_LOCK('tfp_schema')")
+		defer conn.ExecContext(context.Background(), "SELECT RELEASE_LOCK(?)", lockName)
 	case "sqlite":
 		if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 			return err
@@ -274,6 +278,68 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=3").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		for _, statement := range []string{`CREATE TABLE IF NOT EXISTS cp_tasks(id VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,kind VARCHAR(32) NOT NULL,status VARCHAR(32) NOT NULL,payload TEXT NOT NULL,result TEXT NOT NULL,error TEXT NOT NULL,created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL,cancel_requested INTEGER NOT NULL DEFAULT 0,claim_token VARCHAR(64) NOT NULL,payload_hash VARCHAR(64) NOT NULL,requires_admin INTEGER NOT NULL,idempotency_key VARCHAR(128) NOT NULL,UNIQUE(user_id,idempotency_key))`,
+			`CREATE TABLE IF NOT EXISTS cp_task_items(task_id VARCHAR(64) NOT NULL,item_index INTEGER NOT NULL,result TEXT NOT NULL,PRIMARY KEY(task_id,item_index))`} {
+			if s.Dialect == "mysql" {
+				statement = strings.ReplaceAll(statement, " TEXT", " LONGTEXT")
+			}
+			if _, err = conn.ExecContext(ctx, statement); err != nil {
+				return err
+			}
+		}
+		if err = EnsureIndex(ctx, conn, s.Dialect, "cp_tasks", "cp_tasks_user", "user_id,status,created_at", false); err != nil {
+			return err
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(3)"); err != nil {
+			return err
+		}
+	}
+
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=4").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		for _, idx := range []struct{ table, name, columns string }{
+			{"cp_exits", "cp_exits_group", "group_id,id"},
+			{"cp_diagnostics", "cp_diagnostics_due", "node_id,status,created_at"},
+			{"cp_captchas", "cp_captcha_expiry", "expires_at"},
+		} {
+			if err = EnsureIndex(ctx, conn, s.Dialect, idx.table, idx.name, idx.columns, false); err != nil {
+				return err
+			}
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(4)"); err != nil {
+			return err
+		}
+	}
+
+	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS cp_terminal_commands(id VARCHAR(64) PRIMARY KEY,operation_id VARCHAR(64) NOT NULL,command TEXT NOT NULL,created_at BIGINT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS cp_operation_access(token_hash VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,node_id VARCHAR(64) NOT NULL,session_hash VARCHAR(64) NOT NULL,expires_at BIGINT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS cp_node_operations(id VARCHAR(64) PRIMARY KEY,node_id VARCHAR(64) NOT NULL,user_id VARCHAR(64) NOT NULL,kind VARCHAR(32) NOT NULL,status VARCHAR(32) NOT NULL,payload TEXT NOT NULL,payload_hash VARCHAR(64) NOT NULL,claim_token VARCHAR(64) NOT NULL,access_hash VARCHAR(64) NOT NULL,idempotency_key VARCHAR(128) NOT NULL,error TEXT NOT NULL,created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL,expires_at BIGINT NOT NULL,UNIQUE(user_id,idempotency_key))`,
+	} {
+		if s.Dialect == "mysql" {
+			statement = strings.ReplaceAll(statement, " TEXT", " LONGTEXT")
+		}
+		if _, err = conn.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	if err = EnsureIndex(ctx, conn, s.Dialect, "cp_node_operations", "cp_node_operations_pending", "node_id,status,created_at", false); err != nil {
+		return err
+	}
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=4").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(4)"); err != nil {
+			return err
+		}
+	}
 	if s.Dialect == "sqlite" {
 		_, err = conn.ExecContext(ctx, "COMMIT")
 	}
@@ -281,6 +347,11 @@ func (s *Store) migrate(ctx context.Context) error {
 }
 
 var schema = []string{
+	`CREATE TABLE IF NOT EXISTS cp_diagnostics(id VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,node_id VARCHAR(64) NOT NULL,rule_id VARCHAR(64) NOT NULL,payload TEXT NOT NULL,status VARCHAR(16) NOT NULL,claim_token VARCHAR(64) NOT NULL,created_at BIGINT NOT NULL,claimed_at BIGINT NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS cp_site_settings(id INTEGER PRIMARY KEY,payload TEXT NOT NULL,version BIGINT NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS cp_captchas(id VARCHAR(64) PRIMARY KEY,answer_hash VARCHAR(64) NOT NULL,expires_at BIGINT NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS cp_registration_invites(token_hash VARCHAR(64) PRIMARY KEY,expires_at BIGINT NOT NULL,used_by VARCHAR(64) NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS cp_exits(id VARCHAR(64) PRIMARY KEY,group_id VARCHAR(64) NOT NULL,node_id VARCHAR(64) NOT NULL,payload TEXT NOT NULL,version BIGINT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS cp_schema(version INTEGER PRIMARY KEY)`,
 	`CREATE TABLE IF NOT EXISTS cp_users(id VARCHAR(64) PRIMARY KEY, username VARCHAR(190) NOT NULL UNIQUE, password_hash VARCHAR(190) NOT NULL, role VARCHAR(32) NOT NULL, disabled INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS cp_sessions(token_hash VARCHAR(64) PRIMARY KEY, user_id VARCHAR(64) NOT NULL, expires_at BIGINT NOT NULL, FOREIGN KEY(user_id) REFERENCES cp_users(id))`,

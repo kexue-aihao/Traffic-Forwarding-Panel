@@ -31,16 +31,20 @@ type Options struct {
 	SecureCookies  bool
 	AdminTestBytes int64
 	Entitlements   Entitlements
+	ResourceLimits func(context.Context, *sql.Tx, string) (contract.ResourceLimits, error)
 	LeaseCurrent   func(context.Context, *sql.Tx, string, *contract.Lease) (bool, error)
 	RetireLease    func(context.Context, *sql.Tx, string, string, int64) error
 }
 type Server struct {
-	Store   *storage.Store
-	opts    Options
-	mu      sync.RWMutex
-	probes  map[string]contract.Probe
-	limits  map[string]limit
-	history *probeHistory
+	Store      *storage.Store
+	opts       Options
+	mu         sync.RWMutex
+	probes     map[string]contract.Probe
+	limits     map[string]limit
+	history    *probeHistory
+	taskMu     sync.Mutex
+	terminalMu sync.Mutex
+	terminals  map[string]*terminalBridge
 }
 type limit struct {
 	since time.Time
@@ -49,7 +53,7 @@ type limit struct {
 type userKey struct{}
 
 func New(s *storage.Store, o Options) *Server {
-	return &Server{Store: s, opts: o, probes: map[string]contract.Probe{}, limits: map[string]limit{}, history: newProbeHistory(time.Now())}
+	return &Server{Store: s, opts: o, probes: map[string]contract.Probe{}, limits: map[string]limit{}, history: newProbeHistory(time.Now()), terminals: map[string]*terminalBridge{}}
 }
 func UserFromContext(ctx context.Context) (contract.User, bool) {
 	u, ok := ctx.Value(userKey{}).(contract.User)
@@ -212,10 +216,21 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		CaptchaID     string `json:"captcha_id"`
+		CaptchaAnswer string `json:"captcha_answer"`
 	}
 	if !decode(w, r, &in) {
+		return
+	}
+	settings, err := s.SiteSettings(r.Context())
+	if err != nil {
+		fail(w, 503, "site settings unavailable")
+		return
+	}
+	if settings.Captcha && !s.verifyCaptcha(r.Context(), in.CaptchaID, in.CaptchaAnswer) {
+		fail(w, 400, "invalid or expired captcha")
 		return
 	}
 	var u contract.User
@@ -257,6 +272,18 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 func (s *Server) Register(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/rules/{id}/network-diagnostic", s.RequireUser(s.createDiagnostic))
+	mux.HandleFunc("GET /api/v1/diagnostics/{id}", s.RequireUser(s.diagnostic))
+	mux.HandleFunc("POST /api/v1/agent/diagnostics", s.agent(s.claimDiagnostic))
+	mux.HandleFunc("POST /api/v1/agent/diagnostics/result", s.agent(s.finishDiagnostic))
+	mux.HandleFunc("GET /api/v1/site", s.site)
+	mux.HandleFunc("PUT /api/v1/site", s.admin(s.saveSite))
+	mux.HandleFunc("GET /api/v1/auth/captcha", s.captcha)
+	mux.HandleFunc("POST /api/v1/auth/register", s.registerUser)
+	mux.HandleFunc("POST /api/v1/registration-invites", s.admin(s.registrationInvite))
+	mux.HandleFunc("GET /api/v1/exits", s.RequireUser(s.exits))
+	mux.HandleFunc("POST /api/v1/exits", s.admin(s.saveExit))
+	mux.HandleFunc("PUT /api/v1/exits/{id}", s.admin(s.saveExit))
 	mux.HandleFunc("GET /api/v1/auth/tokens", s.RequireUser(s.listTokens))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/rotate-token", s.admin(s.rotateNodeToken))
 	mux.HandleFunc("POST /api/v1/agent/leases/retire", s.agent(s.retireLease))
@@ -290,15 +317,32 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/rules", s.RequireUser(s.saveRule))
 	mux.HandleFunc("PUT /api/v1/rules/{id}", s.RequireUser(s.saveRule))
 	mux.HandleFunc("DELETE /api/v1/rules/{id}", s.RequireUser(s.deleteRule))
+	mux.HandleFunc("GET /api/v1/rules/{id}/diagnose", s.RequireUser(s.diagnoseRule))
 	mux.HandleFunc("GET /api/v1/probes", s.RequireUser(s.probeList))
 	mux.HandleFunc("GET /api/v1/probes/{node_id}/history", s.RequireUser(s.probeHistoryList))
 	mux.HandleFunc("GET /api/v1/probes/events", s.RequireUser(s.probeEvents))
 	mux.HandleFunc("GET /api/v1/audit", s.admin(s.audit))
+	mux.HandleFunc("POST /api/v1/tasks/rules/export", s.RequireUser(s.createExportTask))
+	mux.HandleFunc("POST /api/v1/tasks/rules/preview", s.RequireUser(s.previewImport))
+	mux.HandleFunc("POST /api/v1/tasks/rules/import", s.RequireUser(s.createImportTask))
+	mux.HandleFunc("GET /api/v1/tasks", s.RequireUser(s.tasks))
+	mux.HandleFunc("GET /api/v1/tasks/{id}", s.RequireUser(s.task))
+	mux.HandleFunc("POST /api/v1/tasks/{id}/cancel", s.RequireUser(s.cancelTask))
 	mux.HandleFunc("POST /api/v1/agent/register", s.registerNode)
 	mux.HandleFunc("GET /api/v1/agent/config", s.agent(s.config))
 	mux.HandleFunc("POST /api/v1/agent/ack", s.agent(s.ack))
 	mux.HandleFunc("POST /api/v1/agent/probe", s.agent(s.probe))
 	mux.HandleFunc("POST /api/v1/agent/usage", s.agent(s.usage))
+	mux.HandleFunc("POST /api/v1/agent/control", s.agent(s.agentControl))
+	mux.HandleFunc("POST /api/v1/agent/control/result", s.agent(s.agentControlResult))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/operation-access", s.operationsAdmin(s.operationAccess))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/terminal", s.operationsAdmin(s.createTerminal))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/upgrade", s.operationsAdmin(s.createUpgrade))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/operations", s.operationsAdmin(s.nodeOperations))
+	mux.HandleFunc("POST /api/v1/node-operations/{id}/cancel", s.operationsAdmin(s.cancelOperation))
+	mux.HandleFunc("GET /api/v1/node-operations/{id}/terminal", s.operationsAdmin(s.browserTerminal))
+	mux.HandleFunc("GET /api/v1/node-operations/{id}/commands", s.operationsAdmin(s.terminalCommands))
+	mux.HandleFunc("GET /api/v1/agent/control/{id}/terminal", s.agent(s.agentTerminal))
 }
 func pages(r *http.Request) (int, int) {
 	p, _ := strconv.Atoi(r.URL.Query().Get("page"))

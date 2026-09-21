@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type HTTPOptions struct {
@@ -90,6 +91,27 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 			fn(w, r, u)
 		}
 	}
+	mux.HandleFunc("GET /api/v1/purchases/{id}/funding", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		rows, err := s.PurchaseFunding(r.Context(), u.ID, r.PathValue("id"), u.Role == "admin")
+		send(w, map[string]any{"items": rows}, err)
+	}))
+	mux.HandleFunc("POST /api/v1/purchases/{id}/refund", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "administrator required", 403)
+			return
+		}
+		var in struct {
+			Amount int64  `json:"amount_cents,string"`
+			Key    string `json:"idempotency_key"`
+			Reason string `json:"reason"`
+		}
+		if err := decode(w, r, &in); err != nil {
+			send(w, nil, err)
+			return
+		}
+		v, err := s.RefundPurchase(r.Context(), u.ID, r.PathValue("id"), in.Key, in.Reason, in.Amount)
+		send(w, v, err)
+	}))
 	mux.HandleFunc("GET /api/v1/plans", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
 		page, size := commercePage(r)
 		v, total, e := s.PlansPage(r.Context(), page, size)
@@ -107,6 +129,20 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		}
 		v, e := s.CreatePlan(r.Context(), p)
 		send(w, v, e)
+	}))
+	mux.HandleFunc("PATCH /api/v1/plans/{id}", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		var in struct {
+			Active bool `json:"active"`
+		}
+		if e := decode(w, r, &in); e != nil {
+			send(w, nil, e)
+			return
+		}
+		send(w, map[string]any{"id": r.PathValue("id"), "active": in.Active}, s.SetPlanActive(r.Context(), r.PathValue("id"), in.Active))
 	}))
 	mux.HandleFunc("GET /api/v1/wallet", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
 		v, e := s.Wallet(r.Context(), u.ID)
@@ -146,6 +182,47 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		v, e := s.ReconcileOrder(r.Context(), u.ID, r.PathValue("id"), o.Channels)
 		send(w, v, e)
 	}))
+	mux.HandleFunc("POST /api/v1/orders/{id}/close", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		v, e := s.CloseOrder(r.Context(), u.ID, r.PathValue("id"))
+		send(w, v, e)
+	}))
+	mux.HandleFunc("POST /api/v1/orders/{id}/refund", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		var in struct {
+			Amount int64  `json:"amount_cents,string"`
+			Key    string `json:"idempotency_key"`
+			Reason string `json:"reason"`
+		}
+		if e := decode(w, r, &in); e != nil {
+			send(w, nil, e)
+			return
+		}
+		v, e := s.RequestRefund(r.Context(), u.ID, r.PathValue("id"), in.Key, in.Reason, in.Amount)
+		send(w, v, e)
+	}))
+	mux.HandleFunc("POST /api/v1/refunds/{id}/resolve", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		var in struct {
+			Completed bool   `json:"completed"`
+			Evidence  string `json:"evidence"`
+		}
+		if e := decode(w, r, &in); e != nil {
+			send(w, nil, e)
+			return
+		}
+		v, e := s.ResolveRefund(r.Context(), u.ID, r.PathValue("id"), in.Evidence, in.Completed)
+		send(w, v, e)
+	}))
+	mux.HandleFunc("GET /api/v1/orders/{id}/refunds", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		v, e := s.Refunds(r.Context(), u.ID, r.PathValue("id"), u.Role == "admin")
+		send(w, map[string]any{"items": v}, e)
+	}))
 	mux.HandleFunc("GET /api/v1/entitlement", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
 		v, e := s.Entitlement(r.Context(), u.ID)
 		if errors.Is(e, sql.ErrNoRows) {
@@ -156,16 +233,217 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 	}))
 	mux.HandleFunc("POST /api/v1/purchases", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
 		var p struct {
-			Plan    string `json:"plan_id"`
-			Version int64  `json:"expected_version"`
-			Key     string `json:"idempotency_key"`
+			Plan        string `json:"plan_id"`
+			Version     int64  `json:"expected_version"`
+			PlanVersion int64  `json:"expected_plan_version"`
+			Key         string `json:"idempotency_key"`
 		}
 		if e := decode(w, r, &p); e != nil {
 			send(w, nil, e)
 			return
 		}
-		v, e := s.Purchase(r.Context(), u.ID, p.Plan, p.Key, p.Version)
+		v, e := s.PurchaseQuote(r.Context(), u.ID, p.Plan, p.Key, p.Version, p.PlanVersion)
 		send(w, v, e)
+	}))
+	mux.HandleFunc("PUT /api/v1/plans/{id}", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		var p Plan
+		if err := decode(w, r, &p); err != nil {
+			send(w, nil, err)
+			return
+		}
+		p.ID = r.PathValue("id")
+		v, e := s.UpdatePlan(r.Context(), p)
+		send(w, v, e)
+	}))
+	mux.HandleFunc("POST /api/v1/addon-purchases", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		var p struct {
+			Plan        string `json:"plan_id"`
+			Key         string `json:"idempotency_key"`
+			Version     int64  `json:"expected_version"`
+			PlanVersion int64  `json:"expected_plan_version"`
+		}
+		if err := decode(w, r, &p); err != nil {
+			send(w, nil, err)
+			return
+		}
+		v, e := s.PurchaseAddon(r.Context(), u.ID, p.Plan, p.Key, p.Version, p.PlanVersion)
+		send(w, v, e)
+	}))
+	mux.HandleFunc("GET /api/v1/purchases", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		v, e := s.PurchaseHistory(r.Context(), u.ID)
+		send(w, map[string]any{"items": v}, e)
+	}))
+	mux.HandleFunc("GET /api/v1/auto-renew", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		v, e := s.AutoRenewStatus(r.Context(), u.ID)
+		send(w, v, e)
+	}))
+	mux.HandleFunc("POST /api/v1/auto-renew", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		var in struct {
+			Enabled bool   `json:"enabled"`
+			PlanID  string `json:"plan_id"`
+		}
+		if e := decode(w, r, &in); e != nil {
+			send(w, nil, e)
+			return
+		}
+		if !in.Enabled {
+			in.PlanID = ""
+		}
+		e := s.SetAutoRenew(r.Context(), u.ID, in.PlanID, in.Enabled)
+		send(w, map[string]any{"enabled": in.Enabled, "plan_id": in.PlanID}, e)
+	}))
+	mux.HandleFunc("GET /api/v1/redeem-codes", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		v, e := s.RedeemCodes(r.Context())
+		send(w, map[string]any{"items": v}, e)
+	}))
+	mux.HandleFunc("DELETE /api/v1/redeem-codes/{id}", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		send(w, nil, s.RevokeRedeemCode(r.Context(), r.PathValue("id")))
+	}))
+	mux.HandleFunc("GET /api/v1/commission-policy", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		rate, e := s.CommissionRate(r.Context())
+		send(w, map[string]any{"rate_bps": rate}, e)
+	}))
+	mux.HandleFunc("POST /api/v1/commissions/{id}/resolve", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		var in struct {
+			Action string `json:"action"`
+			Reason string `json:"reason"`
+		}
+		if e := decode(w, r, &in); e != nil {
+			send(w, nil, e)
+			return
+		}
+		send(w, nil, s.ResolveCommission(r.Context(), u.ID, r.PathValue("id"), in.Action, in.Reason))
+	}))
+	mux.HandleFunc("POST /api/v1/redeem-codes", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		var in struct {
+			Amount  int64      `json:"amount_cents,string"`
+			PlanID  string     `json:"plan_id"`
+			MaxUses int64      `json:"max_uses"`
+			Expires *time.Time `json:"expires_at"`
+		}
+		if e := decode(w, r, &in); e != nil {
+			send(w, nil, e)
+			return
+		}
+		v, plain, e := s.CreateRedeemCode(r.Context(), in.Amount, in.PlanID, in.MaxUses, in.Expires)
+		if e == nil {
+			m := map[string]any{"id": v.ID, "code": plain, "code_hint": v.CodeHint, "amount_cents": strconv.FormatInt(v.Amount, 10), "plan_id": v.PlanID, "max_uses": v.MaxUses, "expires_at": v.ExpiresAt}
+			send(w, m, nil)
+			return
+		}
+		send(w, nil, e)
+	}))
+	mux.HandleFunc("POST /api/v1/redeem", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		var in struct {
+			Code string `json:"code"`
+		}
+		if e := decode(w, r, &in); e != nil {
+			send(w, nil, e)
+			return
+		}
+		v, e := s.RedeemCode(r.Context(), u.ID, in.Code)
+		send(w, v, e)
+	}))
+	mux.HandleFunc("POST /api/v1/referrals", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		v, plain, e := s.CreateReferralCode(r.Context(), u.ID)
+		if e == nil {
+			send(w, map[string]any{"code": plain, "code_hint": v.CodeHint, "created_at": v.CreatedAt}, nil)
+			return
+		}
+		send(w, nil, e)
+	}))
+	mux.HandleFunc("POST /api/v1/referrals/bind", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		var in struct {
+			Code string `json:"code"`
+		}
+		if e := decode(w, r, &in); e != nil {
+			send(w, nil, e)
+			return
+		}
+		send(w, map[string]any{"bound": true}, s.BindReferral(r.Context(), u.ID, in.Code))
+	}))
+	mux.HandleFunc("PUT /api/v1/commission-policy", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		var in struct {
+			Rate int64 `json:"rate_bps"`
+		}
+		if e := decode(w, r, &in); e != nil {
+			send(w, nil, e)
+			return
+		}
+		send(w, in, s.SetCommissionRate(r.Context(), in.Rate))
+	}))
+	mux.HandleFunc("GET /api/v1/commissions", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		v, e := s.Commissions(r.Context(), u.ID)
+		send(w, map[string]any{"items": v}, e)
+	}))
+	mux.HandleFunc("POST /api/v1/webhooks", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		var in struct {
+			Format string   `json:"format"`
+			URL    string   `json:"url"`
+			Events []string `json:"events"`
+		}
+		if e := decode(w, r, &in); e != nil {
+			send(w, nil, e)
+			return
+		}
+		v, secret, e := s.CreateNotification(r.Context(), u.ID, in.URL, in.Events, u.Role == "admin", in.Format)
+		if e == nil {
+			send(w, map[string]any{"id": v.ID, "url": v.URL, "events": v.Events, "secret": secret, "created_at": v.CreatedAt}, nil)
+			return
+		}
+		send(w, nil, e)
+	}))
+	mux.HandleFunc("GET /api/v1/webhooks", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		v, e := s.ListWebhooks(r.Context(), u.ID)
+		send(w, map[string]any{"items": v}, e)
+	}))
+	mux.HandleFunc("PUT /api/v1/webhooks/{id}", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		var in WebhookSettings
+		if err := decode(w, r, &in); err != nil {
+			send(w, nil, err)
+			return
+		}
+		send(w, nil, s.UpdateWebhook(r.Context(), u.ID, r.PathValue("id"), in))
+	}))
+	mux.HandleFunc("DELETE /api/v1/webhooks/{id}", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		send(w, nil, s.DeleteWebhook(r.Context(), u.ID, r.PathValue("id")))
+	}))
+	mux.HandleFunc("GET /api/v1/webhook-deliveries", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		v, e := s.WebhookDeliveries(r.Context(), u.ID)
+		send(w, map[string]any{"items": v}, e)
+	}))
+	mux.HandleFunc("GET /api/v1/events", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		v, e := s.EventsForActor(r.Context(), u, limit)
+		send(w, map[string]any{"items": v}, e)
 	}))
 	mux.HandleFunc("GET /api/v1/payment-channels", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
 		type channel struct {
@@ -176,12 +454,8 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 			Reason  string `json:"reason"`
 		}
 		list := []channel{}
-		for _, name := range []string{"epay", "epusdt", "bepusdt", "tokenpay", "cryptomus", "cyber"} {
+		for _, name := range []string{"epay", "epusdt", "bepusdt", "tokenpay", "cryptomus"} {
 			c := channel{ID: name, Name: name, Status: "unconfigured", Reason: "merchant configuration required"}
-			if name == "cyber" {
-				c.Status = "blocked"
-				c.Reason = "provider identity and versioned API documentation required"
-			}
 			if name == "epay" {
 				c.Status = "unconfigured"
 				c.Reason = "merchant configuration required"

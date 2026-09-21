@@ -25,6 +25,10 @@ func (s *Service) AllocateWithMultiplier(ctx context.Context, tx *sql.Tx, user, 
 		}
 		return nil, err
 	}
+	e.Limits, err = s.entitlementLimits(ctx, tx, e.ID)
+	if err != nil {
+		return nil, err
+	}
 	now := s.Now()
 	if !now.Before(e.ExpiresAt) {
 		return nil, contract.ErrEntitlementUnavailable
@@ -49,7 +53,7 @@ func (s *Service) AllocateWithMultiplier(ctx context.Context, tx *sql.Tx, user, 
 	if e.ExpiresAt.Before(deadline) {
 		deadline = e.ExpiresAt
 	}
-	lease := &contract.Lease{ID: id(), EntitlementID: e.ID, Bytes: raw.Int64(), ExpiresAt: deadline}
+	lease := &contract.Lease{ID: id(), EntitlementID: e.ID, Bytes: raw.Int64(), ExpiresAt: deadline, Limits: e.Limits}
 	r, err := tx.ExecContext(ctx, s.q("UPDATE commerce_entitlements SET allocated=allocated+? WHERE id=? AND allocated=?"), budget, e.ID, allocated)
 	if err != nil {
 		return nil, err

@@ -20,10 +20,14 @@ type Runtime struct {
 	Store     *Store
 	Client    tunnel.Client
 	listeners map[string]*binding
+	pools     map[string]*resourcePool
 	version   int64
 	closed    bool
 }
 type binding struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	pool     *resourcePool
 	mu       sync.Mutex
 	rule     contract.Rule
 	until    time.Time
@@ -34,21 +38,32 @@ type binding struct {
 	closed   bool
 	runtime  *Runtime
 	slots    chan struct{}
+	routes   map[string]route
+	backends map[string]*backendState
 }
 type udpSession struct {
-	conn   net.Conn
-	tunnel *tunnel.Session
-	peer   *net.UDPAddr
-	rule   contract.Rule
-	until  time.Time
+	ctx     context.Context
+	pool    *resourcePool
+	release func()
+	conn    net.Conn
+	tunnel  *tunnel.Session
+	peer    *net.UDPAddr
+	rule    contract.Rule
+	until   time.Time
 }
 
 func NewRuntime(store *Store, client tunnel.Client) *Runtime {
-	return &Runtime{Store: store, Client: client, listeners: map[string]*binding{}}
+	if client.Pool == nil {
+		client.Pool = &tunnel.MuxPool{}
+	}
+	return &Runtime{Store: store, Client: client, listeners: map[string]*binding{}, pools: map[string]*resourcePool{}}
 }
 func (r *Runtime) Version() int64 { r.mu.Lock(); defer r.mu.Unlock(); return r.version }
 func key(v contract.Rule) string  { return v.Network + "|" + v.Listen }
 func validate(v contract.Rule) error {
+	if err := v.ValidateAdvanced(); err != nil {
+		return err
+	}
 	if v.ID == "" {
 		return errors.New("rule ID missing")
 	}
@@ -84,6 +99,12 @@ func validate(v contract.Rule) error {
 	if v.Lease == nil || v.Lease.ID == "" || v.Lease.Bytes <= 0 {
 		return errors.New("finite lease required")
 	}
+	if err := v.Lease.Limits.Validate(); err != nil {
+		return err
+	}
+	if v.Lease.Limits != (contract.ResourceLimits{}) && v.UserID == "" {
+		return errors.New("limited rule requires account identity")
+	}
 	return nil
 }
 
@@ -106,12 +127,17 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 	next := map[string]*binding{}
 	rules := map[string]contract.Rule{}
 	ids := map[string]bool{}
+	policies := map[string]contract.ResourceLimits{}
 	staged := []*binding{}
+	routes := map[string]map[string]route{}
 	fail := func(e error) error {
 		for _, b := range staged {
 			b.close()
 		}
 		return e
+	}
+	if err := validateSharedRules(c.Rules); err != nil {
+		return err
 	}
 	for _, v := range c.Rules {
 		if !v.Enabled {
@@ -120,17 +146,35 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 		if e := validate(v); e != nil {
 			return fail(fmt.Errorf("rule %s: %w", v.ID, e))
 		}
+		owner := limitOwner(v)
+		if prior, exists := policies[owner]; exists && prior != v.Lease.Limits {
+			return fail(errors.New("inconsistent account limits"))
+		}
+		policies[owner] = v.Lease.Limits
 		k := key(v)
-		if _, exists := next[k]; exists || ids[v.ID] {
+		if ids[v.ID] {
 			return fail(errors.New("duplicate listener or rule"))
 		}
 		ids[v.ID] = true
+		if v.SharedTLS != nil {
+			if routes[k] == nil {
+				routes[k] = map[string]route{}
+			}
+			routes[k][v.SharedTLS.ServerName] = route{rule: v, until: c.ValidUntil}
+			if v.SharedTLS.ParentID != "" {
+				continue
+			}
+		}
+		if _, exists := next[k]; exists {
+			return fail(errors.New("duplicate listener"))
+		}
 		rules[k] = v
 		if old := r.listeners[k]; old != nil {
 			next[k] = old
 			continue
 		}
-		b := &binding{rule: v, until: c.ValidUntil, conns: map[net.Conn]struct{}{}, sessions: map[string]*udpSession{}, runtime: r, slots: make(chan struct{}, 256)}
+		b := &binding{rule: v, until: c.ValidUntil, conns: map[net.Conn]struct{}{}, sessions: map[string]*udpSession{}, runtime: r, slots: make(chan struct{}, 256), backends: map[string]*backendState{}}
+		b.ctx, b.cancel = context.WithCancel(context.Background())
 		var e error
 		if v.Network == "tcp" {
 			b.tcp, e = net.Listen("tcp", v.Listen)
@@ -142,6 +186,7 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 			}
 		}
 		if e != nil {
+			b.close()
 			return fail(e)
 		}
 		next[k] = b
@@ -152,6 +197,22 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 			return fail(e)
 		}
 	}
+	for owner, limits := range policies {
+		pool := r.pools[owner]
+		if pool == nil {
+			pool = &resourcePool{}
+			r.pools[owner] = pool
+		}
+		pool.configure(limits)
+	}
+	for owner, pool := range r.pools {
+		pool.mu.Lock()
+		idle := pool.connections == 0
+		pool.mu.Unlock()
+		if _, exists := policies[owner]; !exists && idle {
+			delete(r.pools, owner)
+		}
+	}
 	for k, b := range r.listeners {
 		if next[k] != b {
 			b.close()
@@ -159,10 +220,18 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 	}
 	for k, b := range next {
 		b.mu.Lock()
-		changed := !reflect.DeepEqual(b.rule, rules[k])
+		changed := !reflect.DeepEqual(b.rule, rules[k]) || !sameRoutes(b.routes, routes[k])
+		b.routes = routes[k]
+		for name, v := range b.routes {
+			v.pool = r.pools[limitOwner(v.rule)]
+			b.routes[name] = v
+		}
 		b.rule = rules[k]
 		b.until = c.ValidUntil
+		b.pool = r.pools[limitOwner(b.rule)]
 		if changed {
+			b.cancel()
+			b.ctx, b.cancel = context.WithCancel(context.Background())
 			for conn := range b.conns {
 				conn.Close()
 			}
@@ -175,6 +244,7 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 	r.listeners = next
 	r.version = c.Version
 	for _, b := range staged {
+		go b.healthLoop()
 		if b.tcp != nil {
 			go b.serveTCP()
 		} else {
@@ -190,13 +260,19 @@ func (r *Runtime) Close() {
 	for _, b := range r.listeners {
 		b.close()
 	}
+	r.Client.Pool.Close()
 }
 func (r *Runtime) StopLease(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, b := range r.listeners {
 		b.mu.Lock()
-		if b.rule.Lease != nil && b.rule.Lease.ID == id {
+		matches := b.rule.Lease != nil && b.rule.Lease.ID == id
+		for _, route := range b.routes {
+			matches = matches || route.rule.Lease != nil && route.rule.Lease.ID == id
+		}
+		if matches {
+			b.cancel()
 			for c := range b.conns {
 				c.Close()
 			}
@@ -211,6 +287,7 @@ func (b *binding) close() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.closed = true
+	b.cancel()
 	if b.tcp != nil {
 		b.tcp.Close()
 	}
@@ -224,10 +301,10 @@ func (b *binding) close() {
 		s.conn.Close()
 	}
 }
-func (b *binding) snapshot() (contract.Rule, time.Time) {
+func (b *binding) snapshot() (contract.Rule, time.Time, context.Context, *resourcePool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.rule, b.until
+	return b.rule, b.until, b.ctx, b.pool
 }
 func (b *binding) track(c net.Conn) bool {
 	b.mu.Lock()
@@ -240,12 +317,18 @@ func (b *binding) track(c net.Conn) bool {
 	return true
 }
 func (b *binding) untrack(c net.Conn) { b.mu.Lock(); delete(b.conns, c); b.mu.Unlock(); c.Close() }
-func (b *binding) dial(v contract.Rule) (net.Conn, *tunnel.Session, error) {
+func (b *binding) dial(ctx context.Context, v contract.Rule) (net.Conn, *tunnel.Session, error) {
+	if len(v.Backends) > 0 {
+		return b.dialBackends(ctx, v)
+	}
+	return b.dialTarget(ctx, v)
+}
+func (b *binding) dialTarget(ctx context.Context, v contract.Rule) (net.Conn, *tunnel.Session, error) {
 	if v.Transport == "direct" {
-		c, e := net.DialTimeout(v.Network, v.Target, 10*time.Second)
+		c, e := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, v.Network, v.Target)
 		return c, nil, e
 	}
-	s, e := b.runtime.Client.DialChain(context.Background(), v.Transport, v.Tunnel.Endpoint, v.Tunnel.ServerName, v.Tunnel.Token, v.Network, v.Target, v.Tunnel.Chain)
+	s, e := b.runtime.Client.DialRoute(ctx, v.Transport, v.Network, v.Target, *v.Tunnel)
 	if e != nil {
 		return nil, nil, e
 	}
@@ -270,14 +353,37 @@ func (b *binding) handleTCP(c net.Conn) {
 		return
 	}
 	defer b.untrack(c)
-	v, until := b.snapshot()
+	v, until, ctx, pool := b.snapshot()
+	client, err := receiveProxy(c, v.ProxyProtocol)
+	if err != nil {
+		return
+	}
+	if v.SharedTLS != nil {
+		name, replay, err := readServerName(c)
+		if err != nil {
+			return
+		}
+		b.mu.Lock()
+		selected, ok := b.routes[name]
+		ctx = b.ctx
+		b.mu.Unlock()
+		if !ok {
+			return
+		}
+		v, until, pool = selected.rule, selected.until, selected.pool
+		client = replay
+	}
 	if e := b.runtime.Store.Available(v, until); e != nil {
 		return
 	}
-	var client net.Conn = c
+	release, ok := pool.acquire(client.RemoteAddr())
+	if !ok {
+		return
+	}
+	defer release()
 	if len(v.BlockedProtocols) > 0 {
 		c.SetReadDeadline(time.Now().Add(10 * time.Second))
-		reader := bufio.NewReader(c)
+		reader := bufio.NewReader(client)
 		first, e := reader.Peek(1)
 		if e != nil {
 			return
@@ -293,9 +399,9 @@ func (b *binding) handleTCP(c net.Conn) {
 		if blocked(prefix, v.BlockedProtocols) {
 			return
 		}
-		client = &readConn{Conn: c, reader: reader}
+		client = &readConn{Conn: client, reader: reader}
 	}
-	target, _, e := b.dial(v)
+	target, _, e := b.dial(ctx, v)
 	if e != nil {
 		return
 	}
@@ -304,7 +410,25 @@ func (b *binding) handleTCP(c net.Conn) {
 		return
 	}
 	defer b.untrack(target)
-	tunnel.Relay(client, target, 2*time.Minute, func(up bool, n int) error { return b.runtime.Store.Charge(v, until, up, n) })
+	if e := sendProxy(target, client, v.ProxyProtocol); e != nil {
+		return
+	}
+	flowCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	tunnel.Relay(&cancelConn{Conn: client, cancel: cancel}, &cancelConn{Conn: target, cancel: cancel}, 2*time.Minute, func(up bool, n int) error { return b.charge(flowCtx, pool, v, until, up, n) })
+}
+
+type cancelConn struct {
+	net.Conn
+	cancel context.CancelFunc
+}
+
+func (c *cancelConn) Close() error { c.cancel(); return c.Conn.Close() }
+func (c *cancelConn) CloseWrite() error {
+	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return conn.CloseWrite()
+	}
+	return c.Close()
 }
 
 type readConn struct {
@@ -341,7 +465,7 @@ func (b *binding) serveUDP() {
 		if e != nil {
 			return
 		}
-		v, until := b.snapshot()
+		v, until, ctx, pool := b.snapshot()
 		if blocked(buf[:n], v.BlockedProtocols) || b.runtime.Store.Available(v, until) != nil {
 			continue
 		}
@@ -356,22 +480,31 @@ func (b *binding) serveUDP() {
 			if full {
 				continue
 			}
-			conn, t, e := b.dial(v)
-			if e != nil {
+			release, ok := pool.acquire(peer)
+			if !ok {
 				continue
 			}
-			s = &udpSession{conn: conn, tunnel: t, peer: peer, rule: v, until: until}
+			conn, t, e := b.dial(ctx, v)
+			if e != nil {
+				release()
+				continue
+			}
+			s = &udpSession{ctx: ctx, pool: pool, release: release, conn: conn, tunnel: t, peer: peer, rule: v, until: until}
 			b.mu.Lock()
 			if b.closed {
 				b.mu.Unlock()
 				conn.Close()
+				release()
 				return
 			}
 			b.sessions[k] = s
 			b.mu.Unlock()
 			go b.readUDP(k, s)
 		}
-		if b.runtime.Store.Charge(s.rule, s.until, true, n) != nil {
+		if err := b.charge(s.ctx, s.pool, s.rule, s.until, true, n); err != nil {
+			if errors.Is(err, errRateDrop) {
+				continue
+			}
 			s.conn.Close()
 			continue
 		}
@@ -387,6 +520,7 @@ func (b *binding) serveUDP() {
 	}
 }
 func (b *binding) readUDP(k string, s *udpSession) {
+	defer s.release()
 	defer func() {
 		s.conn.Close()
 		b.mu.Lock()
@@ -410,7 +544,10 @@ func (b *binding) readUDP(k string, s *udpSession) {
 		if e != nil {
 			return
 		}
-		if e = b.runtime.Store.Charge(s.rule, s.until, false, len(p)); e != nil {
+		if e = b.charge(s.ctx, s.pool, s.rule, s.until, false, len(p)); e != nil {
+			if errors.Is(e, errRateDrop) {
+				continue
+			}
 			return
 		}
 		if _, e = b.udp.WriteToUDP(p, s.peer); e != nil {

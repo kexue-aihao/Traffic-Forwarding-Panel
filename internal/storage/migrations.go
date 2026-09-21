@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"regexp"
 	"strconv"
@@ -42,14 +44,18 @@ func MigrateNamespace(ctx context.Context, db *sql.DB, dialect, namespace string
 		}
 		defer conn.ExecContext(context.Background(), "ROLLBACK")
 	case "mysql":
+		lockName, e := mysqlMigrationLock(ctx, conn, namespace)
+		if e != nil {
+			return e
+		}
 		var locked int
-		if err = conn.QueryRowContext(ctx, "SELECT GET_LOCK(?,30)", "tfp_"+namespace).Scan(&locked); err != nil {
+		if err = conn.QueryRowContext(ctx, "SELECT GET_LOCK(?,30)", lockName).Scan(&locked); err != nil {
 			return err
 		}
 		if locked != 1 {
 			return errors.New("migration lock unavailable")
 		}
-		defer conn.ExecContext(context.Background(), "SELECT RELEASE_LOCK(?)", "tfp_"+namespace)
+		defer conn.ExecContext(context.Background(), "SELECT RELEASE_LOCK(?)", lockName)
 	default:
 		return errors.New("unsupported migration dialect")
 	}
@@ -106,4 +112,15 @@ func EnsureIndex(ctx context.Context, conn *sql.Conn, dialect, table, name, colu
 	query += name + " ON " + table + "(" + columns + ")"
 	_, err := conn.ExecContext(ctx, query)
 	return err
+}
+
+// MySQL named locks are server-wide. Scope them to the selected database while
+// keeping the 64-byte lock-name limit independent of database-name length.
+func mysqlMigrationLock(ctx context.Context, conn *sql.Conn, namespace string) (string, error) {
+	var database string
+	if err := conn.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&database); err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256([]byte(database + ":" + namespace))
+	return "tfp_" + hex.EncodeToString(hash[:])[:56], nil
 }

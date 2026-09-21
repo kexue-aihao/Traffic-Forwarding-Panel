@@ -27,6 +27,8 @@ type Agent struct {
 	Runtime         *Runtime
 	Probe           *probe.Collector
 	PollInterval    time.Duration
+	EnableTerminal  bool
+	Upgrader        *Upgrader
 }
 
 func (a *Agent) request(ctx context.Context, method, path string, body, out any) error {
@@ -73,7 +75,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			return errors.New("enrollment token required for first start")
 		}
 		var registered contract.Registered
-		reg := contract.Registration{Token: a.EnrollmentToken, Name: a.Name, Version: "0.1.0", OS: runtime.GOOS, Arch: runtime.GOARCH, Capabilities: []string{"tcp", "udp", "direct", "tls", "ws", "wss", "http", "chain:3", "block:http", "block:socks", "probe"}}
+		reg := contract.Registration{Token: a.EnrollmentToken, Name: a.Name, Version: Version, OS: runtime.GOOS, Arch: runtime.GOARCH, Capabilities: a.capabilities()}
 		if e = a.request(ctx, "POST", "/agent/register", reg, &registered); e != nil {
 			return e
 		}
@@ -90,6 +92,17 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}
 	defer a.Runtime.Close()
+	if a.EnableTerminal || a.Upgrader != nil {
+		controlCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); a.runControl(controlCtx) }()
+
+		defer func() { cancel(); <-done }()
+	}
+	diagnosticCtx, diagnosticCancel := context.WithCancel(ctx)
+	diagnosticDone := make(chan struct{})
+	go func() { defer close(diagnosticDone); a.runDiagnostics(diagnosticCtx) }()
+	defer func() { diagnosticCancel(); <-diagnosticDone }()
 	interval := a.PollInterval
 	if interval == 0 {
 		interval = 5 * time.Second
@@ -99,6 +112,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	for {
 		if e = a.Step(ctx); e != nil {
 			log.Printf("agent sync: %v", e)
+		} else if a.Upgrader != nil {
+			if e = a.Upgrader.Healthy(); e != nil {
+				return e
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -129,7 +146,7 @@ func (a *Agent) Step(ctx context.Context) error {
 		return e
 	}
 	applyErr := a.Runtime.Apply(c, true)
-	ack := contract.Ack{Version: c.Version, AppliedVersion: a.Runtime.Version()}
+	ack := contract.Ack{Capabilities: a.capabilities(), AgentVersion: Version, Version: c.Version, AppliedVersion: a.Runtime.Version()}
 	if applyErr != nil {
 		ack.Error = applyErr.Error()
 	}
@@ -148,6 +165,7 @@ func (a *Agent) Step(ctx context.Context) error {
 	p := a.Probe.Sample(ctx, a.Store.Identity().NodeID)
 	return a.request(ctx, "POST", "/agent/probe", p, nil)
 }
+
 func (a *Agent) flush(ctx context.Context) error {
 	records := a.Store.Pending()
 	for len(records) > 0 {
@@ -201,4 +219,8 @@ func (a *Agent) retire(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func capabilities() []string {
+	return []string{"tcp", "udp", "direct", "tls", "ws", "wss", "http", "chain:3", "resource-limits-v1", "advanced-routing-v1", "proxy-protocol-v1", "diagnostics-v1", "block:http", "block:socks", "probe"}
 }

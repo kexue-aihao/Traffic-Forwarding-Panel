@@ -30,13 +30,15 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: test -z "$(gofmt -l cmd internal)"
+      - run: go generate ./internal/openapi
+      - run: git diff --exit-code -- internal/openapi/openapi.json
       - run: go vet ./...
       - run: go test -race ./...
-      - run: go test ./internal/commerce ./internal/platform ./internal/storage -count=1
+      - run: go test ./internal/commerce ./internal/platform ./internal/storage ./internal/app ./internal/integration -count=1
         env:
           TFP_TEST_DRIVER: postgres
           TFP_TEST_DSN: postgres://tfp:test-only@localhost:5432/tfp_test?sslmode=disable
-      - run: go test ./internal/commerce ./internal/platform ./internal/storage -count=1
+      - run: go test ./internal/commerce ./internal/platform ./internal/storage ./internal/app ./internal/integration -count=1
         env:
           TFP_TEST_DRIVER: mysql
           TFP_TEST_DSN: root:test-only@tcp(localhost:3306)/tfp_test?parseTime=true

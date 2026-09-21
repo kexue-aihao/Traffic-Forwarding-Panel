@@ -2,7 +2,7 @@
 
 Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP 四种加密承载。
 
-当前是持续开发版本。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。Cyber、真实商户交易、参考环境容量验收及若干后期功能尚未完成。
+当前版本为 `v0.1.0-beta.1` 预发布版。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.0-beta.1.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。Cyber 按用户要求跳过；租约续期连接连续性、容量/性能工作及 Linux/公网/真实支付验收等待后续指示。
 
 ## 本机启动
 
@@ -20,7 +20,7 @@ go build -trimpath -o bin/agent ./cmd/agent
 ./bin/panel -addr 127.0.0.1:8080
 ```
 
-访问 `http://127.0.0.1:8080/admin`。Windows 构建可使用 `-o bin/panel.exe`，执行 `./bin/panel.exe`。默认数据库 `data/panel.db`，面板进程有目录写权限即可。首次创建普通用户、设备组和接入凭据均由管理员完成；用户规则需要有效套餐和有限配额。
+访问 `http://127.0.0.1:8080/admin`。Windows 构建可使用 `-o bin/panel.exe`，执行 `./bin/panel.exe`。默认数据库 `data/panel.db`，面板进程有目录写权限即可。设备组和接入凭据由管理员创建；普通用户可由管理员创建，也可在站点设置启用开放或邀请注册（默认关闭）。用户规则需要有效套餐和有限配额。
 
 账号恢复：在部署机器执行 `./bin/panel -reset-password 用户名`，从标准输入读取新密码；旧会话和 API Token 一并失效。无邮件找回功能。
 
@@ -44,7 +44,7 @@ HTTPS 反向代理应设置真实公开地址 `-origin https://panel.example.com
 
 - [Agent 安装、出口白名单与四承载示例](examples/agent-README.md)：入口 Agent 注册后拉取配置，出口显式提供证书和凭据；WS/HTTP 内层同样使用 TLS，禁止证书验证降级。
 - [支付配置示例](examples/payments.example.json)：复制到仓库外的受保护文件，填写商户资料，以 `-payments /path/payments.json -origin https://panel.example.com` 启动。示例占位值不能直接付款。
-- [支付协议与固定版本](docs/payment/protocol-sources.md)、[支付实现边界](docs/payment/implementation-status.md)：已接入的渠道仍需分别验证真实商户；Cyber 尚缺明确供应商资料。
+- [支付协议与固定版本](docs/payment/protocol-sources.md)、[支付实现边界](docs/payment/implementation-status.md)：已接入的渠道仍需分别验证真实商户；Cyber 已跳过。
 - [API 契约](docs/api-contract.md)：浏览器使用 Cookie；自动化使用可撤销、到期的独立 API Token，目前权限为所有者资源。
 
 钱包以人民币整数分记账；充值后再余额购买套餐。续费立即重置周期和配额，从购买成功时间增加上海自然月并夹紧月末。不会沿用旧到期时间，也不会在每月 1 日另送配额。
@@ -82,3 +82,5 @@ npm run test:live
 三库测试使用 `TFP_TEST_DRIVER=postgres|mysql` 和 `TFP_TEST_DSN` 后执行 `go test ./internal/commerce ./internal/platform ./internal/storage -count=1`。测试身份需要创建和删除数据库权限；每个测试创建随机隔离库，不清空指定 DSN 的现有数据。默认测试使用临时 SQLite。
 
 500 节点/1 万用户/10 万规则热路径冒烟基准：`go test ./internal/platform -run '^$' -bench '^BenchmarkUsageCapacity$' -benchtime=500x -count=1`。这不是 2 小时/24 小时混合负载或网络吞吐的容量结论。
+
+当前接口的机器可读文档：运行后访问 `/api/v1/openapi.json`，源文件见 [OpenAPI 3.1](internal/openapi/openapi.json)。套餐限制、状态告警、故障转移、反向隧道、Mux、TLS 共享、终端和升级的边界见 [实施状态](docs/implementation-status.md)。Cyber支付按用户要求跳过；Linux 跨机、公网和真实商户仍需外部验收。

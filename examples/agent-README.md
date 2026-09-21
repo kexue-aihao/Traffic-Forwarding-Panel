@@ -111,7 +111,11 @@ $env:TFP_EXIT_TOKEN = '<至少16字符的随机出口凭据>'
 - TCP 半关闭保留，单方向缓存 32 KiB。每入口规则最多 256 TCP 连接或 UDP 会话；UDP 空闲回收 30 秒，TCP 单方向空闲 2 分钟。出口最多 256 隧道会话。会话切换与目标错误不提供无损迁移。
 - 协议屏蔽只实现首段明文 HTTP 方法和 SOCKS4/5 前缀识别；未知流量允许。不是 DPI 保证，TLS/HTTPS 密文内容和 URL 路径不会被解密识别。`fet` 等未知检测器拒绝应用；控制面负责合并组与规则限制。
 
-计量使用 append WAL 和有界 group commit，发送前等待该批次 fsync 成功；上线容量仍需以真实机器基准验收。租约历史去重元数据随租约数量增长，checkpoint 达到 64 MiB 上限将停止转发，需要后续保留/压缩策略；待确认流量 spool 有硬上限。反向连接、Mux、SNI 共享端口、远程升级、全局带宽调度尚未实现。
+计量使用 append WAL 和有界 group commit，发送前等待该批次 fsync 成功；上线容量仍需以真实机器基准验收。租约历史去重元数据随租约数量增长，checkpoint 达到 64 MiB 上限将停止转发，需要后续保留/压缩策略；待确认流量 spool 有硬上限。反向连接、Mux、SNI 共享端口和受控远程升级已实现，仍需 Linux 跨机、公网和断电演练验收。
+
+反向出口用 `-mode reverse-exit -reverse-endpoint host:port -server-name exit.example.com -exit-id exit-a -allow reverse|exit-a` 启动，入口把规则的 `tunnel.reverse` 设为稳定 ID；主动载波断开后按 1 秒退避重连。`tunnel.mux=true` 复用同一出口凭据的 yamux 载波，每条载波最多 256 条流、连接池最多 64 条。
+
+远程终端和节点升级默认关闭。终端需要 Linux 服务账号启动并声明 `terminal-v1`：`./agent -enable-terminal ...`。升级需要公钥文件：`./agent -release-key ./release-key.b64 ...`。发布签名覆盖版本、平台、架构和 SHA-256；替换后新进程必须在 60 秒内完成配置 ACK/探针健康标记，否则恢复旧二进制。
 
 ## WAL、备份与恢复
 

@@ -1,11 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import Modal from "../components/Modal.vue";
+import NodeOperations from "../components/NodeOperations.vue";
 import { api, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
 import { displayTimeZoneLabel, formatDateTime } from "../core/format";
 type Row = Record<string, unknown>;
+interface Hop {
+  transport: string;
+  endpoint: string;
+  server_name: string;
+  token: string;
+}
 const route = useRoute();
 const router = useRouter();
 const resource = String(route.params.resource);
@@ -30,14 +37,82 @@ const editing = ref(false);
 const busy = ref(false);
 const formError = ref("");
 const selected = ref<Row | null>(null);
+const operationNode = ref<Row | null>(null);
 const token = ref("");
+const diagnosis = ref<{
+  checks: { name: string; ok: boolean; detail: string }[];
+} | null>(null);
+async function diagnose(row: Row) {
+  error.value = "";
+  try {
+    diagnosis.value = await api(
+      `/rules/${encodeURIComponent(String(row.id))}/diagnose`,
+    );
+  } catch (e) {
+    error.value = errorText(e);
+  }
+}
+const networkBusy = ref(false),
+  networkResult = ref<{
+    id: string;
+    status: string;
+    checks: {
+      stage: string;
+      ok: boolean;
+      milliseconds: number;
+      detail: string;
+    }[];
+  } | null>(null);
+let diagnosticTimer: ReturnType<typeof setTimeout> | undefined;
+onUnmounted(() => clearTimeout(diagnosticTimer));
+async function pollDiagnostic() {
+  if (!networkResult.value) return;
+  try {
+    networkResult.value = await api(`/diagnostics/${networkResult.value.id}`);
+    if (["pending", "running"].includes(networkResult.value!.status)) {
+      diagnosticTimer = setTimeout(pollDiagnostic, 2000);
+    } else {
+      networkBusy.value = false;
+    }
+  } catch (e) {
+    error.value = errorText(e);
+    networkBusy.value = false;
+  }
+}
+async function networkDiagnose(row: Row) {
+  error.value = "";
+  networkBusy.value = true;
+  clearTimeout(diagnosticTimer);
+  try {
+    networkResult.value = await api(
+      `/rules/${encodeURIComponent(String(row.id))}/network-diagnostic`,
+      "POST",
+      {},
+    );
+    void pollDiagnostic();
+  } catch (e) {
+    error.value = errorText(e);
+    networkBusy.value = false;
+  }
+}
 const initial = ref("");
-const options = ref<{ nodes: Row[]; groups: Row[]; users: Row[] }>({
+const options = ref<{
+  nodes: Row[];
+  groups: Row[];
+  users: Row[];
+  exits: Row[];
+}>({
   nodes: [],
+  exits: [],
   groups: [],
   users: [],
 });
 const form = ref({
+  exit_group_id: "",
+  exit_id: "auto",
+  proxy_accept: "off",
+  proxy_send: "off",
+  trusted_cidrs: "",
   name: "",
   username: "",
   password: "",
@@ -52,13 +127,32 @@ const form = ref({
   endpoint: "",
   server_name: "",
   token: "",
+  chain: [] as Hop[],
+  mux: false,
+  reverse: "",
+  backends: [] as { target: string; weight: number; disabled: boolean }[],
+  shared: false,
+  shared_parent: "",
+  shared_name: "",
   user_ids: [] as string[],
   group_ids: [] as string[],
   blocked_protocols: [] as string[],
   multiplier: "1",
   port_min: 10000,
   port_max: 60000,
+  max_rules: 0,
 });
+watch(
+  () => form.value.exit_group_id,
+  async (value) => {
+    if (!value) return;
+    try {
+      options.value.exits = await choices("/exits");
+    } catch (e) {
+      formError.value = errorText(e);
+    }
+  },
+);
 const dirty = computed(() => JSON.stringify(form.value) !== initial.value);
 async function load() {
   if (!allowed.value) return;
@@ -94,6 +188,13 @@ async function open(row: Row | null = null) {
   formError.value = "";
   token.value = "";
   form.value = {
+    exit_group_id: String(row?.exit_group_id || ""),
+    exit_id: String(row?.exit_id || "auto"),
+    proxy_accept: String((row?.proxy_protocol as Row)?.accept || "off"),
+    proxy_send: String((row?.proxy_protocol as Row)?.send || "off"),
+    trusted_cidrs: (
+      ((row?.proxy_protocol as Row)?.trusted_cidrs as string[]) || []
+    ).join(","),
     name: String(row?.name || ""),
     username: "",
     password: "",
@@ -108,6 +209,30 @@ async function open(row: Row | null = null) {
     endpoint: String((row?.tunnel as Row | undefined)?.endpoint || ""),
     server_name: String((row?.tunnel as Row | undefined)?.server_name || ""),
     token: "",
+    mux: !!(row?.tunnel as Row | undefined)?.mux,
+    reverse: String((row?.tunnel as Row | undefined)?.reverse || ""),
+    backends: (
+      (row?.backends as {
+        target: string;
+        weight: number;
+        disabled: boolean;
+      }[]) || []
+    ).map((b) => ({ ...b })),
+    shared: !!row?.shared_tls,
+    shared_parent: String(
+      (row?.shared_tls as Row | undefined)?.parent_id || "",
+    ),
+    shared_name: String(
+      (row?.shared_tls as Row | undefined)?.server_name || "",
+    ),
+    chain: (((row?.tunnel as Row | undefined)?.chain as Row[]) || []).map(
+      (h) => ({
+        transport: String(h.transport),
+        endpoint: String(h.endpoint),
+        server_name: String(h.server_name || ""),
+        token: "",
+      }),
+    ),
     user_ids: (row?.user_ids as string[]) || [],
     group_ids: [],
     blocked_protocols: ((row?.blocked_protocols as string[]) || []).map((p) =>
@@ -122,6 +247,7 @@ async function open(row: Row | null = null) {
     multiplier: String(row?.multiplier || "1"),
     port_min: Number(row?.port_min || 10000),
     port_max: Number(row?.port_max || 60000),
+    max_rules: Number(row?.max_rules || 0),
   };
   initial.value = JSON.stringify(form.value);
   editing.value = true;
@@ -152,9 +278,24 @@ function payload(): Row {
       multiplier: f.multiplier,
       port_min: f.port_min,
       port_max: f.port_max,
+      max_rules: f.max_rules,
     };
   if (resource === "nodes") return { name: f.name, group_ids: f.group_ids };
   return {
+    exit_group_id: f.exit_group_id,
+    exit_id: f.exit_group_id ? f.exit_id : "",
+    proxy_protocol:
+      f.network === "tcp" &&
+      (f.proxy_accept !== "off" || f.proxy_send !== "off")
+        ? {
+            accept: f.proxy_accept,
+            send: f.proxy_send,
+            trusted_cidrs: f.trusted_cidrs
+              .split(",")
+              .map((x) => x.trim())
+              .filter(Boolean),
+          }
+        : null,
     name: f.name,
     node_id: f.node_id,
     group_id: f.group_id,
@@ -163,13 +304,29 @@ function payload(): Row {
     listen: f.listen,
     target: f.target,
     enabled: f.enabled,
-    ...(f.transport === "direct"
+    backends: f.network === "tcp" ? f.backends : [],
+    shared_tls:
+      f.shared && f.network === "tcp"
+        ? {
+            parent_id: f.shared_parent,
+            server_name: f.shared_name.toLowerCase(),
+          }
+        : null,
+    ...(f.transport === "direct" || f.exit_group_id
       ? {}
       : {
           tunnel: {
             endpoint: f.endpoint,
             server_name: f.server_name,
+            mux: f.mux,
+            reverse: f.reverse,
             ...(f.token ? { token: f.token } : {}),
+            chain: f.chain.map((h) => ({
+              transport: h.transport,
+              endpoint: h.endpoint,
+              server_name: h.server_name,
+              ...(h.token ? { token: h.token } : {}),
+            })),
           },
         }),
   };
@@ -357,7 +514,7 @@ const labels: Record<string, string> = {
               <th
                 v-if="
                   resource === 'rules' ||
-                  (['groups', 'users'].includes(resource) && canManage)
+                  (['groups', 'users', 'nodes'].includes(resource) && canManage)
                 "
               >
                 操作
@@ -376,12 +533,29 @@ const labels: Record<string, string> = {
               <td
                 v-if="
                   resource === 'rules' ||
-                  (['groups', 'users'].includes(resource) && canManage)
+                  (['groups', 'users', 'nodes'].includes(resource) && canManage)
                 "
                 data-label="操作"
               >
                 <div class="toolbar">
-                  <button v-if="resource !== 'users'" @click="open(row)">
+                  <button v-if="resource === 'rules'" @click="diagnose(row)">
+                    诊断</button
+                  ><button
+                    :disabled="networkBusy"
+                    @click="networkDiagnose(row)"
+                  >
+                    网络诊断
+                  </button>
+                  <button
+                    v-if="resource === 'nodes'"
+                    @click="operationNode = row"
+                  >
+                    节点运维
+                  </button>
+                  <button
+                    v-if="!['users', 'nodes'].includes(resource)"
+                    @click="open(row)"
+                  >
                     编辑</button
                   ><button
                     v-if="resource === 'rules'"
@@ -421,6 +595,40 @@ const labels: Record<string, string> = {
         </button>
       </div></template
     >
+    <section v-if="diagnosis" class="card">
+      <h2>规则状态诊断</h2>
+      <p class="muted">检查控制面记录和租约状态。</p>
+      <p v-for="check in diagnosis.checks" :key="check.name">
+        {{ check.ok ? "通过" : "需处理" }} · {{ check.name }}：{{
+          check.detail
+        }}
+      </p>
+      <button @click="diagnosis = null">关闭诊断</button>
+    </section>
+    <section v-if="networkResult" class="card">
+      <h2>网络诊断 / Looking Glass</h2>
+      <p>
+        {{
+          networkResult.status === "completed"
+            ? "检查完成"
+            : networkResult.status === "expired"
+              ? "诊断已超时"
+              : "等待节点执行…"
+        }}
+      </p>
+      <p v-for="(c, i) in networkResult.checks" :key="i">
+        {{ c.ok ? "通过" : "失败" }} · {{ c.stage }} · {{ c.milliseconds }} ms
+      </p>
+      <p class="small muted">
+        从入口 Agent 检查当前 TCP
+        规则；隧道检查包含出口到目标的握手，不发送业务数据。
+      </p>
+    </section>
+    <NodeOperations
+      v-if="operationNode"
+      :node="operationNode"
+      @close="operationNode = null"
+    />
     <Modal
       v-if="editing"
       :title="
@@ -469,7 +677,7 @@ const labels: Record<string, string> = {
           ><template v-if="resource === 'rules'"
             ><label
               >入口服务器<select
-                v-model="form.node_id"
+                v-model="form.node_id" aria-label="入口服务器"
                 required
                 :disabled="!!selected"
               >
@@ -484,7 +692,7 @@ const labels: Record<string, string> = {
               </select></label
             ><label
               >设备组<select
-                v-model="form.group_id"
+                v-model="form.group_id" aria-label="设备组"
                 required
                 :disabled="!!selected"
               >
@@ -498,6 +706,36 @@ const labels: Record<string, string> = {
                 </option>
               </select></label
             >
+            <label
+              >出口选择<select v-model="form.exit_group_id" aria-label="出口选择">
+                <option value="">直接转发或手工配置隧道</option>
+                <option
+                  v-for="g in options.groups"
+                  :key="String(g.id)"
+                  :value="g.id"
+                >
+                  {{ g.name }} · 出口倍率 {{ g.multiplier }}
+                </option>
+              </select></label
+            >
+            <label v-if="form.exit_group_id"
+              >出口节点<select v-model="form.exit_id" aria-label="出口节点">
+                <option value="auto">按权重自动选择</option>
+                <option
+                  v-for="e in options.exits.filter(
+                    (e) => e.group_id === form.exit_group_id,
+                  )"
+                  :key="String(e.id)"
+                  :value="e.id"
+                >
+                  {{ e.name }} · {{ e.online ? "在线" : "离线" }}
+                </option>
+              </select></label
+            >
+            <p v-if="form.exit_group_id" class="small muted">
+              自动选择该组内授权且在线的出口。流量按入口组倍率 ×
+              出口组倍率结算。
+            </p>
             <div class="form-grid">
               <label
                 >传输层<select v-model="form.network" :disabled="!!selected">
@@ -505,7 +743,7 @@ const labels: Record<string, string> = {
                   <option value="udp">UDP</option>
                 </select></label
               ><label
-                >隧道<select v-model="form.transport">
+                >隧道<select v-model="form.transport" aria-label="隧道">
                   <option
                     v-for="t in ['direct', 'tls', 'ws', 'wss', 'http']"
                     :key="t"
@@ -532,7 +770,7 @@ const labels: Record<string, string> = {
                 v-model="form.target"
                 required
                 placeholder="127.0.0.1:8080" /></label
-            ><template v-if="form.transport !== 'direct'"
+            ><template v-if="form.transport !== 'direct' && !form.exit_group_id"
               ><label>隧道端点<input v-model="form.endpoint" required /></label
               ><label>TLS 服务器名称<input v-model="form.server_name" /></label
               ><label
@@ -541,10 +779,189 @@ const labels: Record<string, string> = {
                   type="password"
                   autocomplete="new-password"
                   :required="!selected"
-                  :placeholder="
-                    selected ? '留空保留既有凭据' : ''
-                  " /></label></template
-            ><label class="check"
+                  :placeholder="selected ? '留空保留既有凭据' : ''"
+              /></label>
+              <label class="check"
+                ><input v-model="form.mux" type="checkbox" />启用 Mux
+                连接复用</label
+              >
+              <label
+                >反向出口标识<input
+                  v-model="form.reverse"
+                  maxlength="128"
+                  placeholder="留空使用普通出口"
+              /></label>
+              <p v-if="form.reverse" class="muted small">
+                出口主动连接隧道端点。反向路由不能添加后续出口。
+              </p>
+              <fieldset>
+                <legend>后续出口（最多两跳）</legend>
+                <p class="muted small">
+                  入口 → 首出口<span
+                    v-for="(_, index) in form.chain"
+                    :key="index"
+                  >
+                    → 出口 {{ index + 2 }}</span
+                  >
+                  → 目标
+                </p>
+                <div
+                  v-for="(hop, index) in form.chain"
+                  :key="index"
+                  class="card"
+                >
+                  <label :for="`hop-transport-${index}`"
+                    >出口 {{ index + 2 }} 承载</label
+                  ><select
+                    :id="`hop-transport-${index}`"
+                    v-model="hop.transport"
+                  >
+                    <option
+                      v-for="t in ['tls', 'ws', 'wss', 'http']"
+                      :key="t"
+                      :value="t"
+                    >
+                      {{ t }}
+                    </option>
+                  </select>
+                  <label
+                    >出口 {{ index + 2 }} 端点<input
+                      v-model="hop.endpoint"
+                      required
+                  /></label>
+                  <label
+                    >出口 {{ index + 2 }} TLS 服务器名称<input
+                      v-model="hop.server_name"
+                  /></label>
+                  <label
+                    >出口 {{ index + 2 }} 凭据<input
+                      v-model="hop.token"
+                      type="password"
+                      autocomplete="new-password"
+                      :required="!selected"
+                      :placeholder="selected ? '地址和身份不变时留空保留' : ''"
+                  /></label>
+                  <button type="button" @click="form.chain.splice(index, 1)">
+                    移除出口 {{ index + 2 }}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  :disabled="form.chain.length >= 2 || !!form.reverse"
+                  @click="
+                    form.chain.push({
+                      transport: 'tls',
+                      endpoint: '',
+                      server_name: '',
+                      token: '',
+                    })
+                  "
+                >
+                  添加后续出口
+                </button>
+              </fieldset></template
+            >
+            <fieldset v-if="form.network === 'tcp'">
+              <legend>Proxy Protocol</legend>
+              <div class="form-grid">
+                <label
+                  >接收<select v-model="form.proxy_accept" aria-label="接收">
+                    <option value="off">关闭</option>
+                    <option value="v1">v1</option>
+                    <option value="v2">v2</option>
+                  </select></label
+                ><label
+                  >发送<select v-model="form.proxy_send" aria-label="发送">
+                    <option value="off">关闭</option>
+                    <option value="v1">v1</option>
+                    <option value="v2">v2</option>
+                  </select></label
+                >
+              </div>
+              <label v-if="form.proxy_accept !== 'off'"
+                >可信上游 CIDR<input
+                  v-model="form.trusted_cidrs"
+                  required
+                  placeholder="192.0.2.0/24,2001:db8::/32"
+              /></label>
+              <p class="small muted">
+                仅支持
+                TCP。启用接收时，上游必须发送所选版本的头；发送需目标服务支持该版本。
+              </p>
+            </fieldset>
+            <fieldset v-if="form.network === 'tcp'">
+              <legend>多目标与故障转移</legend>
+              <p class="small muted">
+                配置后按权重分配新连接；连接失败剔除目标，健康检查成功后恢复。已有连接不能迁移。
+              </p>
+              <div
+                v-for="(backend, index) in form.backends"
+                :key="index"
+                class="card"
+              >
+                <label
+                  >后端 {{ index + 1 }} 地址<input
+                    v-model="backend.target"
+                    required
+                    placeholder="127.0.0.1:8080"
+                /></label>
+                <label
+                  >后端 {{ index + 1 }} 权重<input
+                    v-model.number="backend.weight"
+                    type="number"
+                    min="1"
+                    max="100"
+                    required
+                /></label>
+                <label class="check"
+                  ><input
+                    v-model="backend.disabled"
+                    type="checkbox"
+                  />停用此后端</label
+                >
+                <button type="button" @click="form.backends.splice(index, 1)">
+                  移除后端 {{ index + 1 }}
+                </button>
+              </div>
+              <button
+                type="button"
+                :disabled="form.backends.length >= 16"
+                @click="
+                  form.backends.push({ target: '', weight: 1, disabled: false })
+                "
+              >
+                添加后端
+              </button>
+            </fieldset>
+            <fieldset v-if="form.network === 'tcp'">
+              <legend>TLS 共享端口</legend>
+              <label class="check"
+                ><input
+                  v-model="form.shared"
+                  type="checkbox"
+                  :disabled="!!selected && !!form.shared_parent"
+                />按 SNI 路由</label
+              >
+              <template v-if="form.shared">
+                <label
+                  >匹配域名<input
+                    v-model="form.shared_name"
+                    required
+                    placeholder="app.example.com"
+                /></label>
+                <label
+                  >母规则 ID<input
+                    v-model="form.shared_parent"
+                    :disabled="!!selected"
+                    placeholder="留空创建母规则"
+                /></label>
+                <p class="small muted">
+                  子规则须与母规则属于同一账号、节点、设备组和监听地址。空 SNI
+                  与未匹配域名会被拒绝；客户端直接验证回源服务证书。
+                </p>
+              </template>
+            </fieldset>
+            <label class="check"
               ><input v-model="form.enabled" type="checkbox" />启用规则</label
             ></template
           ><template v-if="resource === 'groups'"
@@ -590,6 +1007,14 @@ const labels: Record<string, string> = {
                 v-model="form.multiplier"
                 required
                 pattern="[0-9]+(\.[0-9]+)?"
+            /></label>
+            <label
+              >每用户规则上限（0 表示不限）<input
+                v-model.number="form.max_rules"
+                type="number"
+                min="0"
+                max="100000"
+                required
             /></label>
             <div class="form-grid">
               <label

@@ -1,25 +1,60 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import Icon from "./components/Icon.vue";
 import { api, errorText } from "./core/api";
 import { state, adminSite } from "./core/state";
 import type { User } from "./core/state";
 const route = useRoute();
+const router = useRouter();
 const username = ref("");
 const password = ref("");
 const busy = ref(false);
 const error = ref("");
 const bootError = ref("");
+const site = ref({
+  name: "流量控制台",
+  announcement: "",
+  registration: "closed",
+  captcha: false,
+  accent: "blue",
+});
+const registering = ref(false),
+  registerInvite = ref(""),
+  captcha = ref<{ id: string; image: string } | null>(null),
+  captchaAnswer = ref("");
+async function loadCaptcha() {
+  if (!site.value.captcha) return;
+  try {
+    captcha.value = await api("/auth/captcha");
+    captchaAnswer.value = "";
+  } catch (e) {
+    error.value = errorText(e);
+  }
+}
+async function loadSite() {
+  site.value = await api("/site");
+  document.title = site.value.name;
+  try {
+    if (!localStorage.getItem("panel-accent")) {
+      accent.value = site.value.accent;
+      document.documentElement.dataset.accent = site.value.accent;
+    }
+  } catch {}
+  await loadCaptcha();
+}
 const menus = computed(() => [
   { path: "/overview", label: "概览", icon: "activity" },
   { path: "/rules", label: "转发规则", icon: "arrow-right-left" },
+  { path: "/exits", label: "出口管理", icon: "arrow-right-left" },
   { path: "/nodes", label: "服务器", icon: "server" },
   { path: "/probes", label: "实时探针", icon: "activity" },
   { path: "/commerce", label: "套餐与钱包", icon: "wallet" },
+  { path: "/operations", label: "运营与任务", icon: "layers" },
   { path: "/account", label: "账号与 API", icon: "shield" },
   ...(adminSite && state.user?.role === "admin"
     ? [
+        { path: "/settings", label: "站点设置", icon: "settings" },
         { path: "/groups", label: "设备组", icon: "layers" },
         { path: "/users", label: "用户管理", icon: "users" },
         { path: "/audit", label: "操作审计", icon: "shield" },
@@ -53,6 +88,7 @@ async function bootstrap() {
   bootError.value = "";
   state.ready = false;
   try {
+    await loadSite();
     state.user = (await api<{ user: User }>("/auth/session")).user;
   } catch (e) {
     if (!(e instanceof Error && "status" in e && e.status === 401))
@@ -65,15 +101,32 @@ async function login() {
   busy.value = true;
   error.value = "";
   try {
+    if (registering.value) {
+      await api("/auth/register", "POST", {
+        username: username.value,
+        password: password.value,
+        invite: registerInvite.value,
+        captcha_id: captcha.value?.id || "",
+        captcha_answer: captchaAnswer.value,
+      });
+      registering.value = false;
+      password.value = "";
+      state.notice = "注册成功，请登录。";
+      await loadCaptcha();
+      return;
+    }
     state.user = (
       await api<{ user: User }>("/auth/login", "POST", {
         username: username.value,
         password: password.value,
+        captcha_id: captcha.value?.id || "",
+        captcha_answer: captchaAnswer.value,
       })
     ).user;
     password.value = "";
   } catch (e) {
     error.value = errorText(e);
+    await loadCaptcha();
   } finally {
     busy.value = false;
   }
@@ -89,7 +142,10 @@ async function logout() {
     busy.value = false;
   }
 }
-onMounted(bootstrap);
+onMounted(async () => {
+  await router.isReady();
+  await bootstrap();
+});
 </script>
 <template>
   <div class="shell">
@@ -100,7 +156,8 @@ onMounted(bootstrap);
         <a class="brand" href="#/overview"
           ><span class="brand-mark"><Icon name="arrow-right-left" /></span
           ><span
-            >流量控制台<small>{{
+            >{{ site.name
+            }}<small>{{
               adminSite ? "管理员工作空间" : "用户工作空间"
             }}</small></span
           ></a
@@ -163,6 +220,9 @@ onMounted(bootstrap);
             <p class="eyebrow">WELCOME BACK</p>
             <h1>连接你的网络</h1>
             <p class="muted">登录后管理转发服务与实时资源。</p>
+            <p v-if="site.announcement" class="site-announcement">
+              {{ site.announcement }}
+            </p>
             <form @submit.prevent="login">
               <label
                 >用户名<input
@@ -177,11 +237,44 @@ onMounted(bootstrap);
                   autocomplete="current-password"
                   required
               /></label>
+              <label v-if="registering && site.registration === 'invite'"
+                >注册邀请码<input v-model="registerInvite" required
+              /></label>
+              <div v-if="site.captcha">
+                <img
+                  v-if="captcha"
+                  :src="captcha.image"
+                  alt="六位数字验证码"
+                  width="144"
+                  height="40"
+                /><button type="button" @click="loadCaptcha">
+                  换一张验证码</button
+                ><label
+                  >验证码<input
+                    v-model="captchaAnswer"
+                    required
+                    maxlength="6"
+                    inputmode="numeric"
+                    autocomplete="off"
+                /></label>
+              </div>
               <p v-if="error" role="alert" class="error">{{ error }}</p>
               <button class="primary" :disabled="busy">
-                {{ busy ? "正在登录…" : "登录控制台" }}
+                {{ busy ? "提交中…" : registering ? "创建账号" : "登录控制台" }}
               </button>
             </form>
+            <button
+              v-if="!adminSite && site.registration !== 'closed'"
+              type="button"
+              :disabled="busy"
+              @click="
+                registering = !registering;
+                error = '';
+                loadCaptcha();
+              "
+            >
+              {{ registering ? "已有账号，返回登录" : "注册账号" }}
+            </button>
           </section>
           <section
             v-else-if="adminSite && state.user.role !== 'admin'"
@@ -191,7 +284,12 @@ onMounted(bootstrap);
             <p>当前账号无法访问管理员后台。</p>
             <a href="/">返回用户工作空间</a>
           </section>
-          <RouterView v-else :key="route.path" />
+          <template v-else
+            ><p v-if="site.announcement" class="card site-announcement">
+              {{ site.announcement }}
+            </p>
+            <RouterView :key="route.path"
+          /></template>
         </main>
       </div>
     </div>

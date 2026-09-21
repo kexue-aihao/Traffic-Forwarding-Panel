@@ -5,9 +5,13 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
+	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,25 +19,30 @@ import (
 )
 
 type Plan struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Price  int64  `json:"price_cents,string"`
-	Quota  int64  `json:"quota_bytes,string"`
-	Months int    `json:"months"`
+	Limits  contract.ResourceLimits `json:"limits"`
+	ID      string                  `json:"id"`
+	Name    string                  `json:"name"`
+	Price   int64                   `json:"price_cents,string"`
+	Quota   int64                   `json:"quota_bytes,string"`
+	Months  int                     `json:"months"`
+	Active  bool                    `json:"active"`
+	Version int64                   `json:"version"`
+	Kind    string                  `json:"kind"`
 }
 type Wallet struct {
 	Currency string `json:"currency"`
 	Balance  int64  `json:"balance_cents,string"`
 }
 type Entitlement struct {
-	ID        string    `json:"id"`
-	UserID    string    `json:"user_id"`
-	PlanID    string    `json:"plan_id"`
-	Version   int64     `json:"version"`
-	StartsAt  time.Time `json:"starts_at"`
-	ExpiresAt time.Time `json:"expires_at"`
-	Quota     int64     `json:"quota_bytes,string"`
-	Used      int64     `json:"used_bytes,string"`
+	Limits    contract.ResourceLimits `json:"limits"`
+	ID        string                  `json:"id"`
+	UserID    string                  `json:"user_id"`
+	PlanID    string                  `json:"plan_id"`
+	Version   int64                   `json:"version"`
+	StartsAt  time.Time               `json:"starts_at"`
+	ExpiresAt time.Time               `json:"expires_at"`
+	Quota     int64                   `json:"quota_bytes,string"`
+	Used      int64                   `json:"used_bytes,string"`
 }
 type Ledger struct {
 	ID        string    `json:"id"`
@@ -54,13 +63,18 @@ type Order struct {
 }
 type Writer func(context.Context, func(*sql.Tx) error) error
 type Service struct {
-	DB          *sql.DB
-	Dialect     string
-	Write       Writer
-	Now         func() time.Time
-	reconcileMu sync.Mutex
+	PaymentAllowed func(context.Context, int64) error
+	DB             *sql.DB
+	Dialect        string
+	Write          Writer
+	Now            func() time.Time
+	reconcileMu    sync.Mutex
+	CheckAccount   func(context.Context, *sql.Tx, string) error
+	webhookClient  *http.Client
+	EventVisible   func(context.Context, *sql.Tx, string, string, string, bool) (bool, error)
 }
 
+var ErrAccountDisabled = errors.New("account disabled")
 var ErrConflict = errors.New("state conflict")
 var ErrFunds = errors.New("insufficient available balance")
 
@@ -103,7 +117,7 @@ func (s *Service) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS commerce_lease_reservations(lease_id VARCHAR(64) PRIMARY KEY,budget BIGINT NOT NULL,closed INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS commerce_attempts(order_id VARCHAR(64) PRIMARY KEY,state VARCHAR(32) NOT NULL,provider_id VARCHAR(128) NOT NULL,updated_at VARCHAR(40) NOT NULL)`,
 	}
-	return storage.MigrateNamespace(ctx, s.DB, s.Dialect, "commerce", 2, func(conn *sql.Conn) error {
+	err := storage.MigrateNamespace(ctx, s.DB, s.Dialect, "commerce", 6, func(conn *sql.Conn) error {
 		var current int
 		if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM commerce_schema").Scan(&current); err != nil {
 			return err
@@ -137,9 +151,55 @@ func (s *Service) Migrate(ctx context.Context) error {
 				return err
 			}
 		}
-		return s.migrateReconciliation(ctx, conn)
+		if current < 2 {
+			if err := s.migrateReconciliation(ctx, conn); err != nil {
+				return err
+			}
+			if _, err := conn.ExecContext(ctx, "INSERT INTO commerce_schema(version) VALUES(2)"); err != nil {
+				return err
+			}
+		}
+		if current < 3 {
+			if err := s.migrateCommerceV3(ctx, conn); err != nil {
+				return err
+			}
+			if _, err := conn.ExecContext(ctx, "INSERT INTO commerce_schema(version) VALUES(3)"); err != nil {
+				return err
+			}
+		}
+		if current < 4 {
+			if err := s.migrateLimits(ctx, conn); err != nil {
+				return err
+			}
+			if _, err := conn.ExecContext(ctx, "INSERT INTO commerce_schema(version) VALUES(4)"); err != nil {
+				return err
+			}
+		}
+		if current < 5 {
+			if err := s.migrateWebhookSettings(ctx, conn); err != nil {
+				return err
+			}
+			if _, err := conn.ExecContext(ctx, "INSERT INTO commerce_schema(version) VALUES(5)"); err != nil {
+				return err
+			}
+		}
+		return s.migrateFunding(ctx, conn)
+	})
+	if err != nil {
+		return err
+	}
+	// Backup import keeps target schema markers. On restart, backfill only data
+	// omitted by old backups; no DDL is performed outside the migration lock.
+	return s.Write(ctx, func(tx *sql.Tx) error {
+		q := "INSERT INTO commerce_plan_states(plan_id,active,updated_at) SELECT p.id,1,? FROM commerce_plans p WHERE NOT EXISTS(SELECT 1 FROM commerce_plan_states st WHERE st.plan_id=p.id) ON CONFLICT(plan_id) DO NOTHING"
+		if s.Dialect == "mysql" {
+			q = "INSERT INTO commerce_plan_states(plan_id,active,updated_at) SELECT p.id,1,? FROM commerce_plans p WHERE NOT EXISTS(SELECT 1 FROM commerce_plan_states st WHERE st.plan_id=p.id) ON DUPLICATE KEY UPDATE plan_id=commerce_plan_states.plan_id"
+		}
+		_, err := tx.ExecContext(ctx, s.q(q), stamp(s.Now()))
+		return err
 	})
 }
+
 func AddMonths(t time.Time, months int) time.Time {
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	t = t.In(loc)
@@ -168,10 +228,14 @@ func scanEnt(r scanner) (Entitlement, error) {
 const entFields = "id,user_id,plan_id,version,starts_at,expires_at,quota,used"
 
 func (s *Service) Entitlement(ctx context.Context, user string) (Entitlement, error) {
-	return scanEnt(s.DB.QueryRowContext(ctx, s.q("SELECT "+entFields+" FROM commerce_entitlements WHERE user_id=? ORDER BY version DESC LIMIT 1"), user))
+	e, err := scanEnt(s.DB.QueryRowContext(ctx, s.q("SELECT "+entFields+" FROM commerce_entitlements WHERE user_id=? ORDER BY version DESC LIMIT 1"), user))
+	if err == nil {
+		e.Limits, err = s.entitlementLimits(ctx, s.DB, e.ID)
+	}
+	return e, err
 }
 func (s *Service) Plans(ctx context.Context) ([]Plan, error) {
-	rows, e := s.DB.QueryContext(ctx, "SELECT id,name,price,quota,months FROM commerce_plans ORDER BY id")
+	rows, e := s.DB.QueryContext(ctx, s.q("SELECT p.id,p.name,p.price,p.quota,p.months,COALESCE(st.active,1),COALESCE(st.version,1),COALESCE(st.kind,'period'),COALESCE(lim.payload,'{}') FROM commerce_plans p LEFT JOIN commerce_plan_states st ON st.plan_id=p.id LEFT JOIN commerce_plan_limits lim ON lim.plan_id=p.id ORDER BY p.id"))
 	if e != nil {
 		return nil, e
 	}
@@ -179,7 +243,11 @@ func (s *Service) Plans(ctx context.Context) ([]Plan, error) {
 	out := []Plan{}
 	for rows.Next() {
 		var p Plan
-		if e = rows.Scan(&p.ID, &p.Name, &p.Price, &p.Quota, &p.Months); e != nil {
+		var rawLimits string
+		if e = rows.Scan(&p.ID, &p.Name, &p.Price, &p.Quota, &p.Months, &p.Active, &p.Version, &p.Kind, &rawLimits); e != nil {
+			return nil, e
+		}
+		if e = json.Unmarshal([]byte(rawLimits), &p.Limits); e != nil {
 			return nil, e
 		}
 		out = append(out, p)
@@ -187,12 +255,24 @@ func (s *Service) Plans(ctx context.Context) ([]Plan, error) {
 	return out, rows.Err()
 }
 func (s *Service) CreatePlan(ctx context.Context, p Plan) (Plan, error) {
-	if p.Name == "" || len(p.Name) > 200 || p.Price <= 0 || p.Quota <= 0 || p.Months < 1 || p.Months > 120 {
+	if p.Kind == "" {
+		p.Kind = "period"
+	}
+	if err := validatePlan(p); err != nil {
 		return p, errors.New("invalid plan")
 	}
 	p.ID = id()
+	p.Active = true
+	p.Version = 1
 	err := s.Write(ctx, func(tx *sql.Tx) error {
 		_, e := tx.ExecContext(ctx, s.q("INSERT INTO commerce_plans(id,name,price,quota,months) VALUES(?,?,?,?,?)"), p.ID, p.Name, p.Price, p.Quota, p.Months)
+		if e != nil {
+			return e
+		}
+		if e = s.savePlanLimits(ctx, tx, p); e != nil {
+			return e
+		}
+		_, e = tx.ExecContext(ctx, s.q("INSERT INTO commerce_plan_states(plan_id,active,version,kind,updated_at) VALUES(?,?,1,?,?)"), p.ID, 1, p.Kind, stamp(s.Now()))
 		return e
 	})
 	return p, err
@@ -232,6 +312,9 @@ func (s *Service) post(ctx context.Context, tx *sql.Tx, user string, delta int64
 	if delta < 0 && balance < -delta {
 		return ErrFunds
 	}
+	if e = s.trackFunds(ctx, tx, user, balance, delta, kind, reference); e != nil {
+		return e
+	}
 	r, e := tx.ExecContext(ctx, s.q("UPDATE commerce_wallets SET balance=?,version=version+1 WHERE user_id=? AND version=?"), balance+delta, user, v)
 	if e != nil {
 		return e
@@ -241,55 +324,106 @@ func (s *Service) post(ctx context.Context, tx *sql.Tx, user string, delta int64
 		return ErrConflict
 	}
 	_, e = tx.ExecContext(ctx, s.q("INSERT INTO commerce_ledger(id,user_id,amount,balance,kind,reference_id,created_at) VALUES(?,?,?,?,?,?,?)"), id(), user, delta, balance+delta, kind, reference, stamp(s.Now()))
-	return e
+	if e != nil {
+		return e
+	}
+	return s.emitEventTx(ctx, tx, user, "wallet."+kind, map[string]any{"amount_cents": strconv.FormatInt(delta, 10), "balance_cents": strconv.FormatInt(balance+delta, 10), "reference": reference})
 }
 func (s *Service) Purchase(ctx context.Context, user, plan, key string, expected int64) (Entitlement, error) {
+	return s.PurchaseQuote(ctx, user, plan, key, expected, 0)
+}
+func (s *Service) PurchaseQuote(ctx context.Context, user, plan, key string, expected, planVersion int64) (Entitlement, error) {
 	var result Entitlement
 	if len(key) < 1 || len(key) > 128 {
 		return result, errors.New("invalid idempotency key")
 	}
 	err := s.Write(ctx, func(tx *sql.Tx) error {
-		if _, _, err := s.walletTx(ctx, tx, user); err != nil {
-			return err
-		}
-		var prev, p string
-		var v int64
-		e := tx.QueryRowContext(ctx, s.q("SELECT entitlement_id,plan_id,expected_version FROM commerce_purchases WHERE user_id=? AND idempotency_key=?"), user, key).Scan(&prev, &p, &v)
-		if e == nil {
-			if p != plan || v != expected {
-				return ErrConflict
-			}
-			result, e = scanEnt(tx.QueryRowContext(ctx, s.q("SELECT "+entFields+" FROM commerce_entitlements WHERE id=?"), prev))
-			return e
-		}
-		if !errors.Is(e, sql.ErrNoRows) {
-			return e
-		}
-		var current int64
-		e = tx.QueryRowContext(ctx, s.q("SELECT version FROM commerce_entitlements WHERE user_id=? ORDER BY version DESC LIMIT 1"), user).Scan(&current)
-		if e != nil && !errors.Is(e, sql.ErrNoRows) {
-			return e
-		}
-		if current != expected {
-			return ErrConflict
-		}
-		var price, quota int64
-		var months int
-		e = tx.QueryRowContext(ctx, s.q("SELECT price,quota,months FROM commerce_plans WHERE id=?"), plan).Scan(&price, &quota, &months)
-		if e != nil {
-			return e
-		}
-		result = Entitlement{ID: id(), UserID: user, PlanID: plan, Version: current + 1, StartsAt: s.Now().UTC(), Quota: quota}
-		result.ExpiresAt = AddMonths(result.StartsAt, months)
-		if e = s.post(ctx, tx, user, -price, "purchase", result.ID); e != nil {
-			return e
-		}
-		_, e = tx.ExecContext(ctx, s.q("INSERT INTO commerce_entitlements(id,user_id,plan_id,version,starts_at,expires_at,quota,used,allocated) VALUES(?,?,?,?,?,?,?,0,0)"), result.ID, user, plan, result.Version, stamp(result.StartsAt), stamp(result.ExpiresAt), quota)
-		if e != nil {
-			return e
-		}
-		_, e = tx.ExecContext(ctx, s.q("INSERT INTO commerce_purchases(user_id,idempotency_key,plan_id,expected_version,entitlement_id) VALUES(?,?,?,?,?)"), user, key, plan, expected, result.ID)
-		return e
+		var err error
+		result, err = s.purchaseTx(ctx, tx, user, plan, key, expected, planVersion)
+		return err
 	})
 	return result, err
+}
+
+func (s *Service) purchaseTx(ctx context.Context, tx *sql.Tx, user, plan, key string, expected, planVersion int64) (Entitlement, error) {
+	var result Entitlement
+	if s.CheckAccount != nil {
+		if err := s.CheckAccount(ctx, tx, user); err != nil {
+			return result, err
+		}
+	}
+	if _, _, err := s.walletTx(ctx, tx, user); err != nil {
+		return result, err
+	}
+	var prev, p string
+	var v int64
+	e := tx.QueryRowContext(ctx, s.q("SELECT entitlement_id,plan_id,expected_version FROM commerce_purchases WHERE user_id=? AND idempotency_key=?"), user, key).Scan(&prev, &p, &v)
+	if e == nil {
+		if planVersion != 0 {
+			var quote int64
+			if err := tx.QueryRowContext(ctx, s.q("SELECT plan_version FROM commerce_purchase_snapshots WHERE entitlement_id=?"), prev).Scan(&quote); err != nil {
+				return result, err
+			}
+			if quote != planVersion {
+				return result, ErrConflict
+			}
+		}
+		if p != plan || v != expected {
+			return result, ErrConflict
+		}
+		result, e = scanEnt(tx.QueryRowContext(ctx, s.q("SELECT "+entFields+" FROM commerce_entitlements WHERE id=?"), prev))
+		if e == nil {
+			result.Limits, e = s.entitlementLimits(ctx, tx, result.ID)
+		}
+		return result, e
+	}
+	if !errors.Is(e, sql.ErrNoRows) {
+		return result, e
+	}
+	var current int64
+	e = tx.QueryRowContext(ctx, s.q("SELECT version FROM commerce_entitlements WHERE user_id=? ORDER BY version DESC LIMIT 1"), user).Scan(&current)
+	if e != nil && !errors.Is(e, sql.ErrNoRows) {
+		return result, e
+	}
+	if current != expected {
+		return result, ErrConflict
+	}
+	purchasedPlan, e := s.planTx(ctx, tx, plan)
+	if e != nil {
+		return result, e
+	}
+	if !purchasedPlan.Active || purchasedPlan.Kind != "period" {
+		return result, errors.New("plan unavailable")
+	}
+	if planVersion != 0 && purchasedPlan.Version != planVersion {
+		return result, ErrConflict
+	}
+	price, quota, months := purchasedPlan.Price, purchasedPlan.Quota, purchasedPlan.Months
+	result = Entitlement{ID: id(), UserID: user, PlanID: plan, Version: current + 1, StartsAt: s.Now().UTC(), Quota: quota, Limits: purchasedPlan.Limits}
+	result.ExpiresAt = AddMonths(result.StartsAt, months)
+	if e = s.post(ctx, tx, user, -price, "purchase", result.ID); e != nil {
+		return result, e
+	}
+	_, e = tx.ExecContext(ctx, s.q("INSERT INTO commerce_entitlements(id,user_id,plan_id,version,starts_at,expires_at,quota,used,allocated) VALUES(?,?,?,?,?,?,?,0,0)"), result.ID, user, plan, result.Version, stamp(result.StartsAt), stamp(result.ExpiresAt), quota)
+	if e != nil {
+		return result, e
+	}
+	if e = s.snapshotLimits(ctx, tx, result.ID, result.Limits); e != nil {
+		return result, e
+	}
+	snapshot, e := json.Marshal(purchasedPlan)
+	if e != nil {
+		return result, e
+	}
+	if _, e = tx.ExecContext(ctx, s.q("INSERT INTO commerce_purchase_snapshots(entitlement_id,user_id,plan_version,payload,created_at) VALUES(?,?,?,?,?)"), result.ID, user, purchasedPlan.Version, string(snapshot), stamp(s.Now())); e != nil {
+		return result, e
+	}
+	if e = s.recordCommission(ctx, tx, user, result.ID, price); e != nil {
+		return result, e
+	}
+	if e = s.emitEventTx(ctx, tx, user, "entitlement.purchased", map[string]any{"entitlement_id": result.ID, "plan_id": plan, "amount_cents": strconv.FormatInt(price, 10)}); e != nil {
+		return result, e
+	}
+	_, e = tx.ExecContext(ctx, s.q("INSERT INTO commerce_purchases(user_id,idempotency_key,plan_id,expected_version,entitlement_id) VALUES(?,?,?,?,?)"), user, key, plan, expected, result.ID)
+	return result, e
 }

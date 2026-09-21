@@ -67,3 +67,35 @@ func TestBackupRestoreRejectsPartialAndExistingData(t *testing.T) {
 		t.Fatal("existing data overwritten")
 	}
 }
+
+func TestLegacyBackupPlanStateBackfill(t *testing.T) {
+	s := fixture(t)
+	ctx := context.Background()
+	p, err := s.CreatePlan(ctx, Plan{Name: "legacy", Price: 100, Quota: 1000, Months: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB.Exec("DELETE FROM commerce_plan_states"); err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(s.DB, s.Dialect, s.Write)
+	if err = restarted.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Write(ctx, func(tx *sql.Tx) error { return s.post(ctx, tx, "a", 100, "test", "fund-old") }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = restarted.Purchase(ctx, "a", p.ID, "buy-old", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err = restarted.SetPlanActive(ctx, p.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err = restarted.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	plans, err := restarted.Plans(ctx)
+	if err != nil || plans[0].Active {
+		t.Fatal(plans, err)
+	}
+}
