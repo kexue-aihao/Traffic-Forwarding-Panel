@@ -1,0 +1,34 @@
+name: traffic-forwarding-panel
+
+services:
+  panel:
+    image: ${TFP_IMAGE:?Run install-docker.sh to select and load the image}
+    pull_policy: never
+    container_name: traffic-forwarding-panel
+    restart: unless-stopped
+    user: "65532:65532"
+    environment:
+      TFP_ADDR: "0.0.0.0:8080"
+      TFP_DATABASE: sqlite
+      TFP_DSN: /data/panel.db
+      TFP_ORIGIN: ${TFP_ORIGIN:?Set the public HTTPS origin}
+      TFP_PAYMENTS_FILE: ${TFP_PAYMENTS_FILE:-}
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:${TFP_PORT:-18080}:8080"
+    volumes:
+      - ./data:/data
+      - ./config:/config:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

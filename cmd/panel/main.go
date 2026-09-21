@@ -24,7 +24,7 @@ import (
 )
 
 // Version is injected at release build time using -ldflags -X.
-var Version = "0.1.0-beta.1"
+var Version = "0.1.0-beta.2"
 
 func main() {
 	if err := run(); err != nil {
@@ -41,6 +41,7 @@ func env(key, fallback string) string {
 
 func run() error {
 	showVersion := flag.Bool("version", false, "print panel release version")
+	checkHealth := flag.Bool("healthcheck", false, "check the running panel HTTP/database health and exit")
 	addr := flag.String("addr", env("TFP_ADDR", "127.0.0.1:8080"), "HTTP listen address")
 	driver := flag.String("database", env("TFP_DATABASE", "sqlite"), "sqlite, postgres or mysql")
 	dsn := flag.String("dsn", env("TFP_DSN", "data/panel.db"), "database DSN (prefer TFP_DSN for server credentials)")
@@ -54,6 +55,9 @@ func run() error {
 	if *showVersion {
 		fmt.Println(Version)
 		return nil
+	}
+	if *checkHealth {
+		return healthcheck(*addr)
 	}
 	commands := 0
 	for _, v := range []string{*initAdmin, *resetPassword, *backupPath, *restorePath} {

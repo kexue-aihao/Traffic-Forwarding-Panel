@@ -2,7 +2,7 @@
 
 Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP 四种加密承载。
 
-当前版本为 `v0.1.0-beta.1` 预发布版。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.0-beta.1.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。Cyber 按用户要求跳过；租约续期连接连续性、容量/性能工作及 Linux/公网/真实支付验收等待后续指示。
+当前版本为 `v0.1.0-beta.2` 预发布版。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.0-beta.2.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。Cyber 按用户要求跳过；租约续期连接连续性、容量/性能工作及 Linux/公网/真实支付验收等待后续指示。
 
 ## 本机启动
 
@@ -38,7 +38,19 @@ MySQL 使用 `TFP_DATABASE=mysql`，DSN 如 `panel:替换密码@tcp(127.0.0.1:33
 
 HTTPS 反向代理应设置真实公开地址 `-origin https://panel.example.com` 并保留 Host；面板据此校验 Origin、设置 Secure Cookie。SSE `/api/v1/probes/events` 关闭代理缓冲并允许长连接。健康检查 `GET /api/v1/health` 会检查数据库。
 
-仓库包含 [Dockerfile](Dockerfile)，镜像内同时提供 `/panel` 与 `/agent`，默认非 root。持久化挂载 `/data` 并保证非 root 用户可写；Agent 需要的证书、状态和网络绑定另行配置。当前环境没有执行 Docker 构建验收。
+### Docker 一键部署 / 1Panel
+
+服务器已有 Docker 和 Docker Compose v2 时执行：
+
+```sh
+curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.0-beta.2/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
+```
+
+输入 HTTPS 域名和管理员密码即可。脚本自动识别 amd64/arm64，下载并校验 Docker 镜像包，配置数据持久化、管理员、健康检查和容器重启。默认目录 `/opt/traffic-forwarding-panel`，仅监听宿主机 `127.0.0.1:18080`。
+
+在 1Panel 新建反向代理网站，填写同一域名、代理地址 `http://127.0.0.1:18080`，申请证书并开启 HTTPS；启用 WebSocket，关闭代理缓存。管理员入口 `https://你的域名/admin`。详见 [Docker 与 1Panel 部署](docs/docker-deployment.md)，其中包括 OpenResty 使用桥接网络时的配置、离线安装、支付配置和备份方式。
+
+镜像包含 `/panel` 与 `/agent`，默认以 UID/GID 65532 运行。此安装仅部署面板；用于承载转发流量的 Agent 仍部署到相应入口/出口节点。
 
 ## Agent、支付和接口
 

@@ -7,3 +7,8 @@ bin
 *.db*
 *.exe
 .env
+**/.env
+**/*.pem
+**/*.key
+**/*.log
+**/*payments.local.json
