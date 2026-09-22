@@ -175,6 +175,21 @@ onUpdated(() => {
   if (el && want !== undefined && el.value !== String(want)) el.value = String(want);
 });
 
+/**
+ * 失焦就收起。
+ *
+ * 但「点选项」本身就会先失焦一次：那一层列表里的 <li> 不可聚焦，浏览器在它
+ * 上面按下鼠标时会把焦点从原生 select 上移走。这里若无条件收起，列表会在
+ * 随后的 click 之前被卸载，点击落到列表底下的元素上 —— 表现出来就是**选项
+ * 永远点不中、下拉切不了**（选项上的 @mousedown.prevent 是另一半：让焦点
+ * 根本不移走）。所以焦点只是在本组件内部挪动时要放行。
+ */
+function onBlur(event: FocusEvent) {
+  const next = event.relatedTarget as Node | null;
+  if (next && root.value?.contains(next)) return;
+  close();
+}
+
 // 点外面关掉。用 pointerdown 而不是 click：click 在拖选等场景下会迟到。
 function onDocumentPointer(event: PointerEvent) {
   if (open.value && !root.value?.contains(event.target as Node)) close();
@@ -193,12 +208,18 @@ onBeforeUnmount(() =>
       :value="bound"
       @mousedown="onMouseDown"
       @keydown="onKey"
-      @blur="close"
+      @blur="onBlur"
       @change="onNativeChange"
     >
       <slot />
     </select>
-    <!-- 纯视觉的替代品，对辅助技术没有意义 —— 可读的是上面那个原生 select -->
+    <!--
+      纯视觉的替代品，对辅助技术没有意义 —— 可读的是上面那个原生 select。
+
+      选项上的 @mousedown.prevent 是这条路上关键的一半：不挡住按下的默认动作，
+      焦点就会从原生 select 上移走，触发一次 blur → 列表先于 click 被卸载，选项
+      永远点不中。另一半见 onBlur。
+    -->
     <ul v-if="open" class="select-list" aria-hidden="true">
       <li
         v-for="(item, index) in items"
@@ -207,8 +228,10 @@ onBeforeUnmount(() =>
         :class="{
           'is-active': index === active,
           'is-selected': item.value === String(bound ?? ''),
+          'is-disabled': item.disabled,
         }"
         @pointerenter="active = index"
+        @mousedown.prevent
         @click="pick(item)"
       >
         {{ item.label }}
@@ -274,5 +297,12 @@ onBeforeUnmount(() =>
   background: var(--color-active);
   color: var(--color-ink);
   font-weight: 500;
+}
+
+/* 占位项（比如「选择渠道」）是不可选的：点它不会有任何反应，所以它得看起来
+   就不像能点的 —— 否则用户点上去没动静，只会以为这个下拉坏了。 */
+.select-option.is-disabled {
+  color: var(--color-ink-faint);
+  cursor: default;
 }
 </style>

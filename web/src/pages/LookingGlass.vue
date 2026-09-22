@@ -69,13 +69,21 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const result = await api<{ items: Node[] }>("/nodes?page_size=100");
-    if (!alive) return;
-    nodes.value = result.items;
+    // 接口一次最多给 100 条，机器多起来要分页取完：漏掉的那几台会直接从下拉里
+    // 消失，操作方只会以为「这台机器选不了」。做法与探针页的历史选择器一致。
+    const items: Node[] = [];
+    for (let page = 1; ; page++) {
+      const next = await api<{ items: Node[]; total: number }>(
+        `/nodes?page=${page}&page_size=100`,
+      );
+      if (!alive) return;
+      items.push(...next.items);
+      if (!next.items.length || items.length >= next.total) break;
+    }
+    nodes.value = items;
     const first =
-      result.items.find((n) =>
-        (n.capabilities || []).includes("looking-glass-v1"),
-      ) || result.items[0];
+      items.find((n) => (n.capabilities || []).includes("looking-glass-v1")) ||
+      items[0];
     nodeID.value = first?.id || "";
   } catch (e) {
     if (alive) error.value = errorText(e);

@@ -61,6 +61,24 @@ async function save(page) {
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await page.locator("dialog").waitFor({ state: "detached" });
 }
+// 自绘下拉走真实点击：展开那层列表再点选项。selectOption 直接改原生 select
+// 的值，碰不到那层 <li>，测不出「选项点不中、下拉切不了」。
+async function pickOption(page, label, value) {
+  const select = page.getByLabel(label).first();
+  // evaluateAll 不像点击那样自动等待：页面或弹窗还在渲染时会读到空列表。
+  await select.waitFor();
+  const values = await select
+    .locator("option")
+    .evaluateAll((options) => options.map((o) => o.value));
+  assert.ok(values.includes(value), `${label} 没有 ${value} 这个选项`);
+  assert.notEqual(await select.inputValue(), value, `${label} 已经是 ${value}`);
+  await select.click();
+  const list = page.locator(".select-list");
+  await list.waitFor();
+  await list.locator(".select-option").nth(values.indexOf(value)).click();
+  await list.waitFor({ state: "detached" });
+  assert.equal(await select.inputValue(), value, `${label} 应当切到 ${value}`);
+}
 // Explicit persisted aggregation fixtures test the real history API and UI.
 // They do not claim that a real Agent collected these samples or test rollup jobs.
 function seedHistory(nodeID) {
@@ -678,7 +696,8 @@ try {
       await admin
         .getByLabel("诊断节点",{exact:true})
         .selectOption(registered.node_id);
-      await admin.getByLabel("诊断方式",{exact:true}).selectOption("tcping");
+      // 方式下拉走真实点击：用户报的缺陷就是这一处点不动。
+      await pickOption(admin,"诊断方式","tcping");
       await admin.getByLabel("诊断目标",{exact:true}).fill("127.0.0.1:9");
       await admin.getByRole("button",{name:"开始诊断",exact:true}).click();
       // 等请求真正落库再让节点来领 —— click() 在异步提交完成前就返回了。

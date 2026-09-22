@@ -13,8 +13,10 @@
 | 探针页面能力 | CPU 型号/占用、内存、磁盘、虚拟交换、负载、网卡速率均已上报并展示；新增按国家/地区码绘制的位置图标 | 旗面是几何基元拼的近似图形，认不出的码退回带码徽章，不冒充国旗 |
 | 站点金额单位 | SiteSettings 的充值区间改为**元**（`minimum_recharge/maximum_recharge`），新增 `currency`；旧的分字段读回时自动换算；下单接口接受 `amount`（元），`amount_cents` 保留兼容 | 账本仍按整数分记账；套餐价格字段未改单位 |
 | 通道汇率与手续费 | 每条支付通道可配 `fee_percent/fee_fixed`（加在充值金额之上，到账不变）与 `rate/crypto_currency`（折算应付 USDT）；订单新增 `payable_cents/fee_cents/payable_crypto`，回调按实付核对、按到账入账 | 折算金额是报价：网关仍按其商户汇率结算，两边需配同一汇率 |
+| 自绘下拉：选项点不中（用户反馈：网络诊断选不了 ping/tcping/mtr） | `Select.vue` 里选项的 `<li>` 不可聚焦，按下鼠标会把焦点从原生 `<select>` 上带走并触发 `blur`，组件在随后的 `click` 之前就收起了列表，点击落到列表底下的元素上 —— 选项加 `@mousedown.prevent` 保住焦点，`onBlur` 改为只在焦点离开组件时收起；另发现顶栏下拉会被内容区控件盖住（三引擎实测），给顶栏补 `position:relative;z-index` | 修复前只有 `selectOption` 这类直接改原生 select 的自动化路径能通过，真实点击测不出来；本轮把浏览器用例改成点击真实选项，覆盖页面、弹窗与顶栏三处 |
+| 网络诊断的节点下拉漏机器 | 该页原来只取 `/nodes?page_size=100` 的第一页，机器超过 100 台时后面的不会出现在下拉里（操作方只会以为「这台选不了」）；改为按 `total` 分页取完，与探针页的历史选择器同一做法。造 130 台实测：下拉列出 130 项 | 只影响这一处的候选列表，接口、鉴权与权限未变 |
 
-本轮实际运行：`go test ./... -count=1`、`go vet ./...` 全通过（含新增的 `internal/contract` 金额/站点换算、`internal/commerce` 手续费与汇率、`internal/platform` 凭据/设备地址/位置解析测试）；`npm run typecheck`、`npm run build`、`npm test`（Chromium/Firefox/WebKit）与 `npm run test:live`（真实 Go/SQLite 控制面，新增设备地址接口与管理员签发凭据的端到端断言）在三个引擎通过。位置查询默认启用公共服务 `https://ipwho.is/{ip}`，运营方可在站点设置里换成自己的服务或留空关闭；测试中显式关闭，不外发任何地址。
+本轮实际运行：`go test ./... -count=1`、`go vet ./...` 全通过（含新增的 `internal/contract` 金额/站点换算、`internal/commerce` 手续费与汇率、`internal/platform` 凭据/设备地址/位置解析测试）；`npm run typecheck`、`npm run build`、`npm test`（Chromium/Firefox/WebKit）与 `npm run test:live`（真实 Go/SQLite 控制面，新增设备地址接口与管理员签发凭据的端到端断言）在三个引擎通过。浏览器用例里的下拉切换已改成点击真实选项（页面、弹窗、顶栏、网络诊断各一处）：把 `@mousedown.prevent` 撤掉即复现「选项点不中」，说明这一条确实在测那条路径。位置查询默认启用公共服务 `https://ipwho.is/{ip}`，运营方可在站点设置里换成自己的服务或留空关闭；测试中显式关闭，不外发任何地址。
 
 ## 已实现
 

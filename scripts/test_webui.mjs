@@ -308,6 +308,39 @@ const server = createServer(async (req, res) => {
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
+
+/**
+ * 自绘下拉走**真实点击**：展开那层列表，点其中的选项，再确认值真的变了。
+ *
+ * 不用 selectOption：它直接改原生 select 的值并派发 change，永远碰不到那层
+ * 自己画的 <li>，所以「选项点不中」这类缺陷它一条都发现不了 —— 而这些下拉
+ * 在界面上是唯一的入口。选项的 <li> 不可聚焦，按下鼠标时浏览器会把焦点从
+ * 原生 select 上移走；组件若在此时收起列表，点击就会落到列表底下的元素上，
+ * 表现出来就是「下拉切不了」。
+ */
+async function pickOption(page, label, value) {
+  const select = page.getByLabel(label).first();
+  // evaluateAll 不像点击那样自动等待：页面或弹窗还在渲染时会读到空列表。
+  await select.waitFor();
+  const values = await select
+    .locator("option")
+    .evaluateAll((options) => options.map((o) => o.value));
+  assert.ok(
+    values.includes(value),
+    `${label} 的选项里没有 ${value}：${values.join(", ")}`,
+  );
+  assert.notEqual(
+    await select.inputValue(),
+    value,
+    `${label} 当前已经是 ${value}，这一条就测不到切换了`,
+  );
+  await select.click();
+  const list = page.locator(".select-list");
+  await list.waitFor();
+  await list.locator(".select-option").nth(values.indexOf(value)).click();
+  await list.waitFor({ state: "detached" });
+  assert.equal(await select.inputValue(), value, `${label} 应当切到 ${value}`);
+}
 try {
   for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
     authorized = false;
@@ -408,8 +441,8 @@ try {
       await page
         .getByLabel("名称", { exact: true })
         .fill("<img src=x onerror=alert(1)>");
-      await page.getByLabel("入口服务器").selectOption("n1");
-      await page.getByLabel("设备组").selectOption("g1");
+      await pickOption(page, "入口服务器", "n1");
+      await pickOption(page, "设备组", "g1");
       await page.getByLabel("目标地址", { exact: true }).fill("127.0.0.1:8080");
       await page.getByRole("button", { name: "保存", exact: true }).click();
       await page
@@ -430,8 +463,9 @@ try {
         await page.locator(".probe-place").first().innerText(),
         "位置 中国香港·Hong Kong · 设备组 Fixture group",
       );
-      // 探针页面按设备组收窄：选了组之后仍然只显示这一组的机器。
-      await page.getByLabel("设备组").selectOption("g1");
+      // 探针页面按设备组收窄：选了组之后仍然只显示这一组的机器。这里走真实
+      // 点击：切换是这套自绘下拉唯一的入口，值得按用户的方式验一遍。
+      await pickOption(page, "设备组", "g1");
       await page.getByRole("heading", { name: "Fixture node" }).waitFor();
       assert.equal(
         await page.locator(".probe-api code").count(),
@@ -467,7 +501,7 @@ try {
         "history includes paginated and offline nodes",
       );
       const navigationLength = await page.evaluate(() => window.history.length);
-      await page.getByLabel("历史指标").selectOption("disk_percent");
+      await pickOption(page, "历史指标", "disk_percent");
       await history
         .locator(".history-selection")
         .getByText("0 %", { exact: true })
@@ -645,7 +679,7 @@ try {
         .waitFor();
       assert.equal(reconcileCalls, 1);
       await page.getByRole("button", { name: "充值钱包", exact: true }).click();
-      await page.getByLabel("支付渠道").selectOption("epay");
+      await pickOption(page, "支付渠道", "epay");
       // 充值是元，手续费与加密报价由服务端配置算出来，界面上先说清楚付多少。
       assert.deepEqual(
         await page.locator("dialog .metrics div").allInnerTexts(),
@@ -665,15 +699,32 @@ try {
       assert.equal(createdKeys.length, 2);
       assert.equal(createdKeys[0], createdKeys[1]);
       paymentFixture = false;
+      // 网络诊断的方式下拉 —— 用户报的就是这一处「选不了 ping / tcping / mtr」。
+      // 走真实点击：展开自绘列表、点其中的选项。
+      await page.getByRole("link", { name: "网络诊断", exact: true }).click();
+      await pickOption(page, "诊断方式", "tcping");
+      assert.equal(
+        await page.getByLabel("诊断目标").getAttribute("placeholder"),
+        "10.20.0.11:27015",
+        "切到 tcping 之后，目标提示要跟着变成 主机:端口",
+      );
+      await pickOption(page, "诊断方式", "mtr");
+      await pickOption(page, "诊断方式", "ping");
+      // 收尾回到套餐与钱包：下面还有一条以「内容够长」为前提的断言（移动端要能
+      // 滚起来），停在内容更短的诊断页会让那条断言看运气 —— WebKit 上就不滚。
+      await page.getByRole("link", { name: "套餐与钱包", exact: true }).click();
+      await page
+        .getByRole("heading", { name: "套餐与钱包", exact: true })
+        .waitFor();
       for (const accent of [
-        "blue",
         "teal",
         "violet",
         "magenta",
         "amber",
+        "blue",
         "graphite",
       ])
-        await page.getByLabel("品牌配色").selectOption(accent);
+        await pickOption(page, "品牌配色", accent);
       // 默认暗色：这套设计语言的使用场景就是近黑画布 + 环境光
       assert.equal(
         await page.evaluate(() => document.documentElement.dataset.theme),
@@ -751,7 +802,7 @@ try {
         [],
       );
       console.log(
-        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), dirty dialog, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, recharge in yuan with channel fee, purchase, themes, 401 PASS`,
+        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), dirty dialog, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, recharge in yuan with channel fee, purchase, dropdown list clicks (page, dialog, diagnostics), themes, 401 PASS`,
       );
     } finally {
       await browser.close();

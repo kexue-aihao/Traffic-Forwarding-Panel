@@ -425,6 +425,13 @@ nav a[aria-current="page"] .icon {
   height: var(--shell-topbar);
   padding: 0 var(--space-5);
   border-bottom: 1px solid var(--color-line-faint);
+  /* 顶栏里的下拉是往下弹的，必然落到内容区上方。而 .glass 的 backdrop-filter
+     造出了一个层叠上下文，顶栏自己却仍排在普通流里 —— 后面的 #view 只要有一
+     个元素正好在那块地方（比如页面上的另一个下拉），就会把展开的列表连同选项
+     一起盖住：点上去命中的是底下的控件，表现出来是「这个下拉切不了」。给顶栏
+     一个明确的层叠位置，整条弹出层就跟着上来了。 */
+  position: relative;
+  z-index: 1;
 }
 
 .topbar > span:first-child,
