@@ -1,0 +1,9 @@
+database-path: sqlite3:///data/panel.db
+# 容器内监听全部网卡；Compose 不发布后端端口，仅 Caddy 可达。
+listen: 0.0.0.0:18888
+trust-proxy: true
+disable-gzip: true
+offline-node-retention-time: 86400
+offline-node-time: 20
+# origin: https://panel.example.com
+# payments-file: /etc/traffic-forwarding-panel/payments.json

@@ -8,6 +8,7 @@ import { displayTimeZoneLabel, formatDateTime } from "../core/format";
 interface Probe {
   node_id: string;
   sampled_at: string;
+  online?: boolean;
   cpu_percent: number | null;
   memory_used: string | null;
   memory_total: string | null;
@@ -51,9 +52,7 @@ function nodeTitle(p: Probe) {
   return p.node_name || names.value[p.node_id] || p.node_id;
 }
 function groupLabel(p: Probe) {
-  return (p.group_ids || [])
-    .map((id) => groupNames.value[id] || id)
-    .join("、");
+  return (p.group_ids || []).map((id) => groupNames.value[id] || id).join("、");
 }
 const error = ref("");
 const connected = ref(false);
@@ -100,7 +99,9 @@ const count = computed(() => probes.value.length);
 async function load() {
   error.value = "";
   try {
-    const scope = group.value ? `?group_id=${encodeURIComponent(group.value)}` : "";
+    const scope = group.value
+      ? `?group_id=${encodeURIComponent(group.value)}`
+      : "";
     const [p, n, g] = await Promise.all([
       api<{ items: Probe[] }>("/probes" + scope),
       loadNodes(scope),
@@ -184,7 +185,11 @@ onUnmounted(() => {
         <p class="eyebrow">LIVE TELEMETRY</p>
         <h1>服务器探针</h1>
         <p class="muted">
-          <span class="live-dot" :data-live="String(connected)" aria-hidden="true" />
+          <span
+            class="live-dot"
+            :data-live="String(connected)"
+            aria-hidden="true"
+          />
           {{ count }} 个可见采样 ·
           {{ connected ? "实时连接已建立" : "实时连接未建立" }}
           · {{ displayTimeZoneLabel }}
@@ -230,7 +235,11 @@ onUnmounted(() => {
             />{{ nodeTitle(p) }}
           </h2>
           <span class="badge">{{
-            now - Date.parse(p.sampled_at) > 30000 ? "数据陈旧" : "近期采样"
+            p.online === false
+              ? "离线"
+              : now - Date.parse(p.sampled_at) > 30000
+                ? "数据陈旧"
+                : "近期采样"
           }}</span>
         </div>
         <p class="small muted">采样于 {{ formatDateTime(p.sampled_at) }}</p>

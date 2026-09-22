@@ -4,6 +4,7 @@ import Select from "../components/Select.vue";
 import Modal from "../components/Modal.vue";
 import { api, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
+import { isPhysicalExitGroup } from "../core/groups";
 interface Exit {
   id: string;
   name: string;
@@ -26,6 +27,7 @@ interface Exit {
 interface Choice {
   id: string;
   name: string;
+  type?: string;
 }
 const admin = computed(() => adminSite && state.user?.role === "admin"),
   items = ref<Exit[]>([]),
@@ -65,6 +67,7 @@ async function open(v?: Exit) {
       all("/groups"),
       all("/nodes"),
     ]);
+    groups.value = groups.value.filter(isPhysicalExitGroup);
     form.value = v
       ? (JSON.parse(JSON.stringify(v)) as Exit)
       : {
@@ -152,14 +155,22 @@ onMounted(load);
         <label
           >出口名称<input v-model="form.name" required maxlength="100" /></label
         ><label
-          >出口设备组<Select v-model="form.group_id" aria-label="出口设备组" required>
+          >出口设备组<Select
+            v-model="form.group_id"
+            aria-label="出口设备组"
+            required
+          >
             <option value="" disabled>选择设备组</option>
             <option v-for="g in groups" :key="g.id" :value="g.id">
               {{ g.name }}
             </option>
           </Select></label
         ><label
-          >出口服务器<Select v-model="form.node_id" aria-label="出口服务器" required>
+          >出口服务器<Select
+            v-model="form.node_id"
+            aria-label="出口服务器"
+            required
+          >
             <option value="" disabled>选择服务器</option>
             <option v-for="n in nodes" :key="n.id" :value="n.id">
               {{ n.name }}
@@ -190,9 +201,10 @@ onMounted(load);
             required /></label
         ><label class="check"
           ><input v-model="form.enabled" type="checkbox" />启用出口</label
-        ><div class="form-actions">
-        <button class="primary" :disabled="busy">保存出口</button>
-      </div>
+        >
+        <div class="form-actions">
+          <button class="primary" :disabled="busy">保存出口</button>
+        </div>
       </form></Modal
     >
   </section>

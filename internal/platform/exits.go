@@ -86,6 +86,16 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 	}
 	e.Online = false
 	err := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		group, err := s.groupTx(r.Context(), tx, e.GroupID)
+		if err != nil {
+			return err
+		}
+		if !group.CanHostExit() {
+			return errors.New("出口节点只能关联出口类型的设备组")
+		}
+		if group.Type == contract.GroupExit && len(e.Tunnel.Chain) > 0 {
+			return errors.New("多跳路由请配置链式出口设备组")
+		}
 		var member int
 		if err := tx.QueryRowContext(r.Context(), s.q("SELECT COUNT(*) FROM cp_node_groups WHERE node_id=? AND group_id=?"), e.NodeID, e.GroupID).Scan(&member); err != nil {
 			return err
@@ -176,6 +186,65 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
 		return "", err
 	}
+	if !g.CanExit() || !entry.CanEnter() {
+		return "", errors.New("请选择入口设备组和出口或链式出口设备组")
+	}
+	if g.Type == contract.GroupChainExit {
+		if rule.ExitID != "" && rule.ExitID != "auto" {
+			return "", errors.New("链式出口按每一跳的出口组自动选择节点")
+		}
+		if len(g.ChainGroupIDs) < 2 || len(g.ChainGroupIDs) > 3 {
+			return "", errors.New("链式出口需要 2–3 跳")
+		}
+		parts := []contract.Rule{}
+		seenGroups := map[string]bool{g.ID: true}
+		seenNodes := map[string]bool{rule.NodeID: true}
+		for _, gid := range g.ChainGroupIDs {
+			hop, err := s.groupTx(ctx, tx, gid)
+			if err != nil {
+				return "", err
+			}
+			if !hop.CanHostExit() || seenGroups[gid] {
+				return "", errors.New("链式出口必须由不重复的出口设备组组成")
+			}
+			seenGroups[gid] = true
+			part := *rule
+			part.ExitGroupID, part.ExitID = gid, "auto"
+			if _, err := s.resolveExitTx(ctx, tx, &part); err != nil {
+				return "", err
+			}
+			if part.Tunnel == nil || len(part.Tunnel.Chain) > 0 || part.Tunnel.Reverse != "" {
+				return "", errors.New("链式出口的每一跳必须是普通正向出口")
+			}
+			var nodeID string
+			if err := tx.QueryRowContext(ctx, s.q("SELECT node_id FROM cp_exits WHERE id=?"), part.SelectedExitID).Scan(&nodeID); err != nil {
+				return "", err
+			}
+			if seenNodes[nodeID] {
+				return "", errors.New("链式出口不能重复经过同一设备")
+			}
+			seenNodes[nodeID] = true
+			parts = append(parts, part)
+		}
+		resolved := *parts[0].Tunnel
+		resolved.Chain = nil
+		for _, part := range parts[1:] {
+			resolved.Chain = append(resolved.Chain, contract.TunnelHop{Transport: part.Transport, Endpoint: part.Tunnel.Endpoint, ServerName: part.Tunnel.ServerName, Token: part.Tunnel.Token})
+		}
+		candidate := *rule
+		candidate.Transport, candidate.Tunnel = parts[0].Transport, &resolved
+		if policyDenied(g, candidate) || entryPolicyDenied(entry, candidate) {
+			return "", errors.New("group policy denied")
+		}
+		if err := tunnel.ValidateChain(contract.TunnelHop{Transport: candidate.Transport, Endpoint: resolved.Endpoint, ServerName: resolved.ServerName, Token: resolved.Token}, resolved.Chain); err != nil {
+			return "", err
+		}
+		if err := candidate.ValidateAdvanced(); err != nil {
+			return "", err
+		}
+		rule.Transport, rule.Tunnel, rule.SelectedExitID = candidate.Transport, candidate.Tunnel, parts[0].SelectedExitID
+		return g.Multiplier, nil
+	}
 	rows, err := tx.QueryContext(ctx, s.q("SELECT e.payload,n.last_seen FROM cp_exits e JOIN cp_nodes n ON n.id=e.node_id JOIN cp_node_groups ng ON ng.node_id=e.node_id AND ng.group_id=e.group_id WHERE e.group_id=? ORDER BY e.id"), g.ID)
 	if err != nil {
 		return "", err
@@ -199,7 +268,7 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 		candidate := *rule
 		candidate.Transport = e.Transport
 		candidate.Tunnel = &e.Tunnel
-		if policyDenied(g, candidate) || policyDenied(entry, candidate) {
+		if policyDenied(g, candidate) || entryPolicyDenied(entry, candidate) {
 			continue
 		}
 		h := sha256.Sum256([]byte(rule.ID + ":" + e.ID))

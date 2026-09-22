@@ -148,15 +148,9 @@ try {
       await admin
         .getByLabel("名称", { exact: true })
         .fill(`group-${browserName}`);
+      await admin.getByLabel("设备类型", { exact: true }).selectOption("entry");
+      await admin.getByLabel("入口直出策略", { exact: true }).selectOption("allow");
       await admin.getByLabel(username, { exact: true }).check();
-      await admin
-        .getByRole("group", { name: "屏蔽隧道承载", exact: true })
-        .getByLabel("WS", { exact: true })
-        .check();
-      await admin
-        .getByRole("group", { name: "屏蔽明文应用协议", exact: true })
-        .getByLabel("SOCKS 应用流量", { exact: true })
-        .check();
       await save(admin);
       const savedGroups = await (
         await admin.request.get(base + "/api/v1/groups?page_size=100")
@@ -164,10 +158,81 @@ try {
       const savedGroup = savedGroups.items.find(
         (group) => group.name === `group-${browserName}`,
       );
-      assert.deepEqual(savedGroup.blocked_protocols, [
-        "transport:ws",
-        "app:socks",
-      ]);
+      assert.deepEqual(savedGroup.blocked_protocols, []);
+      assert.equal(savedGroup.type, "entry");
+      assert.deepEqual(savedGroup.disabled_transports, []);
+      assert.deepEqual(savedGroup.disabled_networks, []);
+      const groupRow = admin.getByRole("row").filter({ hasText: `group-${browserName}` });
+      await groupRow.getByRole("button", { name: "高级设置", exact: true }).click();
+      const advanced = admin.getByLabel("设备组高级设置 JSON", { exact: true });
+      assert.match(await advanced.inputValue(), /\/\/ 入站屏蔽选项/);
+      assert.match(await advanced.inputValue(), /"max_fail": 3/);
+      assert.match(await advanced.inputValue(), /"fail_timout_sec": 30/);
+      if (browserName === "chromium") {
+        const screenshotDir = resolve(root, ".gocache/screens");
+        await mkdir(screenshotDir, { recursive: true });
+        const viewport = admin.viewportSize();
+        for (const [size, width, height] of [["desktop", 1440, 1000], ["mobile", 320, 900]]) {
+          await admin.setViewportSize({ width, height });
+          assert.ok(await admin.locator("dialog").evaluate((el) => el.scrollWidth <= el.clientWidth));
+          await admin.screenshot({ path: resolve(screenshotDir, `group-advanced-${size}.png`) });
+          await admin.locator(".advanced-help summary").click();
+          await admin.getByRole("heading", { name: "反向隧道选项", exact: true }).scrollIntoViewIfNeeded();
+          assert.ok(await admin.locator("dialog").evaluate((el) => el.scrollWidth <= el.clientWidth));
+          await admin.screenshot({ path: resolve(screenshotDir, `group-advanced-help-${size}.png`) });
+          await admin.locator(".advanced-help summary").click();
+          await advanced.scrollIntoViewIfNeeded();
+          await admin.locator("dialog").evaluate((el) => { el.scrollTop = 0; });
+        }
+        await admin.setViewportSize(viewport);
+      }
+      await advanced.fill("[]");
+      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
+      await admin.getByRole("alert").filter({ hasText: "必须是 JSON 对象" }).waitFor();
+      await advanced.fill("{} /* missing end");
+      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
+      await admin.getByRole("alert").filter({ hasText: "块注释未结束" }).waitFor();
+      await advanced.fill('{"allowed_host":["example.com"],"blocked_path":["/private"]}');
+      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
+      await admin.getByRole("alert").filter({ hasText: "allowed_host" }).waitFor();
+      const extraSettings = {
+        blocked_protocol: ["socks"], disable_udp: true, max_fail: 0, fail_timout_sec: 0,
+        blocked_path: ["/test//path", "/test/*literal*/"],
+        tls: { server_name: "example.com", nested: { enabled: false } },
+      };
+      await advanced.fill(`// extra settings\n${JSON.stringify(extraSettings, null, 2)}\n/* end */`);
+      await admin.getByRole("button", { name: "格式化", exact: true }).click();
+      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      await admin.getByRole("row").filter({ hasText: `group-${browserName}` }).waitFor();
+      const updatedGroups = await (await admin.request.get(base + "/api/v1/groups?page_size=100")).json();
+      const updatedGroup = updatedGroups.items.find((group) => group.name === `group-${browserName}`);
+      assert.deepEqual(updatedGroup.advanced, extraSettings);
+      await admin.getByRole("row").filter({ hasText: `group-${browserName}` }).getByRole("button", { name: "编辑", exact: true }).click();
+      const basicDialog = admin.locator("dialog");
+      assert.equal(await basicDialog.getByText("屏蔽协议", { exact: true }).count(), 0);
+      assert.equal(await basicDialog.getByText("允许的转发方式", { exact: true }).count(), 0);
+      if (browserName === "chromium") {
+        const screenshotDir = resolve(root, ".gocache/screens");
+        await mkdir(screenshotDir, { recursive: true });
+        const viewport = admin.viewportSize();
+        for (const [size, width, height] of [["desktop", 1440, 1000], ["mobile", 320, 900]]) {
+          await admin.setViewportSize({ width, height });
+          assert.ok(await admin.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+          assert.ok(await admin.locator("dialog").evaluate((el) => el.scrollWidth <= el.clientWidth));
+          await admin.screenshot({ path: resolve(screenshotDir, `group-policies-${size}.png`) });
+        }
+        await admin.setViewportSize(viewport);
+      }
+      await save(admin);
+      await groupRow.getByRole("button", { name: "高级设置", exact: true }).click();
+      assert.match(await advanced.inputValue(), /"max_fail": 0/);
+      assert.match(await advanced.inputValue(), /"fail_timout_sec": 0/);
+      assert.doesNotMatch(await advanced.inputValue(), /app:socks/);
+      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      const reopenedGroups = await (await admin.request.get(base + "/api/v1/groups?page_size=100")).json();
+      assert.deepEqual(reopenedGroups.items.find((group) => group.id === savedGroup.id).advanced, extraSettings);
       // 面板托管接入脚本与 Agent 产物，两个路由都必须**免登录**可取 ——
       // 接入命令在目标设备上执行，那里没有会话。
       const installer = await fetch(base + "/download/agent-install.sh");
@@ -215,6 +280,7 @@ try {
       await admin.getByRole("link", { name: "设备组", exact: true }).click();
       await admin.getByRole("button", { name: "新增", exact: true }).click();
       await admin.getByLabel("名称", { exact: true }).fill(`join-${browserName}`);
+      await admin.getByLabel("设备类型", { exact: true }).selectOption("entry");
       await save(admin);
       const joinRow = admin.locator("tr", { hasText: `join-${browserName}` });
       await joinRow.getByRole("button", { name: "接入设备" }).click();
@@ -369,7 +435,7 @@ try {
       await user.getByLabel("目标地址", { exact: true }).fill("127.0.0.1:8081");
       await save(user);
       await user.getByRole("button", { name: "编辑", exact: true }).click();
-      await user.getByLabel("隧道", { exact: true }).selectOption("tls");
+      await user.getByLabel("转发方式", { exact: true }).selectOption("tls");
       await user
         .getByLabel("隧道端点", { exact: true })
         .fill("first.example.test:443");
@@ -714,13 +780,15 @@ try {
 
       // A second registered fixture node is used only as an exit directory entry.
       const fixtureHeaders={Origin:base,"X-Requested-With":"fetch"};
-      const exitEnrollment=await (await admin.request.post(base+"/api/v1/nodes/enrollment",{headers:fixtureHeaders,data:{name:`exit-${browserName}`,group_ids:[savedGroup.id]}})).json();
+      const userRecord = (await (await admin.request.get(base+"/api/v1/users?page_size=100")).json()).items.find((x) => x.username === username);
+      const exitGroup = await (await admin.request.post(base+"/api/v1/groups",{headers:fixtureHeaders,data:{name:`exit-group-${browserName}`,type:"exit",user_ids:[userRecord.id],multiplier:"1",port_min:10000,port_max:60000}})).json();
+      const exitEnrollment=await (await admin.request.post(base+"/api/v1/nodes/enrollment",{headers:fixtureHeaders,data:{name:`exit-${browserName}`,group_ids:[exitGroup.id]}})).json();
       const exitRegistration=await (await admin.request.post(base+"/api/v1/agent/register",{data:{token:exitEnrollment.token,name:`exit-${browserName}`,capabilities:["tcp","tls"]}})).json();
       await admin.request.post(base+"/api/v1/agent/probe",{headers:{Authorization:`Bearer ${exitRegistration.token}`},data:{sampled_at:new Date().toISOString()}});
       await admin.getByRole("link",{name:"出口管理",exact:true}).click();
       await admin.getByRole("button",{name:"新增出口",exact:true}).click();
       await admin.getByLabel("出口名称",{exact:true}).fill(`managed-${browserName}`);
-      await admin.getByLabel("出口设备组",{exact:true}).selectOption(savedGroup.id);
+      await admin.getByLabel("出口设备组",{exact:true}).selectOption(exitGroup.id);
       await admin.getByLabel("出口服务器",{exact:true}).selectOption(exitRegistration.node_id);
       await admin.getByLabel("出口端点",{exact:true}).fill("exit.example.test:443");
       await admin.getByLabel("TLS 服务器名称",{exact:true}).fill("exit.example.test");
@@ -732,7 +800,7 @@ try {
       await user.getByLabel("名称",{exact:true}).fill("managed draft");
       await user.getByLabel("入口服务器",{exact:true}).selectOption(registered.node_id);
       await user.getByLabel("设备组",{exact:true}).selectOption(savedGroup.id);
-      await user.getByLabel("出口选择",{exact:true}).selectOption(savedGroup.id);
+      await user.getByLabel("出口选择",{exact:true}).selectOption(exitGroup.id);
       await user.getByLabel("监听地址",{exact:true}).fill(":10022");
       await user.getByLabel("目标地址",{exact:true}).fill("target.example.test:443");
       await user.getByLabel("启用规则",{exact:true}).uncheck();

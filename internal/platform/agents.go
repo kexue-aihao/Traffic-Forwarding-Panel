@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"slices"
 	"sort"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/httporigin"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 )
 
@@ -37,12 +37,12 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	actor, _ := UserFromContext(r.Context())
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
 		for _, gid := range in.GroupIDs {
-			var n int
-			if e := tx.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_groups WHERE id=?`), gid).Scan(&n); e != nil {
+			g, e := s.groupTx(r.Context(), tx, gid)
+			if e != nil {
 				return e
 			}
-			if n != 1 {
-				return errors.New("unknown group")
+			if !g.CanEnroll() {
+				return errors.New("链式出口通过已有出口组组成，不接入设备")
 			}
 		}
 		_, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_enrollments(token_hash,payload,expires_at) VALUES(?,?,?)`), digest(t), strJSON(in), expires.Unix())
@@ -58,7 +58,7 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	reply(w, 201, map[string]any{"token": t, "expires_at": expires})
 }
 func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	ip := httporigin.ClientIP(r, s.opts.TrustProxy)
 	if !s.allow("register:"+ip, 30) {
 		fail(w, 429, "rate limited")
 		return
@@ -105,6 +105,12 @@ func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		node.GroupIDs = en.GroupIDs
+		for _, gid := range en.GroupIDs {
+			g, err := s.groupTx(r.Context(), tx, gid)
+			if err != nil || !g.CanEnroll() {
+				return errEnrollment
+			}
+		}
 		if en.Name != "" {
 			node.Name = en.Name
 		}
@@ -136,6 +142,9 @@ func (s *Server) agent(next http.HandlerFunc) http.HandlerFunc {
 			fail(w, 401, "node identity required")
 			return
 		}
+		s.mu.Lock()
+		s.lastContact[node] = time.Now()
+		s.mu.Unlock()
 		next(w, r.WithContext(context.WithValue(r.Context(), nodeKey{}, node)))
 	}
 }
@@ -255,7 +264,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			fail(w, 500, "config unavailable")
 			return
 		}
-		if rule.ExitUnavailable || disabled != 0 || !rule.Enabled || rule.Lease == nil || !rule.Lease.ExpiresAt.After(time.Now()) || policyDenied(g, rule) || (role != "admin" && !contains(g.UserIDs, rule.UserID)) {
+		if rule.ExitUnavailable || disabled != 0 || !rule.Enabled || rule.Lease == nil || !rule.Lease.ExpiresAt.After(time.Now()) || entryPolicyDenied(g, rule) || (role != "admin" && !contains(g.UserIDs, rule.UserID)) {
 			continue
 		}
 		if rule.Lease.Limits != (contract.ResourceLimits{}) && !contains(nodeInfo.Capabilities, "resource-limits-v1") {
@@ -379,6 +388,7 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	p.Online = nil // Online is computed from server observations, never from an Agent claim.
 	old, ok := s.probes[node]
 	if !ok && len(s.probes) >= historyBuckets {
 		s.mu.Unlock()
@@ -388,6 +398,7 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 	if !ok || p.SampledAt.After(old.SampledAt) {
 		s.probes[node] = p
 	}
+	s.lastContact[node] = time.Now()
 	s.mu.Unlock() // live samples intentionally do not create per-sample DB writes
 	if s.allow("heartbeat:"+node, 1) {
 		_ = s.Store.Write(r.Context(), storage.Background, func(tx *sql.Tx) error {
@@ -406,8 +417,9 @@ var errGroupForbidden = errors.New("group not authorized")
 
 // probeNode 是一台机器的展示元数据：名字，以及它属于哪些设备组。
 type probeNode struct {
-	name   string
-	groups []string
+	name     string
+	groups   []string
+	lastSeen time.Time
 }
 
 // visibleNodes 返回这个身份能看到哪些机器，以及每台机器归属的组。
@@ -417,10 +429,10 @@ type probeNode struct {
 // 只该拿到自己那一组的地址。
 func (s *Server) visibleNodes(ctx context.Context, u contract.User, group string) (map[string]probeNode, error) {
 	nodes := map[string]probeNode{}
-	query := "SELECT id,payload FROM cp_nodes"
+	query := "SELECT id,payload,last_seen FROM cp_nodes"
 	args := []any{}
 	if u.Role != "admin" {
-		query = "SELECT n.id,n.payload FROM cp_nodes n WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_users gu ON gu.group_id=ng.group_id WHERE ng.node_id=n.id AND gu.user_id=?)"
+		query = "SELECT n.id,n.payload,n.last_seen FROM cp_nodes n WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_users gu ON gu.group_id=ng.group_id WHERE ng.node_id=n.id AND gu.user_id=?)"
 		args = append(args, u.ID)
 	}
 	rows, e := s.Store.DB.QueryContext(ctx, s.q(query), args...)
@@ -429,13 +441,14 @@ func (s *Server) visibleNodes(ctx context.Context, u contract.User, group string
 	}
 	for rows.Next() {
 		var nodeID, payload string
-		if e = rows.Scan(&nodeID, &payload); e != nil {
+		var lastSeen int64
+		if e = rows.Scan(&nodeID, &payload, &lastSeen); e != nil {
 			rows.Close()
 			return nil, e
 		}
 		var node contract.Node
 		json.Unmarshal([]byte(payload), &node)
-		nodes[nodeID] = probeNode{name: node.Name}
+		nodes[nodeID] = probeNode{name: node.Name, lastSeen: time.Unix(lastSeen, 0)}
 	}
 	e = rows.Err()
 	rows.Close()
@@ -526,6 +539,17 @@ func (s *Server) visibleProbes(ctx context.Context, u contract.User, group strin
 		}
 		p.NodeName = entry.name
 		p.GroupIDs = entry.groups
+		lastSeen := entry.lastSeen
+		if at := s.lastContact[n]; at.After(lastSeen) {
+			lastSeen = at
+		}
+		if s.opts.OfflineNodeRetention > 0 && time.Since(lastSeen) > s.opts.OfflineNodeRetention {
+			continue
+		}
+		if s.opts.OfflineNodeTime > 0 {
+			online := time.Since(lastSeen) <= s.opts.OfflineNodeTime
+			p.Online = &online
+		}
 		// 位置图标对所有人可见，机器地址不是：普通用户看得到「这台在哪里」，
 		// 看不到它连哪个 IP。管理员两者都有，客户脚本走设备地址接口。
 		if ip := probeAddress(p); ip != "" {

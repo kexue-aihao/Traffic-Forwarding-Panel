@@ -57,7 +57,7 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 		for _, it := range items {
 			rule := it.rule
 			g := it.group
-			if rule.ExitUnavailable || !rule.Enabled || it.disabled != 0 || policyDenied(g, rule) || (it.role != "admin" && !contains(g.UserIDs, rule.UserID)) {
+			if rule.ExitUnavailable || !rule.Enabled || it.disabled != 0 || entryPolicyDenied(g, rule) || (it.role != "admin" && !contains(g.UserIDs, rule.UserID)) {
 				continue
 			}
 			limits, cached := policies[rule.UserID]

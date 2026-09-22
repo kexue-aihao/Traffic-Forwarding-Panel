@@ -1,11 +1,29 @@
 package main
 
 import (
+	"encoding/pem"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestHealthcheckDirectTLSVerifiesConfiguredCertificate(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer server.Close()
+	cert := filepath.Join(t.TempDir(), "certificate.pem")
+	if err := os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := healthcheckTLS(server.Listener.Addr().String(), cert); err != nil {
+		t.Fatal(err)
+	}
+	if err := healthcheckTLS(server.Listener.Addr().String(), cert+"-missing"); err == nil {
+		t.Fatal("TLS healthcheck ignored missing trust certificate")
+	}
+}
 
 func TestHealthcheckRunningPanel(t *testing.T) {
 	for _, status := range []int{http.StatusOK, http.StatusServiceUnavailable, http.StatusFound} {

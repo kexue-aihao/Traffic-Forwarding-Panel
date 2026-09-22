@@ -3,13 +3,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,10 +21,11 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/commerce"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/payment"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/webui"
 )
 
 // Version is injected at release build time using -ldflags -X.
-var Version = "0.1.2"
+var Version = "0.1.3"
 
 func main() {
 	if err := run(); err != nil {
@@ -32,51 +33,43 @@ func main() {
 	}
 }
 
-func env(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
 func run() error {
-	showVersion := flag.Bool("version", false, "print panel release version")
-	checkHealth := flag.Bool("healthcheck", false, "check the running panel HTTP/database health and exit")
-	trustProxy := flag.Bool("trust-proxy", env("TFP_TRUST_PROXY", "false") == "true", "trust X-Forwarded-Proto from an isolated reverse proxy that overwrites it")
-	addr := flag.String("addr", env("TFP_ADDR", "127.0.0.1:8080"), "HTTP listen address")
-	driver := flag.String("database", env("TFP_DATABASE", "sqlite"), "sqlite, postgres or mysql")
-	dsn := flag.String("dsn", env("TFP_DSN", "data/panel.db"), "database DSN (prefer TFP_DSN for server credentials)")
-	origin := flag.String("origin", env("TFP_ORIGIN", ""), "public scheme://host for reverse proxy and CSRF checks")
-	initAdmin := flag.String("init-admin", "", "create first administrator then exit; reads password from stdin")
-	resetPassword := flag.String("reset-password", "", "reset local account password and revoke sessions; reads password from stdin")
-	paymentsFile := flag.String("payments", os.Getenv("TFP_PAYMENTS_FILE"), "operator-owned payment configuration JSON file")
-	agentDir := flag.String("agent-dir", os.Getenv("TFP_AGENT_DIR"), "directory holding the Agent binaries published for device onboarding; empty means the panel executable's directory, which is where the container image keeps /agent")
-	backupPath := flag.String("backup", "", "export a consistent sensitive database snapshot to a new JSONL file, then exit")
-	restorePath := flag.String("restore", "", "restore JSONL into an empty database, then exit; stop panel before use")
-	flag.Parse()
-	if *showVersion {
+	opts, err := readOptions(os.Args[1:], os.Getenv, os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if opts.ShowVersion {
 		fmt.Println(Version)
 		return nil
 	}
-	if *checkHealth {
-		return healthcheck(*addr)
+	if opts.ExportHTML != "" {
+		return webui.Export(opts.ExportHTML)
 	}
-	commands := 0
-	for _, v := range []string{*initAdmin, *resetPassword, *backupPath, *restorePath} {
-		if v != "" {
-			commands++
+	if opts.CheckHealth {
+		return healthcheckTLS(opts.Listen, opts.TLSCert)
+	}
+	var certificate tls.Certificate
+	if opts.TLSCert != "" {
+		certificate, err = tls.LoadX509KeyPair(opts.TLSCert, opts.TLSKey)
+		if err != nil {
+			return errors.New("无法加载 tls-cert / tls-key，请检查证书和私钥")
 		}
 	}
-	if commands > 1 {
-		return errors.New("select one local administrative command")
-	}
-	if *origin != "" {
-		u, e := url.Parse(*origin)
-		if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-			return errors.New("origin must be a public http(s) scheme://host")
+	if opts.HTMLPath != "" {
+		if err := webui.ValidateDirectory(opts.HTMLPath); err != nil {
+			return err
 		}
-		*origin = strings.TrimRight(*origin, "/")
 	}
+	if opts.CheckConfig {
+		fmt.Println("面板配置校验通过；未连接数据库。")
+		return nil
+	}
+	addr, driver, dsn, origin, trustProxy := &opts.Listen, &opts.Driver, &opts.DSN, &opts.Origin, &opts.TrustProxy
+	initAdmin, resetPassword, paymentsFile, agentDir := &opts.InitAdmin, &opts.ResetPassword, &opts.PaymentsFile, &opts.AgentDir
+	backupPath, restorePath := &opts.BackupPath, &opts.RestorePath
 	if *driver == "sqlite" && !strings.Contains(*dsn, "?") && !strings.HasPrefix(*dsn, "file:") {
 		if err := os.MkdirAll(filepath.Dir(*dsn), 0700); err != nil {
 			return err
@@ -84,9 +77,9 @@ func run() error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	store, err := storage.Open(ctx, *driver, *dsn)
+	store, err := storage.OpenWithOptions(ctx, *driver, *dsn, storage.Options{MaxOpenConnections: opts.MaxOpenConnection, MaxIdleConnections: opts.MaxIdleConnection, DisableQueue: opts.DisableQueue})
 	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+		return errors.New("无法打开数据库，请检查数据库地址、连接权限与服务状态")
 	}
 	defer store.Close()
 	gateway := payment.EPay{Gateway: os.Getenv("TFP_EPAY_GATEWAY"), PID: os.Getenv("TFP_EPAY_PID"), Key: os.Getenv("TFP_EPAY_KEY"), NotifyURL: os.Getenv("TFP_EPAY_NOTIFY_URL"), ReturnURL: os.Getenv("TFP_EPAY_RETURN_URL")}
@@ -108,7 +101,12 @@ func run() error {
 			return e
 		}
 	}
-	application, err := app.New(ctx, store, app.Options{Origin: *origin, TrustProxy: *trustProxy, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, Channels: channels, AgentDir: *agentDir})
+	application, err := app.New(ctx, store, app.Options{
+		Origin: *origin, TrustProxy: *trustProxy, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, Channels: channels, AgentDir: *agentDir,
+		HTMLPath: opts.HTMLPath, DisableGzip: opts.DisableGzip,
+		OfflineNodeTime: time.Duration(opts.OfflineNodeTime) * time.Second, OfflineNodeRetention: time.Duration(opts.OfflineNodeRetentionTime) * time.Second,
+		UserRateLimit: rateLimit(opts.UserRateLimit), DefaultRateLimit: rateLimit(opts.DefaultRateLimit),
+	})
 	if err != nil {
 		return err
 	}
@@ -175,7 +173,12 @@ func run() error {
 		server.Shutdown(shutdownCtx)
 	}()
 	log.Printf("面板监听 %s；数据库=%s，用户入口 /，管理员入口 /admin", *addr, *driver)
-	err = server.ListenAndServe()
+	if opts.TLSCert != "" {
+		server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}
+		err = server.ListenAndServeTLS("", "")
+	} else {
+		err = server.ListenAndServe()
+	}
 	cancel()
 	<-stopped
 	<-backgroundStopped

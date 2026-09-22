@@ -6,9 +6,16 @@ import Modal from "../components/Modal.vue";
 import NodeOperations from "../components/NodeOperations.vue";
 import OnboardCommand from "../components/OnboardCommand.vue";
 import OnboardPanel from "../components/OnboardPanel.vue";
+import GroupAdvanced from "../components/GroupAdvanced.vue";
 import { api, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
 import { displayTimeZoneLabel, formatDateTime } from "../core/format";
+import {
+  groupTypes,
+  isEntryGroup,
+  isExitGroup,
+  isPhysicalExitGroup,
+} from "../core/groups";
 type Row = Record<string, unknown>;
 interface Hop {
   transport: string;
@@ -42,6 +49,14 @@ const formError = ref("");
 const selected = ref<Row | null>(null);
 const operationNode = ref<Row | null>(null);
 const token = ref("");
+const groupTransports = [
+  { value: "direct", label: "直接转发" },
+  { value: "direct-tls", label: "TLS 直连目标" },
+  { value: "tls", label: "TLS 隧道" },
+  { value: "ws", label: "WebSocket 隧道" },
+  { value: "wss", label: "WSS 隧道" },
+  { value: "http", label: "HTTP 隧道" },
+];
 // 承载。direct 与 direct-tls 都没有出口，区别只在到目标的那一段加不加密 ——
 // 前者把业务明文直接发出去，后者在同一条连接上先做 TLS 握手。
 const transports = [
@@ -55,6 +70,7 @@ const transports = [
 const onboardTarget = ref<Row | null>(null);
 const joinKey = ref("");
 const confirmRotate = ref(false);
+const advancedTarget = ref<Row | null>(null);
 
 /**
  * 账号的 API 凭据。
@@ -261,6 +277,9 @@ const options = ref<{
   users: [],
 });
 const form = ref({
+  group_type: "",
+  direct_policy: "forbid",
+  chain_group_ids: ["", ""],
   exit_group_id: "",
   exit_id: "auto",
   proxy_accept: "off",
@@ -289,12 +308,31 @@ const form = ref({
   shared_name: "",
   user_ids: [] as string[],
   group_ids: [] as string[],
-  blocked_protocols: [] as string[],
   multiplier: "1",
   port_min: 10000,
   port_max: 60000,
   max_rules: 0,
 });
+const formIsEntry = computed(
+  () =>
+    form.value.group_type === "entry" ||
+    (!!selected.value && !form.value.group_type),
+);
+const formForwards = computed(
+  () =>
+    form.value.group_type !== "monitor" &&
+    (!!form.value.group_type || !!selected.value),
+);
+const entryGroups = computed(() => options.value.groups.filter(isEntryGroup));
+const exitGroups = computed(() => options.value.groups.filter(isExitGroup));
+const chainChoices = computed(() =>
+  options.value.groups.filter(
+    (g) => isPhysicalExitGroup(g) && g.id !== selected.value?.id,
+  ),
+);
+const selectedExitGroup = computed(() =>
+  options.value.groups.find((g) => g.id === form.value.exit_group_id),
+);
 watch(
   () => form.value.exit_group_id,
   async (value) => {
@@ -307,6 +345,15 @@ watch(
   },
 );
 const dirty = computed(() => JSON.stringify(form.value) !== initial.value);
+function openAdvanced(row: Row) {
+  advancedTarget.value = row;
+  formError.value = "";
+}
+async function advancedSaved(group: Row) {
+  advancedTarget.value = null;
+  await load();
+  highlight(group.id);
+}
 async function load() {
   if (!allowed.value) return;
   loading.value = true;
@@ -343,6 +390,9 @@ async function open(row: Row | null = null) {
   tokenExpiry.value = "";
   tokenName.value = "";
   form.value = {
+    group_type: String(row?.type || ""),
+    direct_policy: String(row?.direct_policy || (row ? "allow" : "forbid")),
+    chain_group_ids: [...((row?.chain_group_ids as string[]) || ["", ""])],
     exit_group_id: String(row?.exit_group_id || ""),
     exit_id: String(row?.exit_id || "auto"),
     proxy_accept: String((row?.proxy_protocol as Row)?.accept || "off"),
@@ -390,15 +440,6 @@ async function open(row: Row | null = null) {
     ),
     user_ids: (row?.user_ids as string[]) || [],
     group_ids: [],
-    blocked_protocols: ((row?.blocked_protocols as string[]) || []).map((p) =>
-      p.includes(":")
-        ? p
-        : ["tcp", "udp"].includes(p)
-          ? "network:" + p
-          : p === "socks"
-            ? "app:socks"
-            : "transport:" + p,
-    ),
     multiplier: String(row?.multiplier || "1"),
     port_min: Number(row?.port_min || 10000),
     port_max: Number(row?.port_max || 60000),
@@ -415,8 +456,16 @@ async function open(row: Row | null = null) {
       options.value.nodes = nodes;
       options.value.groups = groups;
     }
-    if (resource === "nodes") options.value.groups = await choices("/groups");
-    if (resource === "groups") options.value.users = await choices("/users");
+    if (resource === "nodes")
+      options.value.groups = (await choices("/groups")).filter(
+        (g) => g.type !== "chain_exit",
+      );
+    if (resource === "groups") {
+      [options.value.users, options.value.groups] = await Promise.all([
+        choices("/users"),
+        choices("/groups"),
+      ]);
+    }
   } catch (e) {
     formError.value = errorText(e);
   }
@@ -428,8 +477,16 @@ function payload(): Row {
   if (resource === "groups")
     return {
       name: f.name,
+      type: f.group_type,
+      direct_policy: formIsEntry.value ? f.direct_policy : "",
+      chain_group_ids: f.group_type === "chain_exit" ? f.chain_group_ids : [],
+      ...(selected.value?.advanced
+        ? { advanced: selected.value.advanced }
+        : {}),
       user_ids: f.user_ids,
-      blocked_protocols: f.blocked_protocols,
+      blocked_protocols: selected.value?.blocked_protocols || [],
+      disabled_networks: selected.value?.disabled_networks || [],
+      disabled_transports: selected.value?.disabled_transports || [],
       multiplier: f.multiplier,
       port_min: f.port_min,
       port_max: f.port_max,
@@ -438,7 +495,11 @@ function payload(): Row {
   if (resource === "nodes") return { name: f.name, group_ids: f.group_ids };
   return {
     exit_group_id: f.exit_group_id,
-    exit_id: f.exit_group_id ? f.exit_id : "",
+    exit_id: f.exit_group_id
+      ? selectedExitGroup.value?.type === "chain_exit"
+        ? "auto"
+        : f.exit_id
+      : "",
     proxy_protocol:
       f.network === "tcp" &&
       (f.proxy_accept !== "off" || f.proxy_send !== "off")
@@ -474,20 +535,20 @@ function payload(): Row {
           ? { tunnel: { server_name: f.server_name } }
           : {}
         : {
-          tunnel: {
-            endpoint: f.endpoint,
-            server_name: f.server_name,
-            mux: f.mux,
-            reverse: f.reverse,
-            ...(f.token ? { token: f.token } : {}),
-            chain: f.chain.map((h) => ({
-              transport: h.transport,
-              endpoint: h.endpoint,
-              server_name: h.server_name,
-              ...(h.token ? { token: h.token } : {}),
-            })),
-          },
-        }),
+            tunnel: {
+              endpoint: f.endpoint,
+              server_name: f.server_name,
+              mux: f.mux,
+              reverse: f.reverse,
+              ...(f.token ? { token: f.token } : {}),
+              chain: f.chain.map((h) => ({
+                transport: h.transport,
+                endpoint: h.endpoint,
+                server_name: h.server_name,
+                ...(h.token ? { token: h.token } : {}),
+              })),
+            },
+          }),
   };
 }
 async function save() {
@@ -505,11 +566,7 @@ async function save() {
       id?: string;
       token?: string;
       expires_at?: string;
-    }>(
-      path,
-      selected.value ? "PUT" : "POST",
-      data,
-    );
+    }>(path, selected.value ? "PUT" : "POST", data);
     if (resource === "nodes") {
       token.value = String(result.token || "");
       tokenExpiry.value = String(result.expires_at || "");
@@ -615,6 +672,24 @@ async function rotateJoinKey() {
   }
 }
 function value(v: unknown, column: string) {
+  if (column === "type")
+    return groupTypes.find((t) => t.value === v)?.label || "未分类（旧组）";
+  if (
+    ["blocked_protocols", "disabled_networks", "disabled_transports"].includes(
+      column,
+    )
+  ) {
+    const items = (v as string[] | null) || [];
+    return items.length
+      ? items
+          .map((p) =>
+            column === "disabled_transports"
+              ? groupTransports.find((t) => t.value === p)?.label || p
+              : p.replace(/^app:/, "").toUpperCase(),
+          )
+          .join("、")
+      : "无";
+  }
   if (
     [
       "last_seen",
@@ -644,19 +719,27 @@ const columns = computed(() =>
           "apply_error",
         ]
       : resource === "groups"
-        ? ["name", "blocked_protocols", "multiplier", "port_min", "port_max"]
+        ? [
+            "name",
+            "type",
+            "blocked_protocols",
+            "multiplier",
+            "port_min",
+            "port_max",
+          ]
         : resource === "users"
-        ? ["username", "role", "disabled"]
-        : // 审计的列过去是从首行的对象键里取的，而 Go 的 JSON 编码会把 map 的键
-          // 按字典序排 —— 于是表头冒出 action / id / user_id 这些原始英文键，
-          // 顺序也随字段增删而变。这里写死，和时间一样只是展示口径。
-          resource === "audit"
-          ? ["created_at", "action", "target", "user_id"]
-          : Object.keys(rows.value[0] || {}).slice(0, 6),
+          ? ["username", "role", "disabled"]
+          : // 审计的列过去是从首行的对象键里取的，而 Go 的 JSON 编码会把 map 的键
+            // 按字典序排 —— 于是表头冒出 action / id / user_id 这些原始英文键，
+            // 顺序也随字段增删而变。这里写死，和时间一样只是展示口径。
+            resource === "audit"
+            ? ["created_at", "action", "target", "user_id"]
+            : Object.keys(rows.value[0] || {}).slice(0, 6),
 );
 const labels: Record<string, string> = {
   name: "名称",
-  transport: "隧道",
+  type: "设备类型",
+  transport: "转发方式",
   listen: "监听",
   target: "目标",
   enabled: "启用",
@@ -667,6 +750,8 @@ const labels: Record<string, string> = {
   applied_version: "应用版本",
   apply_error: "应用错误",
   blocked_protocols: "屏蔽协议",
+  disabled_networks: "禁用网络协议",
+  disabled_transports: "禁用转发方式",
   multiplier: "流量倍率",
   port_min: "起始端口",
   port_max: "结束端口",
@@ -758,10 +843,16 @@ const labels: Record<string, string> = {
               >
                 <div class="toolbar">
                   <button
-                    v-if="resource === 'groups'"
+                    v-if="resource === 'groups' && row.type !== 'chain_exit'"
                     @click="onboardGroup(row)"
                   >
                     接入设备
+                  </button>
+                  <button
+                    v-if="resource === 'groups'"
+                    @click="openAdvanced(row)"
+                  >
+                    高级设置
                   </button>
                   <button v-if="resource === 'rules'" @click="diagnose(row)">
                     诊断</button
@@ -873,12 +964,14 @@ const labels: Record<string, string> = {
           再也无法查看 —— 弄丢了只能重置。
         </p>
         <label v-if="issuedFor"
-          >{{ issuedFor }}<textarea
+          >{{ issuedFor
+          }}<textarea
             aria-label="API Token 密钥"
             :value="issuedSecret"
             readonly
             rows="3"
-        /></label>
+          />
+        </label>
         <div class="form-actions">
           <button type="button" class="primary" @click="issuedSecret = ''">
             已复制，继续管理
@@ -904,12 +997,16 @@ const labels: Record<string, string> = {
             <tbody>
               <tr v-for="t in userTokens" :key="t.id">
                 <td data-label="名称">{{ t.name }}</td>
-                <td data-label="密钥前缀"><code>{{ t.prefix || "—" }}</code></td>
+                <td data-label="密钥前缀">
+                  <code>{{ t.prefix || "—" }}</code>
+                </td>
                 <td data-label="有效期">
                   {{ t.permanent ? "永久有效" : formatDateTime(t.expires_at) }}
                 </td>
                 <td data-label="最近使用">
-                  {{ t.last_used_at ? formatDateTime(t.last_used_at) : "尚未使用" }}
+                  {{
+                    t.last_used_at ? formatDateTime(t.last_used_at) : "尚未使用"
+                  }}
                 </td>
                 <td data-label="操作">
                   <button :disabled="tokenBusy" @click="resetUserToken(t)">
@@ -935,7 +1032,10 @@ const labels: Record<string, string> = {
               maxlength="190"
               placeholder="例如：探针脚本" /></label
           ><label class="check"
-            ><input v-model="issuePermanent" type="checkbox" />永久有效（不过期）</label
+            ><input
+              v-model="issuePermanent"
+              type="checkbox"
+            />永久有效（不过期）</label
           ><label v-if="!issuePermanent"
             >有效天数<input
               v-model.number="issueTokenDays"
@@ -1008,7 +1108,8 @@ const labels: Record<string, string> = {
           ><template v-if="resource === 'rules'"
             ><label
               >入口服务器<Select
-                v-model="form.node_id" aria-label="入口服务器"
+                v-model="form.node_id"
+                aria-label="入口服务器"
                 required
                 :disabled="!!selected"
               >
@@ -1023,13 +1124,14 @@ const labels: Record<string, string> = {
               </Select></label
             ><label
               >设备组<Select
-                v-model="form.group_id" aria-label="设备组"
+                v-model="form.group_id"
+                aria-label="设备组"
                 required
                 :disabled="!!selected"
               >
                 <option value="" disabled>选择设备组</option>
                 <option
-                  v-for="g in options.groups"
+                  v-for="g in entryGroups"
                   :key="String(g.id)"
                   :value="g.id"
                 >
@@ -1038,10 +1140,13 @@ const labels: Record<string, string> = {
               </Select></label
             >
             <label
-              >出口选择<Select v-model="form.exit_group_id" aria-label="出口选择">
+              >出口选择<Select
+                v-model="form.exit_group_id"
+                aria-label="出口选择"
+              >
                 <option value="">直接转发或手工配置隧道</option>
                 <option
-                  v-for="g in options.groups"
+                  v-for="g in exitGroups"
                   :key="String(g.id)"
                   :value="g.id"
                 >
@@ -1049,7 +1154,10 @@ const labels: Record<string, string> = {
                 </option>
               </Select></label
             >
-            <label v-if="form.exit_group_id"
+            <label
+              v-if="
+                form.exit_group_id && selectedExitGroup?.type !== 'chain_exit'
+              "
               >出口节点<Select v-model="form.exit_id" aria-label="出口节点">
                 <option value="auto">按权重自动选择</option>
                 <option
@@ -1064,8 +1172,11 @@ const labels: Record<string, string> = {
               </Select></label
             >
             <p v-if="form.exit_group_id" class="small muted">
-              自动选择该组内授权且在线的出口。流量按入口组倍率 ×
-              出口组倍率结算。
+              {{
+                selectedExitGroup?.type === "chain_exit"
+                  ? "按配置顺序经过各出口组，每一跳自动选择授权且在线的节点。"
+                  : "自动选择该组内授权且在线的出口。"
+              }}流量按入口组倍率 × 出口组倍率结算。
             </p>
             <div class="form-grid">
               <label
@@ -1074,7 +1185,7 @@ const labels: Record<string, string> = {
                   <option value="udp">UDP</option>
                 </Select></label
               ><label
-                >隧道<Select v-model="form.transport" aria-label="隧道">
+                >转发方式<Select v-model="form.transport" aria-label="转发方式">
                   <option
                     v-for="t in transports"
                     :key="t.value"
@@ -1101,12 +1212,13 @@ const labels: Record<string, string> = {
                 v-model="form.target"
                 required
                 placeholder="127.0.0.1:8080" /></label
-            ><template v-if="form.transport === 'direct-tls' && !form.exit_group_id"
+            ><template
+              v-if="form.transport === 'direct-tls' && !form.exit_group_id"
               ><label
                 >TLS 校验名<input
                   v-model="form.server_name"
-                  placeholder="留空则用目标地址的主机部分" /></label
-            ></template><template
+                  placeholder="留空则用目标地址的主机部分" /></label></template
+            ><template
               v-else-if="form.transport !== 'direct' && !form.exit_group_id"
               ><label>隧道端点<input v-model="form.endpoint" required /></label
               ><label>TLS 服务器名称<input v-model="form.server_name" /></label
@@ -1302,50 +1414,94 @@ const labels: Record<string, string> = {
               ><input v-model="form.enabled" type="checkbox" />启用规则</label
             ></template
           ><template v-if="resource === 'groups'"
-            ><fieldset>
-              <legend>屏蔽网络协议</legend>
-              <label v-for="p in ['tcp', 'udp']" :key="p" class="check"
-                ><input
-                  v-model="form.blocked_protocols"
-                  type="checkbox"
-                  :value="'network:' + p"
-                />{{ p.toUpperCase() }}</label
+            ><label
+              >设备类型<Select
+                v-model="form.group_type"
+                aria-label="设备类型"
+                :required="!selected"
+                :disabled="!!selected?.type"
               >
-            </fieldset>
-            <fieldset>
-              <legend>屏蔽隧道承载</legend>
-              <label
-                v-for="p in ['direct', 'tls', 'ws', 'wss', 'http']"
-                :key="p"
-                class="check"
-                ><input
-                  v-model="form.blocked_protocols"
-                  type="checkbox"
-                  :value="'transport:' + p"
-                />{{ p === "direct" ? "直接转发" : p.toUpperCase() }}</label
-              >
-            </fieldset>
-            <fieldset>
-              <legend>屏蔽明文应用协议</legend>
-              <label v-for="p in ['http', 'socks']" :key="p" class="check"
-                ><input
-                  v-model="form.blocked_protocols"
-                  type="checkbox"
-                  :value="'app:' + p"
-                />{{ p.toUpperCase() }} 应用流量</label
-              >
-            </fieldset>
-            <p class="small muted">
-              网络和隧道限制控制可创建的规则；应用识别只检查可识别的明文流量。未知流量允许通过，密文内的协议和
-              URL 路径无法识别。禁用 HTTP 隧道不等同于屏蔽 HTTP 应用。
+                <option value="" disabled>请选择设备类型</option>
+                <option v-for="t in groupTypes" :key="t.value" :value="t.value">
+                  {{ t.label }}
+                </option>
+              </Select></label
+            >
+            <p v-if="form.group_type" class="small muted">
+              {{
+                groupTypes.find((t) => t.value === form.group_type)?.description
+              }}
+              类型创建后不可修改。
             </p>
-            <label
+            <p v-else-if="selected" class="small muted">
+              此设备组来自旧版，可继续使用。分类前请确认现有设备、规则和出口符合所选类型。
+            </p>
+            <fieldset v-if="form.group_type === 'chain_exit'">
+              <legend>链式出口配置</legend>
+              <p class="small muted">
+                按经过的顺序选择 2–3 个出口设备组，不能重复。
+              </p>
+              <label v-for="(_, index) in form.chain_group_ids" :key="index"
+                >第 {{ index + 1 }} 跳出口组
+                <Select
+                  v-model="form.chain_group_ids[index]"
+                  :aria-label="`第 ${index + 1} 跳出口组`"
+                  required
+                >
+                  <option value="" disabled>选择出口设备组</option>
+                  <option
+                    v-for="g in chainChoices"
+                    :key="String(g.id)"
+                    :value="g.id"
+                    :disabled="
+                      form.chain_group_ids.some(
+                        (id, i) => i !== index && id === g.id,
+                      )
+                    "
+                  >
+                    {{ g.name }}
+                  </option>
+                </Select>
+              </label>
+              <div class="toolbar">
+                <button
+                  v-if="form.chain_group_ids.length < 3"
+                  type="button"
+                  @click="form.chain_group_ids.push('')"
+                >
+                  添加第 3 跳
+                </button>
+                <button
+                  v-else
+                  type="button"
+                  @click="form.chain_group_ids.pop()"
+                >
+                  移除第 3 跳
+                </button>
+              </div>
+              <p v-if="chainChoices.length < 2" class="small muted">
+                请先创建至少两个出口设备组，再配置链式出口。
+              </p>
+            </fieldset>
+            <template v-if="formIsEntry">
+              <label
+                >入口直出策略<Select
+                  v-model="form.direct_policy"
+                  aria-label="入口直出策略"
+                >
+                  <option value="forbid">禁止直接转发</option>
+                  <option value="allow">可选直接转发</option>
+                  <option value="force">强制直接转发</option>
+                </Select></label
+              >
+            </template>
+            <label v-if="formForwards"
               >流量倍率<input
                 v-model="form.multiplier"
                 required
                 pattern="[0-9]+(\.[0-9]+)?"
             /></label>
-            <label
+            <label v-if="formIsEntry"
               >每用户规则上限（0 表示不限）<input
                 v-model.number="form.max_rules"
                 type="number"
@@ -1353,7 +1509,7 @@ const labels: Record<string, string> = {
                 max="100000"
                 required
             /></label>
-            <div class="form-grid">
+            <div v-if="formIsEntry" class="form-grid">
               <label
                 >起始端口<input
                   v-model.number="form.port_min"
@@ -1406,7 +1562,12 @@ const labels: Record<string, string> = {
           </div></template
         >
       </form></Modal
-    ><Modal
+    ><GroupAdvanced
+      v-if="advancedTarget"
+      :group="advancedTarget"
+      @close="advancedTarget = null"
+      @saved="advancedSaved"
+    /><Modal
       v-if="deleting"
       title="删除转发规则"
       :busy="busy"
@@ -1431,9 +1592,7 @@ const labels: Record<string, string> = {
       </p>
       <p v-if="formError" class="error" role="alert">{{ formError }}</p>
       <div class="form-actions">
-        <button :disabled="busy" @click="changeStatus">
-          确认修改状态
-        </button>
+        <button :disabled="busy" @click="changeStatus">确认修改状态</button>
       </div></Modal
     >
     <Modal

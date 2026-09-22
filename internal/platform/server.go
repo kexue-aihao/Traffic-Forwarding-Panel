@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -28,12 +27,16 @@ type Entitlements interface {
 	Allocate(context.Context, *sql.Tx, string, string, string) (*contract.Lease, error)
 }
 type Options struct {
-	Origin         string
-	SecureCookies  bool
-	TrustProxy     bool
-	AdminTestBytes int64
-	Entitlements   Entitlements
-	ResourceLimits func(context.Context, *sql.Tx, string) (contract.ResourceLimits, error)
+	Origin               string
+	SecureCookies        bool
+	TrustProxy           bool
+	OfflineNodeTime      time.Duration
+	OfflineNodeRetention time.Duration
+	UserRateLimit        *RateLimit
+	DefaultRateLimit     *RateLimit
+	AdminTestBytes       int64
+	Entitlements         Entitlements
+	ResourceLimits       func(context.Context, *sql.Tx, string) (contract.ResourceLimits, error)
 	// ActiveEntitlement 报告用户是否有未过期的权益。探针是付费能力，普通用户
 	// 要有它才能看 —— 用函数字段而不是扩充 Entitlements 接口，与旁边的
 	// LeaseCurrent / RetireLease 保持同一种写法。
@@ -42,25 +45,27 @@ type Options struct {
 	RetireLease       func(context.Context, *sql.Tx, string, string, int64) error
 }
 type Server struct {
-	Store      *storage.Store
-	opts       Options
-	mu         sync.RWMutex
-	probes     map[string]contract.Probe
-	limits     map[string]limit
-	history    *probeHistory
-	taskMu     sync.Mutex
-	terminalMu sync.Mutex
-	terminals  map[string]*terminalBridge
-	geo        *geoCache
+	Store       *storage.Store
+	opts        Options
+	mu          sync.RWMutex
+	probes      map[string]contract.Probe
+	lastContact map[string]time.Time
+	limits      map[string]limit
+	history     *probeHistory
+	taskMu      sync.Mutex
+	terminalMu  sync.Mutex
+	terminals   map[string]*terminalBridge
+	geo         *geoCache
 }
 type limit struct {
-	since time.Time
-	count int
+	since  time.Time
+	count  int
+	period time.Duration
 }
 type userKey struct{}
 
 func New(s *storage.Store, o Options) *Server {
-	return &Server{Store: s, opts: o, probes: map[string]contract.Probe{}, limits: map[string]limit{}, history: newProbeHistory(time.Now()), terminals: map[string]*terminalBridge{}, geo: newGeoCache()}
+	return &Server{Store: s, opts: o, probes: map[string]contract.Probe{}, lastContact: map[string]time.Time{}, limits: map[string]limit{}, history: newProbeHistory(time.Now()), terminals: map[string]*terminalBridge{}, geo: newGeoCache()}
 }
 func UserFromContext(ctx context.Context) (contract.User, bool) {
 	u, ok := ctx.Value(userKey{}).(contract.User)
@@ -187,12 +192,16 @@ func (s *Server) Bootstrap(ctx context.Context, username, password string) error
 	})
 }
 func (s *Server) allow(key string, max int) bool {
+	return s.allowWindow(key, max, time.Minute)
+}
+
+func (s *Server) allowWindow(key string, max int, period time.Duration) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
 	if len(s.limits) > 10000 {
 		for k, v := range s.limits {
-			if now.Sub(v.since) > time.Minute {
+			if now.Sub(v.since) > v.period {
 				delete(s.limits, k)
 			}
 		}
@@ -201,8 +210,8 @@ func (s *Server) allow(key string, max int) bool {
 		}
 	}
 	l := s.limits[key]
-	if now.Sub(l.since) > time.Minute {
-		l = limit{since: now}
+	if now.Sub(l.since) >= period {
+		l = limit{since: now, period: period}
 	}
 	l.count++
 	s.limits[key] = l
@@ -213,7 +222,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "invalid request origin or CSRF header")
 		return
 	}
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	ip := httporigin.ClientIP(r, s.opts.TrustProxy)
 	if !s.allow("login:"+ip, 15) {
 		fail(w, 429, "login rate limited")
 		return

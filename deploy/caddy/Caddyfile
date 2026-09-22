@@ -1,0 +1,11 @@
+# 同机二进制部署：Caddy 自动申请并续期公开受信任证书。
+# 将 panel.example.com 替换成已解析到本服务器的域名；开放 TCP 80/443。
+panel.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:18888 {
+		header_up Host {hostport}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {client_ip}
+		flush_interval -1
+	}
+}

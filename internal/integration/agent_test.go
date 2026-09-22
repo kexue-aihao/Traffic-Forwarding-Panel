@@ -517,10 +517,12 @@ func TestControlOutageRestartAndLateUsageExactlyOnce(t *testing.T) {
 	}
 }
 
-func TestNamespacedGroupPolicyReachesRealDataPlane(t *testing.T) {
+func TestSeparateGroupPoliciesReachRealDataPlane(t *testing.T) {
 	f := newFixture(t, tunnel.Client{})
 	target, udp := targets(t)
-	f.group.BlockedProtocols = []string{"network:udp", "transport:tls", "app:http", "app:socks"}
+	f.group.BlockedProtocols = []string{"app:http", "app:socks"}
+	f.group.DisabledNetworks = []string{"udp"}
+	f.group.DisabledTransports = []string{"tls"}
 	f.group = decode[contract.Group](t, f.request("PUT", "/groups/"+f.group.ID, f.group, f.admin, 200))
 	f.request("POST", "/rules", contract.Rule{Name: "blocked-udp", NodeID: f.store.Identity().NodeID, GroupID: f.group.ID, Network: "udp", Transport: "direct", Listen: freeAddress(t, "udp"), Target: udp, Enabled: true}, f.user, 409)
 	rule := f.rule("tcp", "direct", target, nil)

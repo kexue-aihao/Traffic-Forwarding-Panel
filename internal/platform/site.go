@@ -11,12 +11,12 @@ import (
 	"image"
 	"image/color"
 	"image/png"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/httporigin"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -115,7 +115,7 @@ func (s *Server) PaymentAllowed(ctx context.Context, amount int64) error {
 var digitPixels = []string{"111101101101111", "010110010010111", "111001111100111", "111001111001111", "101101111001001", "111100111001111", "111100111101111", "111001001001001", "111101111101111", "111101111001111"}
 
 func (s *Server) captcha(w http.ResponseWriter, r *http.Request) {
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	ip := httporigin.ClientIP(r, s.opts.TrustProxy)
 	if !s.allow("captcha:"+ip, 15) {
 		fail(w, 429, "rate limited")
 		return
@@ -214,7 +214,7 @@ func (s *Server) registerUser(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "invalid request origin")
 		return
 	}
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	ip := httporigin.ClientIP(r, s.opts.TrustProxy)
 	if !s.allow("registration:"+ip, 5) {
 		fail(w, 429, "rate limited")
 		return

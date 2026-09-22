@@ -2,10 +2,12 @@
 
 本方式在已有 Docker 与 Docker Compose v2 的 Linux 服务器安装面板。支持 amd64/arm64，镜像已包含前端，不需要安装 Go、Node 或数据库服务。默认使用 SQLite，数据保存在宿主机；1Panel/OpenResty 负责 HTTPS。
 
+使用 Caddy 自动 HTTPS 与 YAML 启动配置时，见 [Caddy 部署](caddy-deployment.md)。该示例从当前源码构建，包含独立的 `deploy/caddy/compose.yaml`，不覆盖这里的现有 1Panel 安装。
+
 ## 一键安装
 
 ```sh
-curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.2/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
+curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.3/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
 ```
 
 直接执行，无需域名或交互输入。脚本自动选择架构、下载镜像包及 SHA256 清单、校验并 `docker load`、配置容器、初始化管理员，等待健康检查通过。管理员用户名默认 `admin`，使用系统随机源生成 48 位密码，安装完成时显示；请保存并可在登录后修改。密码只通过标准输入传给初始化进程，不写入 `.env` 或镜像。若终端输出丢失，可使用下文的本机改密命令。
@@ -113,7 +115,7 @@ chmod 600 config/payments.json
 
 ## 离线安装和升级
 
-从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.2_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
+从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.3_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
 
 ```sh
 sudo bash install-docker.sh --bundle /path/to/downloads

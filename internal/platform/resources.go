@@ -28,13 +28,114 @@ func contains(ss []string, v string) bool {
 	return false
 }
 
+// splitGroupPolicy upgrades legacy mixed policies without changing their meaning.
+// Bare "http" in the legacy top-level field disabled the HTTP tunnel; the
+// reference advanced field uses bare "http" for application traffic instead.
+func splitGroupPolicy(g contract.Group) contract.Group {
+	networks := append([]string{}, g.DisabledNetworks...)
+	transports := append([]string{}, g.DisabledTransports...)
+	apps := []string{}
+	add := func(list *[]string, value string) {
+		if !contains(*list, value) {
+			*list = append(*list, value)
+		}
+	}
+	for _, p := range g.BlockedProtocols {
+		switch {
+		case p == "tcp" || p == "udp" || strings.HasPrefix(p, "network:"):
+			add(&networks, strings.TrimPrefix(p, "network:"))
+		case contains([]string{"direct", "tls", "ws", "wss", "http"}, p) || strings.HasPrefix(p, "transport:"):
+			add(&transports, strings.TrimPrefix(p, "transport:"))
+		case p == "socks":
+			add(&apps, "app:socks")
+		default:
+			add(&apps, p)
+		}
+	}
+	if g.Advanced != nil {
+		apps = nil
+		for _, p := range g.Advanced.BlockedProtocol {
+			switch p {
+			case "http", "app:http":
+				add(&apps, "app:http")
+			case "socks", "app:socks":
+				add(&apps, "app:socks")
+			default:
+				add(&apps, p)
+			}
+		}
+	}
+	g.BlockedProtocols = apps
+	if g.Advanced != nil {
+		// Keep reference names in the editable config and namespaced values in
+		// the internal policy. Do not mutate the caller's advanced settings.
+		advanced := *g.Advanced
+		advanced.BlockedProtocol = make([]string, 0, len(apps))
+		for _, p := range apps {
+			advanced.BlockedProtocol = append(advanced.BlockedProtocol, strings.TrimPrefix(p, "app:"))
+		}
+		g.Advanced = &advanced
+	}
+	g.DisabledNetworks = networks
+	g.DisabledTransports = transports
+	return g
+}
+
+func cleanGroupList(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && !contains(out, value) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func validateGroupAdvanced(a *contract.GroupAdvanced) error {
+	if a == nil {
+		return nil
+	}
+	a.AllowedHost = cleanGroupList(a.AllowedHost)
+	a.BlockedHost = cleanGroupList(a.BlockedHost)
+	a.BlockedPath = cleanGroupList(a.BlockedPath)
+	a.BlockedProtocol = cleanGroupList(a.BlockedProtocol)
+	a.IPv6Group = cleanGroupList(a.IPv6Group)
+	a.ReverseGroup = cleanGroupList(a.ReverseGroup)
+	if a.TLSInboundPolicy < 0 || a.TLSInboundPolicy > 2 {
+		return errors.New("TLS 入站策略必须是 0、1 或 2")
+	}
+	if a.DisableUDP && a.UDPOverTCP {
+		return errors.New("禁用 UDP 时不能同时启用 UDP over TCP")
+	}
+	if a.MaxFail < 0 || a.MaxFail > 1000 || a.FailTimeoutSec < 0 || a.FailTimeoutSec > 86400 {
+		return errors.New("故障转移参数超出范围")
+	}
+	if a.Protocol != "" && !contains([]string{"tls", "tls_simple", "ws", "http"}, a.Protocol) {
+		return errors.New("不支持的反向隧道协议")
+	}
+	if len(a.AllowedHost) > 0 && (len(a.BlockedHost) > 0 || len(a.BlockedPath) > 0 || len(a.BlockedProtocol) > 0) {
+		return errors.New("allowed_host 不能与其他入站屏蔽选项同时使用")
+	}
+	for _, protocol := range a.BlockedProtocol {
+		if !contains([]string{"http", "socks", "app:http", "app:socks"}, protocol) {
+			return errors.New("不支持的屏蔽协议")
+		}
+	}
+	return nil
+}
+
 func policyDenied(g contract.Group, rule contract.Rule) bool {
-	if contains(g.BlockedProtocols, rule.Network) || contains(g.BlockedProtocols, rule.Transport) || contains(g.BlockedProtocols, "network:"+rule.Network) || contains(g.BlockedProtocols, "transport:"+rule.Transport) {
+	g = splitGroupPolicy(g)
+	if g.Advanced != nil && g.Advanced.DisableUDP && rule.Network == "udp" {
+		return true
+	}
+	if contains(g.DisabledNetworks, rule.Network) || contains(g.DisabledTransports, rule.Transport) {
 		return true
 	}
 	if rule.Tunnel != nil {
 		for _, hop := range rule.Tunnel.Chain {
-			if contains(g.BlockedProtocols, hop.Transport) || contains(g.BlockedProtocols, "transport:"+hop.Transport) {
+			if contains(g.DisabledTransports, hop.Transport) {
 				return true
 			}
 		}
@@ -94,6 +195,7 @@ func (s *Server) groups(w http.ResponseWriter, r *http.Request) {
 			fail(w, 500, "query failed")
 			return
 		}
+		g = splitGroupPolicy(g)
 		if u.Role != "admin" {
 			g.UserIDs = nil
 		}
@@ -110,9 +212,14 @@ func (s *Server) groups(w http.ResponseWriter, r *http.Request) {
 // GET /groups 的列表响应（那个接口普通用户也能调）。
 func (s *Server) groupJoinKey(w http.ResponseWriter, r *http.Request) {
 	group := r.PathValue("id")
-	var key string
-	if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT join_key FROM cp_groups WHERE id=?`), group).Scan(&key); e != nil {
+	var key, raw string
+	if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT join_key,payload FROM cp_groups WHERE id=?`), group).Scan(&key, &raw); e != nil {
 		fail(w, 404, "unknown group")
+		return
+	}
+	var g contract.Group
+	if json.Unmarshal([]byte(raw), &g) != nil || !g.CanEnroll() {
+		fail(w, 409, "链式出口通过已有出口组组成，不接入设备")
 		return
 	}
 	reply(w, 200, map[string]any{"group_id": group, "join_key": key})
@@ -129,6 +236,13 @@ func (s *Server) rotateGroupJoinKey(w http.ResponseWriter, r *http.Request) {
 	}
 	actor, _ := UserFromContext(r.Context())
 	e = s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		g, err := s.groupTx(r.Context(), tx, group)
+		if err != nil {
+			return err
+		}
+		if !g.CanEnroll() {
+			return errors.New("链式出口不接入设备")
+		}
 		res, e := tx.ExecContext(r.Context(), s.q(`UPDATE cp_groups SET join_key=? WHERE id=?`), key, group)
 		if e != nil {
 			return e
@@ -150,6 +264,25 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &g) {
 		return
 	}
+	if !contains([]string{"", contract.GroupMonitor, contract.GroupEntry, contract.GroupExit, contract.GroupChainExit}, g.Type) {
+		fail(w, 400, "不支持的设备类型")
+		return
+	}
+	if !contains([]string{"", "forbid", "allow", "force"}, g.DirectPolicy) || !g.CanEnter() && g.DirectPolicy != "" {
+		fail(w, 400, "直出策略只适用于入口设备组")
+		return
+	}
+	if g.Type == contract.GroupChainExit && (len(g.ChainGroupIDs) < 2 || len(g.ChainGroupIDs) > 3) || g.Type != contract.GroupChainExit && len(g.ChainGroupIDs) > 0 {
+		fail(w, 400, "链式出口需要按顺序配置 2–3 个出口设备组")
+		return
+	}
+	if err := validateGroupAdvanced(g.Advanced); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	if !g.CanEnter() && g.PortMin == 0 && g.PortMax == 0 {
+		g.PortMin, g.PortMax = 10000, 60000
+	}
 	if strings.TrimSpace(g.Name) == "" || len(g.Name) > 190 || g.PortMin < 1 || g.PortMax > 65535 || g.PortMax < g.PortMin || g.MaxRules < 0 {
 		fail(w, 400, "invalid group name or port range")
 		return
@@ -162,9 +295,22 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid multiplier")
 		return
 	}
+	g = splitGroupPolicy(g)
 	for _, p := range g.BlockedProtocols {
-		if !contains([]string{"tcp", "udp", "direct", "tls", "ws", "wss", "http", "socks", "network:tcp", "network:udp", "transport:direct", "transport:direct-tls", "transport:tls", "transport:ws", "transport:wss", "transport:http", "app:http", "app:socks"}, p) {
+		if !contains([]string{"app:http", "app:socks"}, p) {
 			fail(w, 400, "unsupported blocked protocol")
+			return
+		}
+	}
+	for _, network := range g.DisabledNetworks {
+		if !contains([]string{"tcp", "udp"}, network) {
+			fail(w, 400, "unsupported disabled network")
+			return
+		}
+	}
+	for _, transport := range g.DisabledTransports {
+		if !contains([]string{"direct", "direct-tls", "tls", "ws", "wss", "http"}, transport) {
+			fail(w, 400, "unsupported disabled transport")
 			return
 		}
 	}
@@ -179,6 +325,9 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		g.Version++
 	}
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		if err := s.validateGroupTypeTx(r.Context(), tx, g, create); err != nil {
+			return err
+		}
 		if create {
 			// 接入密钥在设备组诞生时就有，之后固定不变 —— 运营方复制一次命令
 			// 就能反复使用，装失败不必回控制台重新生成。
@@ -214,7 +363,7 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		return s.AuditTx(r.Context(), tx, actor.ID, "group.save", g.ID)
 	})
 	if e != nil {
-		fail(w, 409, "group conflict or unknown member")
+		fail(w, 409, "设备组保存失败："+e.Error())
 		return
 	}
 	status := 200
@@ -458,7 +607,7 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 			return e
 		}
 	}
-	if port < g.PortMin || port > g.PortMax || policyDenied(g, *rule) {
+	if port < g.PortMin || port > g.PortMax || entryPolicyDenied(g, *rule) {
 		return errors.New("group policy denied")
 	}
 	for _, p := range rule.BlockedProtocols {

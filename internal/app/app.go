@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/agentdist"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/alerts"
@@ -27,7 +28,13 @@ type Options struct {
 	Channels      map[string]commerce.Channel
 	// AgentDir 是发布给设备接入用的 Agent 产物目录，空值表示面板可执行文件
 	// 所在目录 —— 容器镜像正是把 /agent 放在 /panel 旁边。
-	AgentDir string
+	AgentDir             string
+	HTMLPath             string
+	DisableGzip          bool
+	OfflineNodeTime      time.Duration
+	OfflineNodeRetention time.Duration
+	UserRateLimit        *platform.RateLimit
+	DefaultRateLimit     *platform.RateLimit
 }
 
 type App struct {
@@ -77,7 +84,7 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	if err := billing.Migrate(ctx); err != nil {
 		return nil, err
 	}
-	control := platform.New(store, platform.Options{Origin: opts.Origin, TrustProxy: opts.TrustProxy, SecureCookies: opts.SecureCookies, Entitlements: billing, LeaseCurrent: billing.LeaseCurrent, RetireLease: billing.RetireLease, ResourceLimits: billing.LimitsTx, ActiveEntitlement: billing.HasActiveEntitlement})
+	control := platform.New(store, platform.Options{Origin: opts.Origin, TrustProxy: opts.TrustProxy, SecureCookies: opts.SecureCookies, Entitlements: billing, LeaseCurrent: billing.LeaseCurrent, RetireLease: billing.RetireLease, ResourceLimits: billing.LimitsTx, ActiveEntitlement: billing.HasActiveEntitlement, OfflineNodeTime: opts.OfflineNodeTime, OfflineNodeRetention: opts.OfflineNodeRetention, UserRateLimit: opts.UserRateLimit, DefaultRateLimit: opts.DefaultRateLimit})
 	billing.PaymentAllowed = control.PaymentAllowed
 	if err := control.MigrateProbeHistory(ctx); err != nil {
 		return nil, err
@@ -92,9 +99,11 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	billing.Register(mux, commerce.HTTPOptions{Authenticate: control.Authenticate, EPay: opts.EPay, PublicOrigin: opts.Origin, TrustProxy: opts.TrustProxy, Channels: channels})
 	monitor.Register(mux, control)
 	openapi.Register(mux)
-	webui.Register(mux)
+	if err := webui.RegisterWithOptions(mux, webui.Options{HTMLPath: opts.HTMLPath, DisableGzip: opts.DisableGzip}); err != nil {
+		return nil, err
+	}
 	agentdist.Register(mux, opts.AgentDir)
-	return &App{Alerts: monitor, Handler: webui.Security(mux), Platform: control, Commerce: billing, channels: channels}, nil
+	return &App{Alerts: monitor, Handler: webui.Security(control.RequestLimits(mux)), Platform: control, Commerce: billing, channels: channels}, nil
 }
 
 // RunBackground is started only in server mode, never during restore or local

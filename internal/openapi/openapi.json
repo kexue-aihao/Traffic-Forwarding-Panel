@@ -949,6 +949,10 @@
       "Group": {
         "additionalProperties": false,
         "properties": {
+          "advanced": {
+            "$ref": "#/components/schemas/GroupAdvanced",
+            "description": "Optional reference-compatible device-group settings; shown separately from the basic group form."
+          },
           "blocked_protocols": {
             "anyOf": [
               {
@@ -960,7 +964,55 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Application traffic blocks: app:http, app:socks. Independent of forwarding methods. Legacy network:/transport: entries and bare carrier values are accepted on write and split into disabled_networks/disabled_transports; bare http historically means the HTTP tunnel."
+          },
+          "chain_group_ids": {
+            "description": "Ordered physical exit group IDs for a chain_exit group.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 2,
+            "type": "array"
+          },
+          "direct_policy": {
+            "description": "Entry-only direct forwarding policy.",
+            "enum": [
+              "",
+              "forbid",
+              "allow",
+              "force"
+            ],
+            "type": "string"
+          },
+          "disabled_networks": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Disabled forwarding networks: tcp, udp. Empty means all networks are allowed."
+          },
+          "disabled_transports": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Disabled forwarding methods: direct, direct-tls, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
           },
           "id": {
             "type": "string"
@@ -983,6 +1035,17 @@
             "format": "int64",
             "type": "integer"
           },
+          "type": {
+            "description": "Device group role; immutable after creation. Empty preserves legacy groups.",
+            "enum": [
+              "",
+              "monitor",
+              "entry",
+              "exit",
+              "chain_exit"
+            ],
+            "type": "string"
+          },
           "user_ids": {
             "anyOf": [
               {
@@ -1004,8 +1067,11 @@
         "required": [
           "id",
           "name",
+          "type",
           "user_ids",
           "blocked_protocols",
+          "disabled_networks",
+          "disabled_transports",
           "multiplier",
           "port_min",
           "port_max",
@@ -1014,10 +1080,10 @@
         ],
         "type": "object"
       },
-      "GroupCreate": {
+      "GroupAdvanced": {
         "additionalProperties": false,
         "properties": {
-          "blocked_protocols": {
+          "allowed_host": {
             "anyOf": [
               {
                 "items": {
@@ -1029,6 +1095,188 @@
                 "type": "null"
               }
             ]
+          },
+          "blocked_host": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "blocked_path": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "blocked_protocol": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Application protocol blacklist: http, socks. Responses use reference names without the legacy app: prefix."
+          },
+          "disable_udp": {
+            "type": "boolean"
+          },
+          "fail_timout_sec": {
+            "description": "Failover duration in seconds; reference spelling is intentional. New editor template uses 30; explicit zero is preserved.",
+            "maximum": 86400,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ipv6_group": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_fail": {
+            "description": "Consecutive failures tolerated before failover for entry-to-exit or direct forwarding. New editor template uses 3; explicit zero is preserved.",
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "protocol": {
+            "description": "Reverse tunnel protocol; new editor template uses tls.",
+            "enum": [
+              "",
+              "tls",
+              "tls_simple",
+              "ws",
+              "http"
+            ],
+            "type": "string"
+          },
+          "reverse_group": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tls": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "tls_inbound_policy": {
+            "description": "0: allow ordinary rules; 1: TLS inbound rules only; 2: TLS inbound rules and administrator-owned independent ports only.",
+            "enum": [
+              0,
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "tls_reject_empty_sni": {
+            "type": "boolean"
+          },
+          "udp_over_tcp": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "GroupCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "advanced": {
+            "$ref": "#/components/schemas/GroupAdvanced",
+            "description": "Optional reference-compatible device-group settings; shown separately from the basic group form."
+          },
+          "blocked_protocols": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Application traffic blocks: app:http, app:socks. Independent of forwarding methods. Legacy network:/transport: entries and bare carrier values are accepted on write and split into disabled_networks/disabled_transports; bare http historically means the HTTP tunnel."
+          },
+          "chain_group_ids": {
+            "description": "Ordered physical exit group IDs for a chain_exit group.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 2,
+            "type": "array"
+          },
+          "direct_policy": {
+            "description": "Entry-only direct forwarding policy.",
+            "enum": [
+              "",
+              "forbid",
+              "allow",
+              "force"
+            ],
+            "type": "string"
+          },
+          "disabled_networks": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Disabled forwarding networks: tcp, udp. Empty means all networks are allowed."
+          },
+          "disabled_transports": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Disabled forwarding methods: direct, direct-tls, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
           },
           "max_rules": {
             "format": "int64",
@@ -1047,6 +1295,17 @@
           "port_min": {
             "format": "int64",
             "type": "integer"
+          },
+          "type": {
+            "description": "Device group role; immutable after creation. Empty preserves legacy groups.",
+            "enum": [
+              "",
+              "monitor",
+              "entry",
+              "exit",
+              "chain_exit"
+            ],
+            "type": "string"
           },
           "user_ids": {
             "anyOf": [
@@ -1114,6 +1373,10 @@
       "GroupUpdate": {
         "additionalProperties": false,
         "properties": {
+          "advanced": {
+            "$ref": "#/components/schemas/GroupAdvanced",
+            "description": "Optional reference-compatible device-group settings; shown separately from the basic group form."
+          },
           "blocked_protocols": {
             "anyOf": [
               {
@@ -1125,7 +1388,55 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Application traffic blocks: app:http, app:socks. Independent of forwarding methods. Legacy network:/transport: entries and bare carrier values are accepted on write and split into disabled_networks/disabled_transports; bare http historically means the HTTP tunnel."
+          },
+          "chain_group_ids": {
+            "description": "Ordered physical exit group IDs for a chain_exit group.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 2,
+            "type": "array"
+          },
+          "direct_policy": {
+            "description": "Entry-only direct forwarding policy.",
+            "enum": [
+              "",
+              "forbid",
+              "allow",
+              "force"
+            ],
+            "type": "string"
+          },
+          "disabled_networks": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Disabled forwarding networks: tcp, udp. Empty means all networks are allowed."
+          },
+          "disabled_transports": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Disabled forwarding methods: direct, direct-tls, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
           },
           "max_rules": {
             "format": "int64",
@@ -1144,6 +1455,17 @@
           "port_min": {
             "format": "int64",
             "type": "integer"
+          },
+          "type": {
+            "description": "Device group role; immutable after creation. Empty preserves legacy groups.",
+            "enum": [
+              "",
+              "monitor",
+              "entry",
+              "exit",
+              "chain_exit"
+            ],
+            "type": "string"
           },
           "user_ids": {
             "anyOf": [
@@ -2277,6 +2599,16 @@
           },
           "node_name": {
             "type": "string"
+          },
+          "online": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "public_ips": {
             "anyOf": [

@@ -4,6 +4,10 @@
 
 浏览器使用 HttpOnly Cookie；修改请求 `X-Requested-With: fetch` 并核对 Origin。同源 fetch。自动化采用独立 Bearer Token。登录/注册节点也限制请求大小和速率。除专门支付通知外严格拒绝未知 JSON 字段。
 
+YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-rate-limit`（匿名按 IP）；超限返回 429 和 `Retry-After`。受控 Caddy 反代通过覆盖的单值 `X-Real-IP` 区分客户端，默认不信任该头。Agent API、支付通知和健康检查保留原有控制，不共享浏览器额度。配置与路由示例见 [Caddy 部署](caddy-deployment.md)。
+
+实时探针在启用启动配置的离线时间设置时，附带服务端计算的 `online` 字段。判定依据最近通信接收时间；超过 `offline-node-retention-time` 后仅从实时探针列表隐藏，不删除节点和历史。设备地址接口使用相同离线判定窗口。
+
 | 方法/路径 | 请求 | 返回/权限 |
 |---|---|---|
 | POST /auth/login | `{username,password}` | `{user: User}` + Cookie |
@@ -21,7 +25,7 @@
 | POST /users | `{username,password,role}` | 管理员创建 |
 | PUT /users/{id}/status | `{disabled}` | 管理员停用/启用，保留最后一个管理员 |
 | GET /groups | 分页 | 授权 Group 列表 |
-| POST /groups | `{name,user_ids,blocked_protocols,multiplier,port_min,port_max}` | 管理员 Group |
+| POST /groups | `{name,type,direct_policy,chain_group_ids,user_ids,blocked_protocols,disabled_networks,disabled_transports,advanced,multiplier,port_min,port_max}` | 管理员 Group；`type` 为 `monitor|entry|exit|chain_exit`，创建后不可修改；`direct_policy` 仅入口使用；链式出口引用 2–3 个出口组 |
 | PUT /groups/{id} | 同上加 version | 管理员乐观锁 |
 | GET /groups/{id}/join-key | —— | 管理员 `{group_id,join_key}`，设备组的固定接入密钥；可随时再次读取 |
 | POST /groups/{id}/join-key | `{}` | 管理员 `{group_id,join_key}`，轮换后已分发出去的接入命令立即失效 |
@@ -80,7 +84,15 @@ Token 明文只在**创建或重置**的那一次响应里出现（库里只有 
 
 监听地址、协议、所属用户、节点和组在创建后不可变；修改使用 `version` 乐观锁，迁移监听需删除并等待节点 ACK 释放端口。端口按节点/网络/端口保守独占，暂不支持同机按 IP 细分复用。
 
-设备组屏蔽值分层：`network:tcp|udp`、`transport:direct|tls|ws|wss|http`、`app:http|socks`。兼容历史裸值，其中组的 `http` 指承载；规则仅允许应用协议进一步收紧。未知应用默认允许；不会检查未解密 HTTPS 路径。组的承载拒绝同时作用于链式每一跳。
+设备组的协议屏蔽与转发设置使用独立字段：`blocked_protocols` 仅存应用屏蔽值 `app:http|app:socks`；`disabled_networks` 存禁用的 `tcp|udp`；`disabled_transports` 存禁用的 `direct|direct-tls|tls|ws|wss|http`。后两项为空表示全部允许，界面以正向勾选展示允许的网络协议及转发方式。屏蔽 HTTP 应用流量不会禁用 HTTP 隧道；取消某种转发方式只影响规则可用性，不增加应用检测项，并作用于链式每一跳。
+
+设备组的 `advanced` 是独立的额外设置对象，字段对应参考面板的 `allowed_host`、`blocked_host`、`blocked_path`、`blocked_protocol`、`tls_inbound_policy`、`tls_reject_empty_sni`、`disable_udp`、`udp_over_tcp`、`ipv6_group`、`max_fail`、`fail_timout_sec`、`reverse_group`、`protocol` 和 `tls`。设备组列表通过独立的“高级设置”弹窗编辑 JSON，不再把这些参数塞进新增设备组主表单。白名单与其他入站屏蔽选项冲突、禁用 UDP 同时启用 UDP over TCP、未知协议或超出范围的值会被拒绝。`blocked_protocol` 中的 `http`/`socks` 表示应用协议屏蔽，与转发方式完全独立。旧版顶层 `blocked_protocols` 仍可读取并会迁移到对应策略字段。字段名 `fail_timout_sec` 保留参考文档中的拼写。
+
+“额外设置参数”编辑区支持 JSONC 的行注释、块注释和格式化，按入站屏蔽、TLS、UDP、对端地址优先度、故障转移、反向隧道分组附带中文说明。首次配置的参考模板使用 `max_fail: 3`、`fail_timout_sec: 30`、`protocol: "tls"`；已有设置按保存值打开，不合并模板覆盖原值。所有字段均可省略，显式数值 `0` 在 API 响应中保留。API 本身仅接受 JSON；注释由浏览器在提交前解析。浏览器将 `fail_timeout_sec` 兼容为文档原名 `fail_timout_sec`，若两者值冲突则拒绝提交。高级设置里的协议保存并回读为 `http`/`socks`，内部顶层策略仍使用 `app:http`/`app:socks`，首次编辑会带入旧组已有的应用屏蔽策略。
+
+上述字段说明描述参考配置的含义。当前组级运行时已接入应用协议屏蔽和 `disable_udp`；Host/Path、TLS 入站策略、UDP over TCP、IPv6 组、组级故障转移与反向隧道参数在此接口完成结构化保存及校验，尚未接入 Agent 执行。规则自身已有的 TLS、故障转移和反向隧道能力不代表这些组级字段已经生效。
+
+兼容已有数据库和旧客户端的混合 `blocked_protocols`：读取/保存时把 `network:*`、`transport:*` 和历史裸值迁移到各自字段；历史裸 `http` 仍指 HTTP 隧道，裸 `socks` 转为 `app:socks`。保存后仅持久化拆分后的字段。规则仍只允许进一步收紧应用屏蔽；下发 Agent 时合并组与规则的应用拒绝项，转发限制不进入应用识别器。未知应用默认允许；不会检查未解密 HTTPS 路径。
 
 加密规则的 `tunnel` 为 `{endpoint,server_name,token,chain?,mux?,reverse?}`。`chain` 最多两项，每项 `{transport,endpoint,server_name,token}`，加首出口共最多三出口；`mux=true` 复用 TLS 载波，`reverse` 使用出口主动建立的认证载波。服务端保存前检查重复地址与跳数，实际连接再检查出口稳定身份和白名单。列表与创建/修改返回都隐藏每跳 token；只在完整身份（承载/地址/证书名）不变时保留省略的旧 token。分配节点的配置接口才下发凭据。出口需配置证书、稳定唯一 ID 和下一跳白名单，见 [Agent 文档](../examples/agent-README.md)。
 

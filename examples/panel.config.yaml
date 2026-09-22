@@ -1,0 +1,54 @@
+# 使用：panel -config /path/to/config.yaml
+# 相对文件路径以本配置文件目录为基准。优先级：命令行 > 环境变量 > YAML。
+
+# 数据库（三选一）。此配置的 SQLite 文件在配置文件同目录的 data/ 下。
+database-path: sqlite3://data/panel.db
+# database-path: "mysql://用户名:密码@tcp(127.0.0.1:3306)/数据库名?charset=utf8mb4&parseTime=true"
+# database-path: "postgres://host=localhost user=tfp password=替换密码 dbname=tfp port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+# 也接受标准 PostgreSQL URI：postgres://user:password@localhost:5432/tfp?sslmode=verify-full
+
+# 连接池：省略时 SQLite 为 8/8，MySQL/PostgreSQL 为 16/4。
+# max-open-connection: 100
+# max-idle-connection: 5
+
+# SQLite 默认串行队列写入；服务器数据库使用事务并发写入。
+# true 绕过 SQLite 队列，仍在事务提交成功后才确认请求。
+# disable-queue: false
+
+listen: 127.0.0.1:18888
+
+# Caddy 必须保留 Host，覆盖 X-Forwarded-Proto 和 X-Real-IP。
+# 只在后端端口不对外开放、由受控代理访问时启用。
+trust-proxy: true
+# origin: https://panel.example.com
+
+# 本项目无商业授权码，不要填写 Nyanpass 的 key。
+
+# 默认使用程序内嵌前端；可先 panel -export-html ./public 再指定目录。
+# 若前端由 Caddy 托管，省略 html-path，并在 Caddyfile 中指定 public 目录。
+# html-path: ./public
+
+# 通常由 Caddy 管理 HTTPS，后端保持 HTTP。直接 HTTPS 时成对配置。
+# tls-cert: ./certs/fullchain.pem
+# tls-key: ./certs/privkey.pem
+
+# 仅控制面板自己的 HTML/JS/CSS 等静态资源压缩，不影响 SSE/WebSocket。
+# Caddy 另行配置 encode zstd gzip。
+disable-gzip: true
+
+# 按面板收到通信的时间判断离线；保留时间只影响实时探针列表，不删除节点或历史。
+offline-node-retention-time: 86400 # 最低 600 秒
+offline-node-time: 20 # 最低 20 秒
+
+# 可选额外限流。单位：秒/请求数。用户额度按账号共享，匿名额度按客户端 IP。
+# 开启时会统计页面读取 API 的请求，5 次/5 秒可能影响页面首次加载。
+# user-rate-limit:
+#   rate: 5
+#   limit: 50
+# default-rate-limit:
+#   rate: 5
+#   limit: 20
+# 健康检查、Agent API、签名支付通知不计入这两类额度，保留各自既有保护。
+
+# payments-file: ./payments.json
+# agent-dir: ./agents

@@ -1,0 +1,33 @@
+# 先执行 panel -export-html /srv/traffic-forwarding-panel/public。
+# 只将导出的 public 目录交给 Caddy，数据库和配置文件放在其他目录。
+panel.example.com {
+	encode zstd gzip
+	root * /srv/traffic-forwarding-panel/public
+	header {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		Cache-Control no-store
+	}
+	@backend path /api/* /online/* /download/*
+	handle @backend {
+		reverse_proxy 127.0.0.1:18888 {
+			header_up Host {hostport}
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Real-IP {client_ip}
+			flush_interval -1
+		}
+	}
+	handle /assets/* {
+		file_server
+	}
+	@shell path / /admin /admin/
+	handle @shell {
+		rewrite * /index.html
+		file_server
+	}
+	handle {
+		respond 404
+	}
+}

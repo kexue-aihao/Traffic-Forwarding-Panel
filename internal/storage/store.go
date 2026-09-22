@@ -29,15 +29,32 @@ type request struct {
 	done chan error
 }
 type Store struct {
-	DB      *sql.DB
-	Dialect string
-	queues  [3]chan request
-	stop    chan struct{}
-	closed  chan struct{}
-	once    sync.Once
+	DB           *sql.DB
+	Dialect      string
+	queues       [3]chan request
+	stop         chan struct{}
+	closed       chan struct{}
+	once         sync.Once
+	disableQueue bool
+}
+
+type Options struct {
+	MaxOpenConnections *int
+	MaxIdleConnections *int
+	DisableQueue       bool
 }
 
 func Open(ctx context.Context, dialect, dsn string) (*Store, error) {
+	return OpenWithOptions(ctx, dialect, dsn, Options{})
+}
+
+func OpenWithOptions(ctx context.Context, dialect, dsn string, opts Options) (*Store, error) {
+	if opts.MaxOpenConnections != nil && *opts.MaxOpenConnections < 1 || opts.MaxIdleConnections != nil && *opts.MaxIdleConnections < 0 {
+		return nil, errors.New("invalid database connection pool options")
+	}
+	if opts.MaxOpenConnections != nil && opts.MaxIdleConnections != nil && *opts.MaxIdleConnections > *opts.MaxOpenConnections {
+		return nil, errors.New("idle connections exceed open connections")
+	}
 	driver := dialect
 	switch dialect {
 	case "sqlite":
@@ -65,11 +82,17 @@ func Open(ctx context.Context, dialect, dsn string) (*Store, error) {
 		db.SetMaxOpenConns(8)
 		db.SetMaxIdleConns(8)
 	}
+	if opts.MaxOpenConnections != nil {
+		db.SetMaxOpenConns(*opts.MaxOpenConnections)
+	}
+	if opts.MaxIdleConnections != nil {
+		db.SetMaxIdleConns(*opts.MaxIdleConnections)
+	}
 	if err = db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
-	s := &Store{DB: db, Dialect: dialect, stop: make(chan struct{}), closed: make(chan struct{})}
+	s := &Store{DB: db, Dialect: dialect, stop: make(chan struct{}), closed: make(chan struct{}), disableQueue: opts.DisableQueue}
 	if err = s.migrate(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -115,7 +138,7 @@ func (s *Store) Write(ctx context.Context, p Priority, fn func(*sql.Tx) error) e
 		return errors.New("store closed")
 	default:
 	}
-	if s.Dialect != "sqlite" {
+	if s.Dialect != "sqlite" || s.disableQueue {
 		return s.transaction(ctx, fn)
 	}
 	r := request{ctx: ctx, fn: fn, done: make(chan error, 1)}

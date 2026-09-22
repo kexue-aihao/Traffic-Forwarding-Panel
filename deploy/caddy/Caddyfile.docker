@@ -1,0 +1,9 @@
+{$PANEL_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy panel:18888 {
+		header_up Host {hostport}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {client_ip}
+		flush_interval -1
+	}
+}

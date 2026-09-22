@@ -1,0 +1,23 @@
+[Unit]
+Description=Traffic Forwarding Panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tfp
+Group=tfp
+WorkingDirectory=/opt/traffic-forwarding-panel
+ExecStart=/opt/traffic-forwarding-panel/panel -config /opt/traffic-forwarding-panel/config.yaml
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/traffic-forwarding-panel/data
+
+[Install]
+WantedBy=multi-user.target

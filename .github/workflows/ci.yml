@@ -74,3 +74,17 @@ jobs:
         working-directory: web
       - run: npm run test:live
         working-directory: web
+      - name: Install Caddy for HTTPS integration
+        env:
+          CADDY_VERSION: 2.11.4
+        run: |
+          cd "$RUNNER_TEMP"
+          archive="caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
+          checksums="caddy_${CADDY_VERSION}_checksums.txt"
+          base="https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}"
+          curl -fsSLO "$base/$archive"
+          curl -fsSLO "$base/$checksums"
+          sha512sum --check --ignore-missing "$checksums"
+          tar -xzf "$archive" caddy
+          echo "TFP_TEST_CADDY=$RUNNER_TEMP/caddy" >> "$GITHUB_ENV"
+      - run: node scripts/test_caddy.mjs

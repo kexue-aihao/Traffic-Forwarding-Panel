@@ -32,7 +32,7 @@ func TestChainRuleRedactionUpdateAndGroupPolicy(t *testing.T) {
 	if res := f.req("PUT", "/rules/"+rule.ID, rule, ""); res.Code != 409 {
 		t.Fatal("credential reused for changed endpoint")
 	}
-	g.BlockedProtocols = []string{"transport:http"}
+	g.DisabledTransports = []string{"http"}
 	read[contract.Group](t, f.req("PUT", "/groups/"+g.ID, g, ""), 200)
 	cfg = read[contract.Config](t, f.req("GET", "/agent/config", nil, n.Token), 200)
 	if len(cfg.Rules) != 0 {

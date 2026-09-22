@@ -47,6 +47,10 @@ func wire(t reflect.Type) schema {
 		return scalar("number")
 	case reflect.Slice:
 		return nullable(array(wire(t.Elem())))
+	case reflect.Map:
+		return schema{"type": "object", "additionalProperties": true}
+	case reflect.Interface:
+		return schema{}
 	case reflect.Struct:
 		name := t.Name()
 		if _, ok := schemas[name]; !ok {
@@ -150,8 +154,25 @@ func main() {
 	model("UsageAccepted", schema{"accepted": ids}, "accepted")
 	model("DiagnosticCheck", schema{"name": str, "ok": flag, "detail": str}, "name", "ok", "detail")
 	model("Diagnostic", schema{"rule_id": str, "node_id": str, "desired_version": num, "applied_version": num, "generated_at": date, "checks": array(ref("DiagnosticCheck"))}, "rule_id", "node_id", "desired_version", "applied_version", "generated_at", "checks")
-	requestFrom("GroupCreate", "Group", "name user_ids? blocked_protocols? multiplier? port_min port_max max_rules?")
-	requestFrom("GroupUpdate", "Group", "name user_ids? blocked_protocols? multiplier? port_min port_max max_rules? version")
+	groupFields := schemas["Group"].(schema)["properties"].(schema)
+	groupFields["type"] = schema{"type": "string", "enum": []string{"", "monitor", "entry", "exit", "chain_exit"}, "description": "Device group role; immutable after creation. Empty preserves legacy groups."}
+	groupFields["direct_policy"] = schema{"type": "string", "enum": []string{"", "forbid", "allow", "force"}, "description": "Entry-only direct forwarding policy."}
+	groupFields["chain_group_ids"] = schema{"type": "array", "items": str, "minItems": 2, "maxItems": 3, "description": "Ordered physical exit group IDs for a chain_exit group."}
+	groupFields["advanced"] = schema{"$ref": "#/components/schemas/GroupAdvanced", "description": "Optional reference-compatible device-group settings; shown separately from the basic group form."}
+	advancedSchema := schemas["GroupAdvanced"].(schema)
+	// Every input setting is optional; responses still include numeric zeroes.
+	delete(advancedSchema, "required")
+	advancedFields := advancedSchema["properties"].(schema)
+	advancedFields["blocked_protocol"].(schema)["description"] = "Application protocol blacklist: http, socks. Responses use reference names without the legacy app: prefix."
+	advancedFields["tls_inbound_policy"] = schema{"type": "integer", "enum": []int{0, 1, 2}, "description": "0: allow ordinary rules; 1: TLS inbound rules only; 2: TLS inbound rules and administrator-owned independent ports only."}
+	advancedFields["max_fail"] = schema{"type": "integer", "minimum": 0, "maximum": 1000, "description": "Consecutive failures tolerated before failover for entry-to-exit or direct forwarding. New editor template uses 3; explicit zero is preserved."}
+	advancedFields["fail_timout_sec"] = schema{"type": "integer", "minimum": 0, "maximum": 86400, "description": "Failover duration in seconds; reference spelling is intentional. New editor template uses 30; explicit zero is preserved."}
+	advancedFields["protocol"] = schema{"type": "string", "enum": []string{"", "tls", "tls_simple", "ws", "http"}, "description": "Reverse tunnel protocol; new editor template uses tls."}
+	groupFields["blocked_protocols"].(schema)["description"] = "Application traffic blocks: app:http, app:socks. Independent of forwarding methods. Legacy network:/transport: entries and bare carrier values are accepted on write and split into disabled_networks/disabled_transports; bare http historically means the HTTP tunnel."
+	groupFields["disabled_networks"].(schema)["description"] = "Disabled forwarding networks: tcp, udp. Empty means all networks are allowed."
+	groupFields["disabled_transports"].(schema)["description"] = "Disabled forwarding methods: direct, direct-tls, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
+	requestFrom("GroupCreate", "Group", "name type? direct_policy? chain_group_ids? advanced? user_ids? blocked_protocols? disabled_networks? disabled_transports? multiplier? port_min port_max max_rules?")
+	requestFrom("GroupUpdate", "Group", "name type? direct_policy? chain_group_ids? advanced? user_ids? blocked_protocols? disabled_networks? disabled_transports? multiplier? port_min port_max max_rules? version")
 	requestFrom("RuleCreate", "Rule", "user_id? name node_id group_id network transport listen target enabled blocked_protocols? tunnel? backends? shared_tls? proxy_protocol? exit_group_id? exit_id?")
 	requestFrom("RuleUpdate", "Rule", "user_id? name node_id group_id network transport listen target enabled blocked_protocols? tunnel? backends? shared_tls? proxy_protocol? exit_group_id? exit_id? version")
 	requestFrom("PlanCreate", "Plan", "name price_cents quota_bytes months kind? limits?")

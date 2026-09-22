@@ -30,6 +30,8 @@ Node >=22.12，推荐 Node 24。浏览器回归需已安装 Playwright Chromium/
 
 当前能力边界：节点/组/用户选择器和API Token自动分批读取，资源列表与商业列表有分页。支付平台配置编辑、账号自助恢复、自定义多角色和链式拓扑表单尚未提供。通道状态由服务端返回，实付接入需要独立渠道验证。
 
+设备组的额外设置放在列表操作中的“高级设置”，基础表单不再堆放协议、TLS、UDP 等控件。独立 JSONC 编辑器提供带注释的参考模板、格式化和可折叠参数说明，适配桌面及窄屏。`test:live` 覆盖注释解析、错误输入、白名单冲突、嵌套 TLS 对象、零值和修改基础信息后的高级设置回读；界面截图为 `.gocache/screens/group-advanced-{desktop,mobile}.png`，展开说明截图为 `group-advanced-help-{desktop,mobile}.png`。组级参数的执行边界见 [API 契约](../docs/api-contract.md)。
+
 字体许可证与 Lucide 许可证随本地产物发布。`lucide-static` 仅作为构建时依赖，输出选定 sprite，不加载图标运行时。普通用户的实际权限与探针字段过滤以服务端为准，隐藏菜单不作为权限边界。
 
 所有产品日期由`core/format.ts`固定使用`Asia/Shanghai`并注明“上海时间 UTC+8”，不跟随浏览器所在时区。Token有效天数为每24小时，仍向API发送UTC ISO时间。fixture强制纽约时区验证冬夏、UTC跨日、历史日期/时间轴和Token过期请求；未使用本地日期输入暗中换算时区。

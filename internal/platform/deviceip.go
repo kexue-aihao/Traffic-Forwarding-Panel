@@ -114,8 +114,17 @@ func (s *Server) ownerDeviceIPs(ctx context.Context, u contract.User, group stri
 		item := contract.DeviceIP{NodeID: nodeID, NodeName: node.Name, GroupID: groupID, GroupName: g.Name}
 		if lastSeen > 0 {
 			at := time.Unix(lastSeen, 0).UTC()
+			s.mu.RLock()
+			if contact := s.lastContact[nodeID]; contact.After(at) {
+				at = contact
+			}
+			s.mu.RUnlock()
 			item.LastSeen = &at
-			item.Online = time.Since(at) <= nodeOnlineWindow
+			window := nodeOnlineWindow
+			if s.opts.OfflineNodeTime > 0 {
+				window = s.opts.OfflineNodeTime
+			}
+			item.Online = time.Since(at) <= window
 		}
 		if ip, family, source, at, ok := s.latestAddress(nodeID); ok {
 			item.Address, item.Family, item.Source, item.ObservedAt = ip, family, source, at

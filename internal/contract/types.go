@@ -13,15 +13,40 @@ type User struct {
 }
 
 type Group struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	UserIDs          []string `json:"user_ids"`
-	BlockedProtocols []string `json:"blocked_protocols"`
-	Multiplier       string   `json:"multiplier"`
-	PortMin          int      `json:"port_min"`
-	PortMax          int      `json:"port_max"`
-	MaxRules         int      `json:"max_rules"`
-	Version          int64    `json:"version"`
+	ID                 string         `json:"id"`
+	Name               string         `json:"name"`
+	Type               string         `json:"type"`
+	DirectPolicy       string         `json:"direct_policy,omitempty"`
+	ChainGroupIDs      []string       `json:"chain_group_ids,omitempty"`
+	Advanced           *GroupAdvanced `json:"advanced,omitempty"`
+	UserIDs            []string       `json:"user_ids"`
+	BlockedProtocols   []string       `json:"blocked_protocols"`
+	DisabledNetworks   []string       `json:"disabled_networks"`
+	DisabledTransports []string       `json:"disabled_transports"`
+	Multiplier         string         `json:"multiplier"`
+	PortMin            int            `json:"port_min"`
+	PortMax            int            `json:"port_max"`
+	MaxRules           int            `json:"max_rules"`
+	Version            int64          `json:"version"`
+}
+
+// GroupAdvanced mirrors the optional device-group settings exposed by the
+// reference panel. The UI edits JSONC; the API validates structured JSON.
+type GroupAdvanced struct {
+	AllowedHost       []string       `json:"allowed_host,omitempty"`
+	BlockedHost       []string       `json:"blocked_host,omitempty"`
+	BlockedPath       []string       `json:"blocked_path,omitempty"`
+	BlockedProtocol   []string       `json:"blocked_protocol,omitempty"`
+	TLSInboundPolicy  int            `json:"tls_inbound_policy,omitempty"`
+	TLSRejectEmptySNI bool           `json:"tls_reject_empty_sni,omitempty"`
+	DisableUDP        bool           `json:"disable_udp,omitempty"`
+	UDPOverTCP        bool           `json:"udp_over_tcp,omitempty"`
+	IPv6Group         []string       `json:"ipv6_group,omitempty"`
+	MaxFail           int            `json:"max_fail"`
+	FailTimeoutSec    int            `json:"fail_timout_sec"`
+	ReverseGroup      []string       `json:"reverse_group,omitempty"`
+	Protocol          string         `json:"protocol,omitempty"`
+	TLS               map[string]any `json:"tls,omitempty"`
 }
 
 type Node struct {
@@ -130,6 +155,7 @@ type IPObservation struct {
 
 type Probe struct {
 	NodeID        string    `json:"node_id"`
+	Online        *bool     `json:"online,omitempty"`
 	SampledAt     time.Time `json:"sampled_at"`
 	CPUPercent    *float64  `json:"cpu_percent"`
 	MemoryUsed    *uint64   `json:"memory_used,string"`
