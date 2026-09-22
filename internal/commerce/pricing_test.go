@@ -88,7 +88,8 @@ func TestLegacyOrderWithoutPayableStillConfirms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.ExecContext(ctx, "UPDATE commerce_orders SET payable_cents=0 WHERE id=?", order.ID); err != nil {
+	// 直连数据库也要走 Rebind：Postgres 的占位符是 $1，裸写 ? 只在 SQLite/MySQL 上成立。
+	if _, err := s.DB.ExecContext(ctx, s.q("UPDATE commerce_orders SET payable_cents=0 WHERE id=?"), order.ID); err != nil {
 		t.Fatal(err)
 	}
 	reloaded, err := s.ReconcileOrder(ctx, "alice", order.ID, map[string]Channel{"tokenpay": channel})

@@ -56,7 +56,12 @@ func (f *fixture) reportProbe(node contract.Registered, ip, family string) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		var seen int64
-		f.s.Store.DB.QueryRowContext(context.Background(), "SELECT last_seen FROM cp_nodes WHERE id=?", node.NodeID).Scan(&seen)
+		// 心跳是后台优先级的写，会晚于响应落地，所以这里轮询等它；查询同样要走
+		// Rebind（Postgres 用 $1），并且把错误报出来 —— 静默忽略只会让失败变成
+		// 一句「没有写入心跳时间」，看不出真正的原因。
+		if e := f.s.Store.DB.QueryRowContext(context.Background(), f.s.q("SELECT last_seen FROM cp_nodes WHERE id=?"), node.NodeID).Scan(&seen); e != nil {
+			f.t.Fatalf("读取心跳时间失败: %v", e)
+		}
 		if seen > 0 {
 			return
 		}
