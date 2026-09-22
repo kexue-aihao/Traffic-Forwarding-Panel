@@ -2,7 +2,7 @@
 
 Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP 四种加密承载。
 
-当前版本为正式版 `v0.1.1`。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.1.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。Cyber 按用户要求跳过；租约续期连接连续性、容量/性能工作及 Linux/公网/真实支付验收等待后续指示。
+当前版本为正式版 `v0.1.2`。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.2.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。Cyber 按用户要求跳过；租约续期连接连续性、容量/性能工作及 Linux/公网/真实支付验收等待后续指示。
 
 ## 本机启动
 
@@ -43,7 +43,7 @@ HTTPS 反向代理应保留 Host，并覆盖 `X-Forwarded-Proto` 为实际协议
 服务器已有 Docker 和 Docker Compose v2 时执行：
 
 ```sh
-curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.1/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
+curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.2/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
 ```
 
 无需输入域名或密码，执行后自动下载并启动容器。脚本识别 amd64/arm64，校验 Docker 镜像包，配置数据持久化、健康检查和自动重启，生成随机管理员密码并在完成时显示。默认目录 `/opt/traffic-forwarding-panel`，仅监听宿主机 `127.0.0.1:18080`。
