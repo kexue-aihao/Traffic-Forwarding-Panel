@@ -3,6 +3,8 @@ package commerce
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
 
 func (s *Service) PlansPage(ctx context.Context, page, size int) ([]Plan, int, error) {
@@ -34,7 +36,7 @@ func (s *Service) OrdersPage(ctx context.Context, user string, page, size int) (
 	if e := s.DB.QueryRowContext(ctx, s.q("SELECT COUNT(*) FROM commerce_orders WHERE user_id=?"), user).Scan(&total); e != nil {
 		return nil, 0, e
 	}
-	rows, e := s.DB.QueryContext(ctx, s.q("SELECT id,channel,amount,status,payment_url,created_at FROM commerce_orders WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?"), user, size, (page-1)*size)
+	rows, e := s.DB.QueryContext(ctx, s.q("SELECT id,channel,amount,payable_cents,status,payment_url,created_at FROM commerce_orders WHERE user_id=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?"), user, size, (page-1)*size)
 	if e != nil {
 		return nil, 0, e
 	}
@@ -43,11 +45,15 @@ func (s *Service) OrdersPage(ctx context.Context, user string, page, size int) (
 	for rows.Next() {
 		var o Order
 		var date string
-		if e = rows.Scan(&o.ID, &o.Channel, &o.Amount, &o.Status, &o.PaymentURL, &date); e != nil {
+		if e = rows.Scan(&o.ID, &o.Channel, &o.Amount, &o.Payable, &o.Status, &o.PaymentURL, &date); e != nil {
 			return nil, 0, e
 		}
-		o.Currency = "CNY"
+		o.Currency = contract.SettlementCurrency
 		o.CreatedAt = parse(date)
+		if o.Payable <= 0 {
+			o.Payable = o.Amount
+		}
+		o.Fee = o.Payable - o.Amount
 		items = append(items, o)
 	}
 	return items, total, rows.Err()

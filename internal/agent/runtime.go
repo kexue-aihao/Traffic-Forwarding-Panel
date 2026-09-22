@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -80,6 +81,16 @@ func validate(v contract.Rule) error {
 	case "direct":
 		if v.Tunnel != nil {
 			return errors.New("direct transport cannot contain a tunnel")
+		}
+	case "direct-tls":
+		// 没有出口，加密在对端（目标自己）终止。只允许带一个 server_name
+		// 作为校验名 —— endpoint 与 token 是隧道才有的东西。
+		if v.Tunnel != nil && (v.Tunnel.Endpoint != "" || v.Tunnel.Token != "") {
+			return errors.New("direct-tls transport cannot contain a tunnel")
+		}
+		// TLS 只承载 TCP；UDP 要走 TLS 得用 DTLS，那是另一套协议。
+		if v.Network != "tcp" {
+			return errors.New("direct-tls supports tcp only")
 		}
 	case "tls", "ws", "wss", "http":
 		if v.Tunnel == nil || v.Tunnel.Endpoint == "" || v.Tunnel.Token == "" {
@@ -328,12 +339,51 @@ func (b *binding) dialTarget(ctx context.Context, v contract.Rule) (net.Conn, *t
 		c, e := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, v.Network, v.Target)
 		return c, nil, e
 	}
+	if v.Transport == "direct-tls" {
+		return b.dialTargetTLS(ctx, v)
+	}
 	s, e := b.runtime.Client.DialRoute(ctx, v.Transport, v.Network, v.Target, *v.Tunnel)
 	if e != nil {
 		return nil, nil, e
 	}
 	return s, s, nil
 }
+
+// dialTargetTLS 把「入口到目标」这一段包进 TLS。
+//
+// 与隧道不同，这里没有出口参与：加密直接在对端终止，所以目标必须自己会说
+// TLS。信任库沿用 -ca 装进来的那一套（系统根 + 私有 CA），和目标证书的校验
+// 名默认取 target 的主机部分，规则里写了 tunnel.server_name 就用它 —— 目标
+// 是纯 IP、证书签的却是域名时需要后者。
+//
+// 计费口径不变：经过这条连接的仍是业务有效载荷，TLS 记录头不额外计入。
+func (b *binding) dialTargetTLS(ctx context.Context, v contract.Rule) (net.Conn, *tunnel.Session, error) {
+	raw, e := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", v.Target)
+	if e != nil {
+		return nil, nil, e
+	}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS13}
+	if base := b.runtime.Client.TLS; base != nil {
+		cfg = base.Clone()
+		cfg.MinVersion = tls.VersionTLS13
+	}
+	host, _, e := net.SplitHostPort(v.Target)
+	if e != nil {
+		raw.Close()
+		return nil, nil, e
+	}
+	cfg.ServerName = host
+	if v.Tunnel != nil && v.Tunnel.ServerName != "" {
+		cfg.ServerName = v.Tunnel.ServerName
+	}
+	c := tls.Client(raw, cfg)
+	if e := c.HandshakeContext(ctx); e != nil {
+		raw.Close()
+		return nil, nil, e
+	}
+	return c, nil, nil
+}
+
 func (b *binding) serveTCP() {
 	for {
 		c, e := b.tcp.Accept()

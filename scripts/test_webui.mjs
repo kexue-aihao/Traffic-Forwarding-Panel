@@ -58,6 +58,9 @@ const node = {
 };
 const fixtureProbe = {
   node_id: "n1",
+  node_name: "Fixture node",
+  group_ids: ["g1"],
+  location: { country_code: "HK", country_name: "中国香港", city: "Hong Kong" },
   sampled_at: winterUTC,
   cpu_percent: null,
   memory_used: null,
@@ -67,6 +70,9 @@ const fixtureProbe = {
   upload_bps: null,
   download_bps: null,
   load1: null,
+  cpu_model: "Fixture CPU",
+  swap_used: "0",
+  swap_total: "2147483648",
   uptime_seconds: null,
   public_ips: [
     {
@@ -91,7 +97,21 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify(value));
   };
   if (url.pathname.startsWith("/api/")) {
-    if (path === "/site") return json({name:"流量控制台",announcement:"",registration:"closed",captcha:false,accent:"blue"});
+    if (path === "/site")
+      return json({
+        name: "流量控制台",
+        announcement: "",
+        registration: "closed",
+        captcha: false,
+        accent: "blue",
+        currency: "CNY",
+        minimum_recharge: "1.00",
+        maximum_recharge: "1000000.00",
+        payments_enabled: true,
+        diagnostics_enabled: true,
+        diagnostics_per_minute: 6,
+        geo_lookup_url: "https://ipwho.is/{ip}",
+      });
 
     if (path === "/auth/login") {
       authorized = true;
@@ -243,6 +263,10 @@ const server = createServer(async (req, res) => {
           enabled: paymentFixture,
           status: "unconfigured",
           reason: "未配置",
+          fee_percent: "1.50",
+          fee_fixed: "1.00",
+          crypto_currency: "USDT",
+          rate: "7.20",
         },
       ],
     };
@@ -319,12 +343,28 @@ try {
       await page.getByRole("button", { name: "生成接入凭据" }).click();
       await page.getByLabel("名称", { exact: true }).fill("Timezone fixture");
       await page.getByRole("button", { name: "保存", exact: true }).click();
-      await page.getByLabel("一次性接入凭据").waitFor();
+      // 接入凭据现在是一条自包含命令：令牌藏在里面，有效期直接显示在命令下方。
+      // 过期时间仍必须按上海时间渲染，不跟随浏览器所在时区。
+      const onboard = page.locator(".onboard");
+      await onboard.waitFor();
       assert.match(
-        await page.getByLabel("一次性接入凭据").inputValue(),
-        /2026-01-16 00:20:30（上海时间 UTC\+8）/,
+        await onboard.innerText(),
+        /有效期至 2026-01-16 00:20:30（上海时间 UTC\+8）/,
       );
-      await page.getByRole("button", { name: "已保存，关闭" }).click();
+      assert.match(
+        await page.getByLabel("设备接入命令").textContent(),
+        /-t 'fixture-enrollment'/,
+        "命令必须带上本次生成的令牌",
+      );
+      assert.match(
+        await page.getByLabel("设备接入命令").textContent(),
+        /\/download\/agent-install\.sh\) -t /,
+        "命令必须指向面板自托管的接入脚本",
+      );
+      await page
+        .locator("dialog")
+        .getByRole("button", { name: "关闭", exact: true })
+        .click();
       await page.getByRole("link", { name: "操作审计", exact: true }).click();
       await page.getByText("2026-01-16 00:20:30", { exact: true }).waitFor();
       await page.getByRole("link", { name: "账号与 API", exact: true }).click();
@@ -358,7 +398,10 @@ try {
         await page.getByLabel("名称", { exact: true }).fill("dirty");
         await page.getByRole("button", { name: "关闭对话框" }).click();
         await page.getByText("尚有未保存内容。再次关闭将放弃修改。").waitFor();
+        // 退场是有的：close() 之后还要播一个 --duration-state 的动画，元素
+        // 才会从 DOM 上摘掉，所以这里等它卸载而不是立刻数。
         await page.getByRole("button", { name: "关闭对话框" }).click();
+        await page.locator("dialog").waitFor({ state: "detached" });
         assert.equal(await page.locator("dialog").count(), 0);
       }
       await page.getByRole("button", { name: "新增", exact: true }).click();
@@ -378,6 +421,23 @@ try {
       await page
         .getByText("采样于 2026-01-16 00:20:30", { exact: true })
         .waitFor();
+      // 位置图标与设备组归属：位置对普通用户也可见，机器地址不是。
+      assert.equal(
+        await page.locator(".location-flag").first().getAttribute("aria-label"),
+        "中国香港",
+      );
+      assert.equal(
+        await page.locator(".probe-place").first().innerText(),
+        "位置 中国香港·Hong Kong · 设备组 Fixture group",
+      );
+      // 探针页面按设备组收窄：选了组之后仍然只显示这一组的机器。
+      await page.getByLabel("设备组").selectOption("g1");
+      await page.getByRole("heading", { name: "Fixture node" }).waitFor();
+      assert.equal(
+        await page.locator(".probe-api code").count(),
+        4,
+        "设备地址接口应当在页面里写明",
+      );
       await page
         .getByText("fixture · 2026-07-15 00:20:30", { exact: true })
         .waitFor();
@@ -586,9 +646,20 @@ try {
       assert.equal(reconcileCalls, 1);
       await page.getByRole("button", { name: "充值钱包", exact: true }).click();
       await page.getByLabel("支付渠道").selectOption("epay");
+      // 充值是元，手续费与加密报价由服务端配置算出来，界面上先说清楚付多少。
+      assert.deepEqual(
+        await page.locator("dialog .metrics div").allInnerTexts(),
+        [
+          "钱包到账\n¥ 100.00",
+          "通道手续费\n¥ 2.50 （1.50% + ¥1.00）",
+          "实付\n¥ 102.50",
+          "折合应付\n≈ 14.24 USDT （汇率 7.20）",
+        ],
+        "充值报价必须把到账、手续费、实付与折算金额分开写清楚",
+      );
       await page.getByRole("button", { name: "确认提交", exact: true }).click();
       await page.locator("dialog .error").waitFor();
-      assert.equal(await page.getByLabel("充值金额（分）").isDisabled(), true);
+      assert.equal(await page.getByLabel("充值金额（元）").isDisabled(), true);
       await page.getByRole("button", { name: "确认提交", exact: true }).click();
       await page.locator("dialog").waitFor({ state: "detached" });
       assert.equal(createdKeys.length, 2);
@@ -603,6 +674,33 @@ try {
         "graphite",
       ])
         await page.getByLabel("品牌配色").selectOption(accent);
+      // 默认暗色：这套设计语言的使用场景就是近黑画布 + 环境光
+      assert.equal(
+        await page.evaluate(() => document.documentElement.dataset.theme),
+        "dark",
+        "default theme must be dark",
+      );
+      // 明暗是一个轴，品牌色相是另一个轴：切换主题不得扰动配色
+      await page.getByRole("button", { name: "切换浅色主题" }).click();
+      assert.equal(
+        await page.evaluate(() => document.documentElement.dataset.theme),
+        "light",
+      );
+      assert.equal(
+        await page.evaluate(() => document.documentElement.dataset.accent),
+        "graphite",
+        "theme switch must not disturb the accent",
+      );
+      // 画布底色要跟着主题走，否则移动端地址栏会留着上一套颜色
+      assert.equal(
+        await page.evaluate(() =>
+          document
+            .querySelector('meta[name="theme-color"]')
+            .getAttribute("content"),
+        ),
+        "#eceff5",
+        "theme-color must follow the light canvas",
+      );
       await page.getByRole("button", { name: "切换深色主题" }).click();
       await page.reload();
       assert.equal(
@@ -612,6 +710,15 @@ try {
       assert.equal(
         await page.evaluate(() => document.documentElement.dataset.theme),
         "dark",
+      );
+      assert.equal(
+        await page.evaluate(() =>
+          document
+            .querySelector('meta[name="theme-color"]')
+            .getAttribute("content"),
+        ),
+        "#07080b",
+        "防闪烁脚本必须在首帧前把 theme-color 涂成暗色",
       );
       await page.setViewportSize({ width: 320, height: 700 });
       assert.ok(
@@ -644,7 +751,7 @@ try {
         [],
       );
       console.log(
-        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), dirty dialog, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, purchase, themes, 401 PASS`,
+        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), dirty dialog, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, recharge in yuan with channel fee, purchase, themes, 401 PASS`,
       );
     } finally {
       await browser.close();

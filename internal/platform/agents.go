@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -73,38 +74,52 @@ func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 	node := contract.Node{ID: id(), Name: in.Name, Version: in.Version, OS: in.OS, Arch: in.Arch, Capabilities: in.Capabilities, DesiredVersion: 1}
 	credential := token()
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
-		var p string
-		if e := tx.QueryRowContext(r.Context(), s.q(`SELECT payload FROM cp_enrollments WHERE token_hash=? AND expires_at>?`), digest(in.Token), time.Now().Unix()).Scan(&p); e != nil {
-			return e
-		}
+		// 两种凭据走同一条注册路径：一次性接入令牌，以及设备组的固定接入密钥。
+		// 前者由面板指定名字与组、用完即废；后者可重复使用、名字由设备自报。
 		var en enrollment
-		if e := json.Unmarshal([]byte(p), &en); e != nil {
-			return e
+		var payload string
+		err := tx.QueryRowContext(r.Context(), s.q(`SELECT payload FROM cp_enrollments WHERE token_hash=? AND expires_at>?`), digest(in.Token), time.Now().Unix()).Scan(&payload)
+		switch {
+		case err == nil:
+			if e := json.Unmarshal([]byte(payload), &en); e != nil {
+				return e
+			}
+			res, e := tx.ExecContext(r.Context(), s.q(`DELETE FROM cp_enrollments WHERE token_hash=?`), digest(in.Token))
+			if e != nil {
+				return e
+			}
+			if n, _ := res.RowsAffected(); n != 1 {
+				return errConflict
+			}
+		case errors.Is(err, sql.ErrNoRows):
+			// 空名字一律拒绝：那会在控制台上建出一个认不出来的节点。
+			if strings.TrimSpace(in.Name) == "" {
+				return errEnrollment
+			}
+			var group string
+			if e := tx.QueryRowContext(r.Context(), s.q(`SELECT id FROM cp_groups WHERE join_key=? AND join_key<>''`), in.Token).Scan(&group); e != nil {
+				return errEnrollment
+			}
+			en.GroupIDs = []string{group}
+		default:
+			return err
 		}
 		node.GroupIDs = en.GroupIDs
 		if en.Name != "" {
 			node.Name = en.Name
 		}
-		res, e := tx.ExecContext(r.Context(), s.q(`DELETE FROM cp_enrollments WHERE token_hash=?`), digest(in.Token))
-		if e != nil {
-			return e
-		}
-		n, _ := res.RowsAffected()
-		if n != 1 {
-			return errConflict
-		}
-		if _, e = tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_nodes(id,name,token_hash,payload,desired_version,applied_version,apply_error,last_seen) VALUES(?,?,?,?,1,0,'',?)`), node.ID, node.Name, digest(credential), strJSON(node), time.Now().Unix()); e != nil {
+		if _, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_nodes(id,name,token_hash,payload,desired_version,applied_version,apply_error,last_seen) VALUES(?,?,?,?,1,0,'',?)`), node.ID, node.Name, digest(credential), strJSON(node), time.Now().Unix()); e != nil {
 			return e
 		}
 		for _, g := range en.GroupIDs {
-			if _, e = tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_node_groups(node_id,group_id) VALUES(?,?)`), node.ID, g); e != nil {
+			if _, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_node_groups(node_id,group_id) VALUES(?,?)`), node.ID, g); e != nil {
 				return e
 			}
 		}
 		return nil
 	})
 	if e != nil {
-		fail(w, 401, "invalid or consumed enrollment")
+		fail(w, 401, "invalid enrollment token or group access key")
 		return
 	}
 	reply(w, 201, contract.Registered{NodeID: node.ID, Token: credential})
@@ -126,11 +141,33 @@ func (s *Server) agent(next http.HandlerFunc) http.HandlerFunc {
 }
 func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFromContext(r.Context())
+	// 可选按设备组收窄：探针页面的历史选择器要和探针本身看到同一批机器。
+	group := r.URL.Query().Get("group_id")
+	if group != "" && u.Role != "admin" {
+		var member int
+		if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_users WHERE group_id=? AND user_id=?`), group, u.ID).Scan(&member); e != nil {
+			fail(w, 500, "query failed")
+			return
+		}
+		if member != 1 {
+			fail(w, 403, "该设备组不在你的授权范围内")
+			return
+		}
+	}
 	where := ""
 	args := []any{}
 	if u.Role != "admin" {
 		where = ` WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_users gu ON gu.group_id=ng.group_id WHERE ng.node_id=n.id AND gu.user_id=?)`
 		args = append(args, u.ID)
+	}
+	if group != "" {
+		clause := `EXISTS(SELECT 1 FROM cp_node_groups ng2 WHERE ng2.node_id=n.id AND ng2.group_id=?)`
+		if where == "" {
+			where = " WHERE " + clause
+		} else {
+			where += " AND " + clause
+		}
+		args = append(args, group)
 	}
 	n, o := pages(r)
 	var total int
@@ -360,43 +397,177 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(204)
 }
-func (s *Server) visibleProbes(ctx context.Context, u contract.User) ([]contract.Probe, error) {
-	allowed := map[string]bool{}
+
+// errEntitlementRequired 表示这个用户没有有效权益，看不到探针。
+var errEntitlementRequired = errors.New("entitlement required")
+
+// errGroupForbidden 表示请求的设备组不在这个身份的授权范围内。
+var errGroupForbidden = errors.New("group not authorized")
+
+// probeNode 是一台机器的展示元数据：名字，以及它属于哪些设备组。
+type probeNode struct {
+	name   string
+	groups []string
+}
+
+// visibleNodes 返回这个身份能看到哪些机器，以及每台机器归属的组。
+//
+// 可见性只有两条规则：管理员看全部；普通用户看自己所属设备组里的机器。
+// group 非空时再按一个组收窄 —— 探针页面是「按组看机器」的，客户脚本也
+// 只该拿到自己那一组的地址。
+func (s *Server) visibleNodes(ctx context.Context, u contract.User, group string) (map[string]probeNode, error) {
+	nodes := map[string]probeNode{}
+	query := "SELECT id,payload FROM cp_nodes"
+	args := []any{}
 	if u.Role != "admin" {
-		rows, e := s.Store.DB.QueryContext(ctx, s.q(`SELECT DISTINCT ng.node_id FROM cp_node_groups ng JOIN cp_group_users gu ON gu.group_id=ng.group_id WHERE gu.user_id=?`), u.ID)
-		if e != nil {
+		query = "SELECT n.id,n.payload FROM cp_nodes n WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_users gu ON gu.group_id=ng.group_id WHERE ng.node_id=n.id AND gu.user_id=?)"
+		args = append(args, u.ID)
+	}
+	rows, e := s.Store.DB.QueryContext(ctx, s.q(query), args...)
+	if e != nil {
+		return nil, e
+	}
+	for rows.Next() {
+		var nodeID, payload string
+		if e = rows.Scan(&nodeID, &payload); e != nil {
+			rows.Close()
 			return nil, e
 		}
-		for rows.Next() {
-			var id string
-			if e = rows.Scan(&id); e != nil {
-				rows.Close()
-				return nil, e
+		var node contract.Node
+		json.Unmarshal([]byte(payload), &node)
+		nodes[nodeID] = probeNode{name: node.Name}
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return nil, e
+	}
+	groupQuery := "SELECT node_id,group_id FROM cp_node_groups"
+	args = []any{}
+	filters := []string{}
+	if u.Role != "admin" {
+		filters = append(filters, "EXISTS(SELECT 1 FROM cp_group_users gu WHERE gu.group_id=cp_node_groups.group_id AND gu.user_id=?)")
+		args = append(args, u.ID)
+	}
+	if group != "" {
+		filters = append(filters, "group_id=?")
+		args = append(args, group)
+	}
+	if len(filters) > 0 {
+		groupQuery += " WHERE " + strings.Join(filters, " AND ")
+	}
+	links, e := s.Store.DB.QueryContext(ctx, s.q(groupQuery), args...)
+	if e != nil {
+		return nil, e
+	}
+	defer links.Close()
+	for links.Next() {
+		var nodeID, groupID string
+		if e = links.Scan(&nodeID, &groupID); e != nil {
+			return nil, e
+		}
+		entry, ok := nodes[nodeID]
+		if !ok {
+			continue
+		}
+		entry.groups = append(entry.groups, groupID)
+		nodes[nodeID] = entry
+	}
+	if e = links.Err(); e != nil {
+		return nil, e
+	}
+	if group != "" {
+		// 指定了组就只留下确实在这个组里的机器：上面那次 join 已经把范围收窄，
+		// 但一台机器可能同时属于多个组，这里以组归属为准再确认一次。
+		for nodeID, entry := range nodes {
+			if !contains(entry.groups, group) {
+				delete(nodes, nodeID)
 			}
-			allowed[id] = true
-		}
-		e = rows.Err()
-		rows.Close()
-		if e != nil {
-			return nil, e
 		}
 	}
+	return nodes, nil
+}
+
+func (s *Server) visibleProbes(ctx context.Context, u contract.User, group string) ([]contract.Probe, error) {
+	// 探针是付费能力：普通用户要有未过期的权益才能看。管理员不受此限 ——
+	// 他们本来就要排查所有人的节点。
+	if u.Role != "admin" && s.opts.ActiveEntitlement != nil {
+		ok, e := s.opts.ActiveEntitlement(ctx, u.ID)
+		if e != nil {
+			return nil, e
+		}
+		if !ok {
+			return nil, errEntitlementRequired
+		}
+	}
+	if group != "" && u.Role != "admin" {
+		var member int
+		if e := s.Store.DB.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_group_users WHERE group_id=? AND user_id=?`), group, u.ID).Scan(&member); e != nil {
+			return nil, e
+		}
+		if member != 1 {
+			return nil, errGroupForbidden
+		}
+	}
+	nodes, e := s.visibleNodes(ctx, u, group)
+	if e != nil {
+		return nil, e
+	}
+	// 查询地址模板要在拿服务锁之前取好：它可能读一次站点设置，而服务锁
+	// 是所有探针写入的必经之路。
+	template := s.geoTemplate(ctx)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	items := []contract.Probe{}
 	for n, p := range s.probes {
-		if u.Role == "admin" || allowed[n] {
-			if u.Role != "admin" {
-				p.PublicIPs = nil
-			}
-			items = append(items, p)
+		entry, ok := nodes[n]
+		if !ok {
+			continue
+		}
+		p.NodeName = entry.name
+		p.GroupIDs = entry.groups
+		// 位置图标对所有人可见，机器地址不是：普通用户看得到「这台在哪里」，
+		// 看不到它连哪个 IP。管理员两者都有，客户脚本走设备地址接口。
+		if ip := probeAddress(p); ip != "" {
+			p.Location = s.locationWith(ctx, ip, template)
+		}
+		if u.Role != "admin" {
+			p.PublicIPs = nil
+		}
+		items = append(items, p)
+	}
+	// map 遍历顺序是随机的，而这一份要推给浏览器和客户脚本：按节点 id 定序。
+	sort.Slice(items, func(i, j int) bool { return items[i].NodeID < items[j].NodeID })
+	return items, nil
+}
+
+// probeAddress 取探针里最适合拿来定位的地址：优先 IPv4。
+func probeAddress(p contract.Probe) string {
+	best := ""
+	for _, ip := range p.PublicIPs {
+		if ip.Address == "" {
+			continue
+		}
+		if ip.Family == "ipv4" {
+			return ip.Address
+		}
+		if best == "" {
+			best = ip.Address
 		}
 	}
-	return items, nil
+	return best
 }
 func (s *Server) probeList(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFromContext(r.Context())
-	items, e := s.visibleProbes(r.Context(), u)
+	items, e := s.visibleProbes(r.Context(), u, r.URL.Query().Get("group_id"))
+	if errors.Is(e, errEntitlementRequired) {
+		fail(w, 403, "需要有效的套餐权益才能查看探针")
+		return
+	}
+	if errors.Is(e, errGroupForbidden) {
+		fail(w, 403, "该设备组不在你的授权范围内")
+		return
+	}
 	if e != nil {
 		fail(w, 500, "query failed")
 		return
@@ -409,6 +580,32 @@ func (s *Server) probeEvents(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "stream unsupported")
 		return
 	}
+	group := r.URL.Query().Get("group_id")
+	// 门槛要在写出事件流响应头之前判断 —— 一旦开始推送就只能以流中断收场，
+	// 前端拿不到状态码，只能看到「连接断开」。
+	u, e := s.Authenticate(r)
+	if e != nil {
+		fail(w, 401, "authentication required")
+		return
+	}
+	if u.Role != "admin" && s.opts.ActiveEntitlement != nil {
+		ok, e := s.opts.ActiveEntitlement(r.Context(), u.ID)
+		if e != nil {
+			fail(w, 500, "权益校验不可用")
+			return
+		}
+		if !ok {
+			fail(w, 403, "需要有效的套餐权益才能查看探针")
+			return
+		}
+	}
+	if group != "" && u.Role != "admin" {
+		var member int
+		if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_users WHERE group_id=? AND user_id=?`), group, u.ID).Scan(&member); e != nil || member != 1 {
+			fail(w, 403, "该设备组不在你的授权范围内")
+			return
+		}
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -419,7 +616,7 @@ func (s *Server) probeEvents(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return
 		}
-		items, e := s.visibleProbes(r.Context(), u)
+		items, e := s.visibleProbes(r.Context(), u, group)
 		if e != nil {
 			return
 		}

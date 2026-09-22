@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math/big"
 	"net/url"
 	"strings"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/commerce"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/payment"
 )
 
@@ -21,6 +23,14 @@ type PaymentConfiguration struct {
 	Method             string `json:"method"`
 	NotifyURL          string `json:"notify_url"`
 	ReturnURL          string `json:"return_url"`
+	// FeePercent 是这条通道加收的手续费百分比（"1.5" 就是 1.5%），
+	// FeeFixed 是固定部分、以元为单位（"1.00" 就是一元）。手续费加在充值
+	// 金额之上：用户充值 100 元、手续费 1.5%，实付 101.50 元，钱包到账 100 元。
+	FeePercent string `json:"fee_percent"`
+	FeeFixed   string `json:"fee_fixed"`
+	// Rate 是「1 单位加密货币折多少人民币」，用于给用户算出需要支付多少
+	// USDT。网关侧也要配同一个汇率，两边才会一致。
+	Rate string `json:"rate"`
 }
 
 // PaymentChannels loads operator-owned settings. No config secrets are returned
@@ -50,9 +60,57 @@ func PaymentChannels(r io.Reader, origin string) (map[string]commerce.Channel, e
 		if !validPaymentURL(cfg.NotifyURL, false) || !validPaymentURL(cfg.ReturnURL, true) {
 			return nil, errors.New("public HTTPS payment URLs required for " + name)
 		}
-		result[name] = commerce.Channel{Adapter: adapter, NotifyURL: cfg.NotifyURL, ReturnURL: cfg.ReturnURL, Method: cfg.Method}
+		feeBPS, feeFixed, err := paymentFees(cfg)
+		if err != nil {
+			return nil, errors.New("invalid fee configuration for " + name)
+		}
+		if err := validRate(cfg.Rate); err != nil {
+			return nil, errors.New("invalid exchange rate for " + name)
+		}
+		result[name] = commerce.Channel{Adapter: adapter, NotifyURL: cfg.NotifyURL, ReturnURL: cfg.ReturnURL, Method: cfg.Method, FeeBPS: feeBPS, FeeFixed: feeFixed, Rate: cfg.Rate, CryptoCurrency: cfg.CryptoCurrency}
 	}
 	return result, nil
+}
+
+// paymentFees 把运营方写的百分比与固定手续费换算成万分之一与分。
+//
+// 两个字段都是可选的，留空就是不收手续费 —— 升级既有部署时不会凭空多出一笔
+// 费用。百分比最多两位小数：再细就不是给人看的了。
+func paymentFees(cfg PaymentConfiguration) (int, int64, error) {
+	bps := 0
+	if percent := strings.TrimSpace(cfg.FeePercent); percent != "" {
+		value, ok := new(big.Rat).SetString(percent)
+		if !ok || value.Sign() < 0 || value.Cmp(big.NewRat(100, 1)) > 0 {
+			return 0, 0, errors.New("fee percent out of range")
+		}
+		scaled := new(big.Rat).Mul(value, big.NewRat(100, 1))
+		if !scaled.IsInt() || !scaled.Num().IsInt64() {
+			return 0, 0, errors.New("fee percent needs at most two decimals")
+		}
+		bps = int(scaled.Num().Int64())
+	}
+	fixed := int64(0)
+	if raw := strings.TrimSpace(cfg.FeeFixed); raw != "" {
+		value, err := contract.ParseAmount(raw)
+		if err != nil {
+			return 0, 0, err
+		}
+		fixed = value
+	}
+	return bps, fixed, nil
+}
+
+// validRate 校验通道汇率：留空表示不报价，给了就必须是正数。
+func validRate(raw string) error {
+	rate := strings.TrimSpace(raw)
+	if rate == "" {
+		return nil
+	}
+	value, ok := new(big.Rat).SetString(rate)
+	if !ok || value.Sign() <= 0 {
+		return errors.New("exchange rate must be positive")
+	}
+	return nil
 }
 
 func validPaymentURL(raw string, fragment bool) bool {

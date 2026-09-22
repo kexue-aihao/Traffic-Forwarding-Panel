@@ -340,10 +340,104 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=5").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		// 设备组的固定接入密钥。明文存，与 commerce_webhook_subscriptions.secret
+		// 同一理由：面板必须能把它再次展示给运营方，存哈希就取不回来了。
+		// 它不是节点身份 —— 只是一张「允许接入本组」的共享口令，轮换一次
+		// 已分发出去的命令全部失效。
+		if _, err = conn.ExecContext(ctx, "ALTER TABLE cp_groups ADD COLUMN join_key VARCHAR(64) NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		if err = s.backfillGroupJoinKeys(ctx, conn); err != nil {
+			return err
+		}
+		if err = EnsureIndex(ctx, conn, s.Dialect, "cp_groups", "cp_groups_join", "join_key", true); err != nil {
+			return err
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(5)"); err != nil {
+			return err
+		}
+	}
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=6").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		// 网络诊断（LookingGlass）。与 cp_diagnostics 同构：pending → running
+		// → done/failed，带一次性认领令牌与抢占窗口。
+		if _, err = conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS cp_looking_glass(id VARCHAR(64) PRIMARY KEY,node_id VARCHAR(64) NOT NULL,user_id VARCHAR(64) NOT NULL,method VARCHAR(16) NOT NULL,target VARCHAR(300) NOT NULL,status VARCHAR(16) NOT NULL,claim_token VARCHAR(64) NOT NULL,payload TEXT NOT NULL,created_at BIGINT NOT NULL,claimed_at BIGINT NOT NULL,finished_at BIGINT NOT NULL)"); err != nil {
+			return err
+		}
+		if err = EnsureIndex(ctx, conn, s.Dialect, "cp_looking_glass", "cp_looking_glass_pending", "node_id,status,created_at", false); err != nil {
+			return err
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(6)"); err != nil {
+			return err
+		}
+	}
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=7").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		// API Token 的运营侧可见信息。凭据本身仍然只存摘要，这几列让管理员
+		// 看得出「这把钥匙是谁的、什么时候发的、最近用过没有」，从而判断该
+		// 重置哪一条 —— 没有它们，重置就只剩下「全部删掉重发」。
+		for _, column := range []struct{ name, definition string }{
+			{"prefix", "VARCHAR(16) NOT NULL DEFAULT ''"},
+			{"created_at", "BIGINT NOT NULL DEFAULT 0"},
+			{"last_used_at", "BIGINT NOT NULL DEFAULT 0"},
+		} {
+			if err = EnsureColumn(ctx, conn, s.Dialect, "cp_tokens", column.name, column.definition); err != nil {
+				return err
+			}
+		}
+		if err = EnsureIndex(ctx, conn, s.Dialect, "cp_tokens", "cp_tokens_user", "user_id,id", false); err != nil {
+			return err
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(7)"); err != nil {
+			return err
+		}
+	}
 	if s.Dialect == "sqlite" {
 		_, err = conn.ExecContext(ctx, "COMMIT")
 	}
 	return err
+}
+
+// backfillGroupJoinKeys 给升级前就存在的设备组各补一把接入密钥。少了这一步，
+// 那些组在控制台上就没有可复制的接入命令。
+func (s *Store) backfillGroupJoinKeys(ctx context.Context, conn *sql.Conn) error {
+	rows, err := conn.QueryContext(ctx, "SELECT id FROM cp_groups WHERE join_key='' OR join_key IS NULL")
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var group string
+		if err = rows.Scan(&group); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, group)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	// SQLite 在同一个连接上不能一边开着 rows 一边写，先把 id 收完再更新。
+	rows.Close()
+	for _, group := range ids {
+		key, err := RandomKey()
+		if err != nil {
+			return err
+		}
+		if _, err = conn.ExecContext(ctx, s.Rebind("UPDATE cp_groups SET join_key=? WHERE id=?"), key, group); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var schema = []string{
@@ -355,7 +449,7 @@ var schema = []string{
 	`CREATE TABLE IF NOT EXISTS cp_schema(version INTEGER PRIMARY KEY)`,
 	`CREATE TABLE IF NOT EXISTS cp_users(id VARCHAR(64) PRIMARY KEY, username VARCHAR(190) NOT NULL UNIQUE, password_hash VARCHAR(190) NOT NULL, role VARCHAR(32) NOT NULL, disabled INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS cp_sessions(token_hash VARCHAR(64) PRIMARY KEY, user_id VARCHAR(64) NOT NULL, expires_at BIGINT NOT NULL, FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
-	`CREATE TABLE IF NOT EXISTS cp_tokens(id VARCHAR(64) PRIMARY KEY,token_hash VARCHAR(64) NOT NULL UNIQUE,user_id VARCHAR(64) NOT NULL,name VARCHAR(190) NOT NULL,expires_at BIGINT NOT NULL,FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
+	`CREATE TABLE IF NOT EXISTS cp_tokens(id VARCHAR(64) PRIMARY KEY,token_hash VARCHAR(64) NOT NULL UNIQUE,user_id VARCHAR(64) NOT NULL,name VARCHAR(190) NOT NULL,expires_at BIGINT NOT NULL,prefix VARCHAR(16) NOT NULL DEFAULT '',created_at BIGINT NOT NULL DEFAULT 0,last_used_at BIGINT NOT NULL DEFAULT 0,FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
 	`CREATE TABLE IF NOT EXISTS cp_groups(id VARCHAR(64) PRIMARY KEY, name VARCHAR(190) NOT NULL, payload TEXT NOT NULL, version BIGINT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS cp_group_users(group_id VARCHAR(64) NOT NULL, user_id VARCHAR(64) NOT NULL, PRIMARY KEY(group_id,user_id), FOREIGN KEY(group_id) REFERENCES cp_groups(id), FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
 	`CREATE TABLE IF NOT EXISTS cp_nodes(id VARCHAR(64) PRIMARY KEY, name VARCHAR(190) NOT NULL, token_hash VARCHAR(64) NOT NULL UNIQUE, payload TEXT NOT NULL, desired_version BIGINT NOT NULL, applied_version BIGINT NOT NULL, apply_error TEXT NOT NULL, last_seen BIGINT NOT NULL DEFAULT 0)`,

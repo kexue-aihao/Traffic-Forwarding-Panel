@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import Select from "./components/Select.vue";
 import { useRoute, useRouter } from "vue-router";
 import Icon from "./components/Icon.vue";
 import { api, errorText } from "./core/api";
@@ -49,6 +50,7 @@ const menus = computed(() => [
   { path: "/exits", label: "出口管理", icon: "arrow-right-left" },
   { path: "/nodes", label: "服务器", icon: "server" },
   { path: "/probes", label: "实时探针", icon: "activity" },
+  { path: "/diagnostics", label: "网络诊断", icon: "radar" },
   { path: "/commerce", label: "套餐与钱包", icon: "wallet" },
   { path: "/operations", label: "运营与任务", icon: "layers" },
   { path: "/account", label: "账号与 API", icon: "shield" },
@@ -64,7 +66,81 @@ const menus = computed(() => [
 const title = computed(
   () => menus.value.find((m) => m.path === route.path)?.label || "控制台",
 );
-const theme = ref(document.documentElement.dataset.theme || "light");
+// ── 导航指示条 ────────────────────────────────────────────────
+// 用一个独立元素在导航项之间滑动，而不是每项各画一条。差别不只是省几个
+// 节点：换页因此变成一次连续的运动，而不是两次独立的出现与消失。
+// 位置实测自元素的 offsetTop —— 按固定行高算是更省事，但改行高或插分隔线
+// 时会静默错位，而错位的那一像素很难被注意到。
+const navEls = ref<Record<string, HTMLElement | null>>({});
+const indicator = ref({ top: 0, visible: false, ready: false });
+// :ref 挂在 RouterLink 上拿到的是**组件实例**而不是 DOM 元素，
+// 直接 instanceof 判断会永远是 false，指示条就永远不落位。
+// 这里两种形态都接住：是元素就用，是组件就取它的根节点。
+function registerNav(path: string, el: unknown) {
+  const node =
+    el instanceof HTMLElement
+      ? el
+      : ((el as { $el?: unknown } | null)?.$el ?? null);
+  navEls.value[path] = node instanceof HTMLElement ? node : null;
+}
+function updateIndicator() {
+  const el = navEls.value[route.path];
+  if (!el) {
+    indicator.value = { ...indicator.value, visible: false };
+    return;
+  }
+  indicator.value = {
+    top: el.offsetTop + (el.offsetHeight - 16) / 2,
+    visible: true,
+    ready: indicator.value.ready,
+  };
+}
+// 首帧先落位（不动画），下一帧才允许过渡 —— 否则首次进入页面时
+// 指示条会从顶部「飞」到当前项，看起来像个 bug。
+async function settleIndicator() {
+  await nextTick();
+  updateIndicator();
+  requestAnimationFrame(() => {
+    indicator.value = { ...indicator.value, ready: true };
+  });
+}
+watch(() => route.path, () => void nextTick().then(updateIndicator));
+watch(() => menus.value.length, () => void nextTick().then(updateIndicator));
+// ── 卡片光标聚光 ──────────────────────────────────────────────
+// 鼠标在卡面上移动时，一层极淡的径向高光跟着走 —— 它给静态的卡片一个
+// 「有光从上面照下来」的物理感，是整个界面里最便宜也最有效的质感来源。
+//
+// 用事件委托挂在滚动容器上，而不是给每张卡片各绑一个监听：卡片是模板里的
+// div，数量多且随页面重建。触屏没有 hover 语义，跟随一个不存在的光标
+// 只是白耗算力，所以先看指针类型。
+const finePointer = matchMedia("(pointer: fine)");
+function trackSpotlight(event: MouseEvent) {
+  if (!finePointer.matches) return;
+  const node = (event.target as HTMLElement | null)?.closest<HTMLElement>(
+    ".card, .surface",
+  );
+  if (!node) return;
+  // 用 getBoundingClientRect 换算坐标，而不是读 offsetX/offsetY：
+  // 后者相对**事件目标**，而鼠标经常落在卡片的子元素上 —— 那样光斑
+  // 会在每个子元素边界上跳一下。
+  const rect = node.getBoundingClientRect();
+  node.style.setProperty("--spot-x", `${event.clientX - rect.left}px`);
+  node.style.setProperty("--spot-y", `${event.clientY - rect.top}px`);
+}
+onMounted(() => {
+  window.addEventListener("resize", updateIndicator);
+  void settleIndicator();
+  document
+    .getElementById("view")
+    ?.addEventListener("mousemove", trackSpotlight, { passive: true });
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", updateIndicator);
+  document
+    .getElementById("view")
+    ?.removeEventListener("mousemove", trackSpotlight);
+});
+const theme = ref(document.documentElement.dataset.theme || "dark");
 const accent = ref(document.documentElement.dataset.accent || "blue");
 const accents = [
   ["blue", "湛蓝"],
@@ -74,9 +150,15 @@ const accents = [
   ["amber", "琥珀"],
   ["graphite", "石墨"],
 ];
+// 画布底色，与 static/theme.js 里的取值保持一致：两处都要同步
+// theme-color，否则移动端地址栏会在切换主题后留着上一套颜色。
+const canvas = { dark: "#07080b", light: "#eceff5" } as const;
 function appearance() {
   document.documentElement.dataset.theme = theme.value;
   document.documentElement.dataset.accent = accent.value;
+  document
+    .querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", canvas[theme.value as keyof typeof canvas] ?? canvas.dark);
   try {
     localStorage.setItem("panel-theme", theme.value);
     localStorage.setItem("panel-accent", accent.value);
@@ -149,24 +231,41 @@ onMounted(async () => {
 </script>
 <template>
   <div class="shell">
-    <div class="ambient" aria-hidden="true" />
+    <!-- 环境光晕：磨砂能读得出来的前提。光斑必须落在侧栏与顶栏覆盖的
+         区域上，否则那两处背后什么都没有，玻璃就只是「深色块」。 -->
+    <div class="ambient" aria-hidden="true">
+      <div class="ambient-orb ambient-orb-a" />
+      <div class="ambient-orb ambient-orb-b" />
+      <div class="ambient-orb ambient-orb-c" />
+      <div class="ambient-orb ambient-orb-d" />
+    </div>
     <a class="skip-link" href="#view">跳到主要内容</a>
     <div class="layout">
-      <aside class="sidebar">
-        <a class="brand" href="#/overview"
-          ><span class="brand-mark"><Icon name="arrow-right-left" /></span
-          ><span
-            >{{ site.name
-            }}<small>{{
-              adminSite ? "管理员工作空间" : "用户工作空间"
-            }}</small></span
-          ></a
-        >
-        <p class="nav-caption">WORKSPACE</p>
+      <aside class="sidebar glass">
+        <a class="brand" href="#/overview">
+          <span class="brand-mark brand-gradient">
+            <Icon name="arrow-right-left" />
+          </span>
+          <span>
+            <span class="brand-name">{{ site.name }}</span>
+            <small>{{ adminSite ? "管理员工作空间" : "用户工作空间" }}</small>
+          </span>
+        </a>
+        <p class="nav-caption">Workspace</p>
         <nav aria-label="主要导航">
+          <span
+            class="nav-indicator"
+            :data-ready="String(indicator.ready)"
+            :style="{
+              transform: `translateY(${indicator.top}px)`,
+              display: indicator.visible ? undefined : 'none',
+            }"
+            aria-hidden="true"
+          />
           <RouterLink
             v-for="item in menus"
             :key="item.path"
+            :ref="(el) => registerNav(item.path, el)"
             :to="item.path"
             :aria-current="route.path === item.path ? 'page' : undefined"
             ><Icon :name="item.icon" />{{ item.label }}</RouterLink
@@ -177,11 +276,11 @@ onMounted(async () => {
         </div>
       </aside>
       <div class="content">
-        <header class="topbar">
+        <header class="topbar glass">
           <span>{{ title }}</span>
           <div class="toolbar">
             <label class="sr-only" for="accent">品牌配色</label
-            ><select id="accent" v-model="accent" @change="appearance">
+            ><Select id="accent" v-model="accent" @change="appearance">
               <option
                 v-for="[value, label] in accents"
                 :key="value"
@@ -210,7 +309,17 @@ onMounted(async () => {
           </div>
         </header>
         <main id="view" tabindex="-1">
-          <p v-if="!state.ready" class="empty">正在连接控制台…</p>
+          <!-- 骨架屏按真实首页的比例摆：标题、说明、三张统计卡、一块内容卡。
+               形状对上了，数据到达时是「填上」而不是「重排」。 -->
+          <div v-if="!state.ready" class="page boot" aria-busy="true">
+            <p class="sr-only" role="status">正在连接控制台</p>
+            <div class="skeleton boot-head" />
+            <div class="skeleton boot-sub" />
+            <div class="stats">
+              <div v-for="n in 3" :key="n" class="skeleton skeleton-stat" />
+            </div>
+            <div class="skeleton skeleton-block" />
+          </div>
           <section v-else-if="bootError" class="card">
             <h1>暂时无法连接</h1>
             <p role="alert">{{ bootError }}</p>
@@ -259,8 +368,13 @@ onMounted(async () => {
                 /></label>
               </div>
               <p v-if="error" role="alert" class="error">{{ error }}</p>
-              <button class="primary" :disabled="busy">
-                {{ busy ? "提交中…" : registering ? "创建账号" : "登录控制台" }}
+              <button
+                class="primary"
+                :disabled="busy"
+                :data-busy="String(busy)"
+                :aria-busy="busy"
+              >
+                {{ registering ? "创建账号" : "登录控制台" }}
               </button>
             </form>
             <button
@@ -284,18 +398,24 @@ onMounted(async () => {
             <p>当前账号无法访问管理员后台。</p>
             <a href="/">返回用户工作空间</a>
           </section>
-          <template v-else
-            ><p v-if="site.announcement" class="card site-announcement">
-              {{ site.announcement }}
-            </p>
-            <RouterView :key="route.path"
-          /></template>
+          <template v-else>
+            <div v-if="site.announcement" class="page">
+              <p class="card site-announcement">{{ site.announcement }}</p>
+            </div>
+            <RouterView v-slot="{ Component }">
+              <Transition name="view" mode="out-in">
+                <component :is="Component" :key="route.path" />
+              </Transition>
+            </RouterView>
+          </template>
         </main>
       </div>
     </div>
-    <div v-if="state.notice" class="toast" role="status" aria-live="polite">
-      {{ state.notice
-      }}<button aria-label="关闭通知" @click="state.notice = ''">×</button>
-    </div>
+    <Transition name="toast">
+      <div v-if="state.notice" class="toast" role="status" aria-live="polite">
+        {{ state.notice
+        }}<button aria-label="关闭通知" @click="state.notice = ''">×</button>
+      </div>
+    </Transition>
   </div>
 </template>

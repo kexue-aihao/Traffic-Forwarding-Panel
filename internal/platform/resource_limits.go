@@ -47,7 +47,7 @@ func (s *Server) resourceCapabilities(ctx context.Context, tx *sql.Tx, rule cont
 	if err = json.Unmarshal([]byte(raw), &node); err != nil {
 		return false, err
 	}
-	return (rule.ProxyProtocol == nil || contains(node.Capabilities, "proxy-protocol-v1")) && (limits == (contract.ResourceLimits{}) || contains(node.Capabilities, "resource-limits-v1")) && (!rule.Advanced() || contains(node.Capabilities, "advanced-routing-v1")), nil
+	return (rule.ProxyProtocol == nil || contains(node.Capabilities, "proxy-protocol-v1")) && (limits == (contract.ResourceLimits{}) || contains(node.Capabilities, "resource-limits-v1")) && (!rule.Advanced() || contains(node.Capabilities, "advanced-routing-v1")) && (rule.Transport != "direct-tls" || contains(node.Capabilities, "direct-tls-v1")), nil
 }
 
 // Existing rules are ordered by immutable ID on every node. A downgrade keeps

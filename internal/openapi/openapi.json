@@ -20,6 +20,68 @@
         ],
         "type": "object"
       },
+      "APIToken": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "permanent": {
+            "type": "boolean"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "scope",
+          "created_at",
+          "expires_at",
+          "permanent"
+        ],
+        "type": "object"
+      },
       "Ack": {
         "additionalProperties": false,
         "properties": {
@@ -392,6 +454,110 @@
         ],
         "type": "object"
       },
+      "DeviceIP": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "family": {
+            "type": "string"
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "group_name": {
+            "type": "string"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeoLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "node_name": {
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "online": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "node_name",
+          "group_id",
+          "group_name",
+          "address",
+          "family",
+          "source",
+          "observed_at",
+          "online"
+        ],
+        "type": "object"
+      },
+      "DeviceIPPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DeviceIP"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "DeviceIPView": {
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/DeviceIP"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
       "Diagnostic": {
         "additionalProperties": false,
         "properties": {
@@ -756,6 +922,30 @@
         ],
         "type": "object"
       },
+      "GeoLocation": {
+        "additionalProperties": false,
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "country_code": {
+            "type": "string"
+          },
+          "country_name": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "country_code"
+        ],
+        "type": "object"
+      },
       "Group": {
         "additionalProperties": false,
         "properties": {
@@ -876,6 +1066,22 @@
           "name",
           "port_min",
           "port_max"
+        ],
+        "type": "object"
+      },
+      "GroupJoinKey": {
+        "additionalProperties": false,
+        "properties": {
+          "group_id": {
+            "type": "string"
+          },
+          "join_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "group_id",
+          "join_key"
         ],
         "type": "object"
       },
@@ -1221,6 +1427,77 @@
         ],
         "type": "object"
       },
+      "LookingGlass": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "node_id",
+          "method",
+          "target",
+          "status",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "LookingGlassDispatch": {
+        "additionalProperties": false,
+        "properties": {
+          "request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LookingGlass"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "LookingGlassInput": {
+        "additionalProperties": false,
+        "properties": {
+          "method": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "method",
+          "target"
+        ],
+        "type": "object"
+      },
       "Node": {
         "additionalProperties": false,
         "properties": {
@@ -1501,13 +1778,30 @@
             "format": "date-time",
             "type": "string"
           },
+          "crypto_currency": {
+            "type": "string"
+          },
           "currency": {
+            "type": "string"
+          },
+          "fee_cents": {
+            "pattern": "^-?[0-9]+$",
             "type": "string"
           },
           "id": {
             "type": "string"
           },
+          "payable_cents": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "payable_crypto": {
+            "type": "string"
+          },
           "payment_url": {
+            "type": "string"
+          },
+          "rate": {
             "type": "string"
           },
           "status": {
@@ -1518,6 +1812,8 @@
           "id",
           "channel",
           "amount_cents",
+          "payable_cents",
+          "fee_cents",
           "currency",
           "status",
           "created_at"
@@ -1869,6 +2165,16 @@
       "Probe": {
         "additionalProperties": false,
         "properties": {
+          "cpu_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "cpu_percent": {
             "anyOf": [
               {
@@ -1911,10 +2217,33 @@
               }
             ]
           },
+          "group_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "load1": {
             "anyOf": [
               {
                 "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeoLocation"
               },
               {
                 "type": "null"
@@ -1946,6 +2275,9 @@
           "node_id": {
             "type": "string"
           },
+          "node_name": {
+            "type": "string"
+          },
           "public_ips": {
             "anyOf": [
               {
@@ -1962,6 +2294,28 @@
           "sampled_at": {
             "format": "date-time",
             "type": "string"
+          },
+          "swap_total": {
+            "anyOf": [
+              {
+                "pattern": "^-?[0-9]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "swap_used": {
+            "anyOf": [
+              {
+                "pattern": "^-?[0-9]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "upload_bps": {
             "anyOf": [
@@ -1996,7 +2350,10 @@
           "upload_bps",
           "download_bps",
           "uptime_seconds",
-          "load1"
+          "load1",
+          "cpu_model",
+          "swap_used",
+          "swap_total"
         ],
         "type": "object"
       },
@@ -3158,6 +3515,9 @@
           "captcha": {
             "type": "boolean"
           },
+          "currency": {
+            "type": "string"
+          },
           "diagnostics_enabled": {
             "type": "boolean"
           },
@@ -3165,8 +3525,17 @@
             "format": "int64",
             "type": "integer"
           },
+          "geo_lookup_url": {
+            "type": "string"
+          },
+          "maximum_recharge": {
+            "type": "string"
+          },
           "maximum_recharge_cents": {
             "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "minimum_recharge": {
             "type": "string"
           },
           "minimum_recharge_cents": {
@@ -3195,10 +3564,12 @@
           "captcha",
           "accent",
           "payments_enabled",
-          "minimum_recharge_cents",
-          "maximum_recharge_cents",
+          "currency",
+          "minimum_recharge",
+          "maximum_recharge",
           "diagnostics_enabled",
-          "diagnostics_per_minute"
+          "diagnostics_per_minute",
+          "geo_lookup_url"
         ],
         "type": "object"
       },
@@ -3293,31 +3664,6 @@
         ],
         "type": "object"
       },
-      "Token": {
-        "additionalProperties": false,
-        "properties": {
-          "expires_at": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "scope": {
-            "const": "owner-resources"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "expires_at",
-          "scope"
-        ],
-        "type": "object"
-      },
       "TokenCreate": {
         "additionalProperties": false,
         "properties": {
@@ -3327,11 +3673,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "permanent": {
+            "type": "boolean"
           }
         },
         "required": [
-          "name",
-          "expires_at"
+          "name"
         ],
         "type": "object"
       },
@@ -3342,7 +3690,7 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/Token"
+                  "$ref": "#/components/schemas/APIToken"
                 },
                 "type": "array"
               },
@@ -3364,11 +3712,42 @@
       "TokenSecret": {
         "additionalProperties": false,
         "properties": {
-          "expires_at": {
+          "created_at": {
             "format": "date-time",
             "type": "string"
           },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "permanent": {
+            "type": "boolean"
+          },
+          "prefix": {
             "type": "string"
           },
           "scope": {
@@ -3376,12 +3755,19 @@
           },
           "token": {
             "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
           }
         },
         "required": [
           "id",
           "token",
-          "expires_at",
+          "name",
+          "prefix",
           "scope"
         ],
         "type": "object"
@@ -4379,6 +4765,113 @@
         ],
         "summary": "Retire lease only after final usage is settled",
         "x-role": "node"
+      }
+    },
+    "/agent/looking-glass": {
+      "post": {
+        "operationId": "post_agent_looking-glass",
+        "parameters": [
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookingGlassDispatch"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "ownerBearer": []
+          }
+        ],
+        "summary": "Claim one pending looking glass request",
+        "x-role": "agent"
+      }
+    },
+    "/agent/looking-glass/result": {
+      "post": {
+        "operationId": "post_agent_looking-glass_result",
+        "parameters": [
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LookingGlass"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "ownerBearer": []
+          }
+        ],
+        "summary": "Submit one fenced looking glass result",
+        "x-role": "agent"
       }
     },
     "/agent/probe": {
@@ -5954,6 +6447,120 @@
         "x-role": "admin"
       }
     },
+    "/groups/{id}/join-key": {
+      "get": {
+        "operationId": "get_groups_id_join-key",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupJoinKey"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Fixed per-group access key behind the device onboarding command; readable again at any time",
+        "x-role": "admin"
+      },
+      "post": {
+        "operationId": "post_groups_id_join-key",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupJoinKey"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Rotate the group access key; commands already distributed stop working",
+        "x-role": "admin"
+      }
+    },
     "/health": {
       "get": {
         "operationId": "get_health",
@@ -6048,6 +6655,58 @@
           }
         ],
         "summary": "Own immutable wallet ledger",
+        "x-role": "user"
+      }
+    },
+    "/looking-glass/{id}": {
+      "get": {
+        "operationId": "get_looking-glass_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookingGlass"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "ownerBearer": []
+          }
+        ],
+        "summary": "Poll one looking glass result",
         "x-role": "user"
       }
     },
@@ -6320,6 +6979,73 @@
           }
         ],
         "summary": "One-time node enrollment valid for 15 minutes",
+        "x-role": "admin"
+      }
+    },
+    "/nodes/{id}/looking-glass": {
+      "post": {
+        "operationId": "post_nodes_id_looking-glass",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LookingGlassInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookingGlass"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Run ping, tcping or mtr from the node; argv is built server-side and never goes through a shell",
         "x-role": "admin"
       }
     },
@@ -6638,6 +7364,90 @@
         ],
         "summary": "Create a signed Agent upgrade task",
         "x-role": "admin"
+      }
+    },
+    "/online/device/ip": {
+      "get": {
+        "operationId": "get_online_device_ip",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceIPView"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "ownerBearer": []
+          }
+        ],
+        "summary": "Latest address of the single device visible to this API token; 409 when the group has several",
+        "x-role": "user"
+      }
+    },
+    "/online/device/ip/list": {
+      "get": {
+        "operationId": "get_online_device_ip_list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceIPPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "ownerBearer": []
+          }
+        ],
+        "summary": "Latest addresses of every device visible to this API token, grouped and ordered",
+        "x-role": "user"
       }
     },
     "/openapi.json": {
@@ -9327,6 +10137,271 @@
           }
         ],
         "summary": "Disable/enable non-administrator; revoke sessions",
+        "x-role": "admin"
+      }
+    },
+    "/users/{id}/tokens": {
+      "get": {
+        "operationId": "get_users_id_tokens",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "page starts at 1; page_size defaults to 20, capped at 100",
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "page starts at 1; page_size defaults to 20, capped at 100",
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "List one account's API tokens with prefixes and last use; never secrets",
+        "x-role": "admin"
+      },
+      "post": {
+        "operationId": "post_users_id_tokens",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenSecret"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Issue an API token for an account; the secret is returned exactly once",
+        "x-role": "admin"
+      }
+    },
+    "/users/{id}/tokens/{token_id}": {
+      "delete": {
+        "operationId": "delete_users_id_tokens_token_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "token_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Revoke an account's API token",
+        "x-role": "admin"
+      }
+    },
+    "/users/{id}/tokens/{token_id}/reset": {
+      "post": {
+        "operationId": "post_users_id_tokens_token_id_reset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "token_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenSecret"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Replace a token secret in place; the new secret is returned exactly once",
         "x-role": "admin"
       }
     },

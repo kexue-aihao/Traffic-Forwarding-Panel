@@ -4,6 +4,16 @@
     "merchant_id": "REPLACE_WITH_MERCHANT_ID",
     "key": "REPLACE_WITH_MERCHANT_KEY",
     "epay_mode": "submit",
-    "method": "alipay"
+    "method": "alipay",
+    "fee_percent": "0",
+    "fee_fixed": "0.00"
+  },
+  "bepusdt": {
+    "gateway": "https://your-bepusdt.example.com",
+    "key": "REPLACE_WITH_MERCHANT_KEY",
+    "crypto_currency": "USDT",
+    "rate": "7.20",
+    "fee_percent": "1.5",
+    "fee_fixed": "0.00"
   }
 }

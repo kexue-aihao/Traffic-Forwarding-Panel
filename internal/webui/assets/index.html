@@ -5,8 +5,17 @@
 
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#11151e" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#07080b" />
     <title>流量转发控制台</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+    <!--
+      主题色在防闪烁脚本之前先内联涂上：脚本本身也是 <head> 里的阻塞脚本，
+      但这一段保证即使脚本被拦或抛错，首帧也不会是白的。
+      CSP 的 style-src 带 'unsafe-inline'，内联样式是允许的；脚本则不行，
+      所以主题脚本必须是外部文件。
+    -->
+    <style>html{--lightningcss-light: ;--lightningcss-dark:initial;color-scheme:dark;background:#07080b}html[data-theme=light]{--lightningcss-light:initial;--lightningcss-dark: ;color-scheme:light;background:#eceff5}</style>
     <script type="module" crossorigin src="/assets/app.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/app.css">
   </head>

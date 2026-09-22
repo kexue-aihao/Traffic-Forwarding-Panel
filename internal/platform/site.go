@@ -21,8 +21,12 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// DefaultGeoLookupURL 是位置图标默认使用的地区查询服务：返回 JSON、无需密钥。
+// 运营方可以在站点设置里换成自己的服务，或留空整个关掉。
+const DefaultGeoLookupURL = "https://ipwho.is/{ip}"
+
 func defaultSite() contract.SiteSettings {
-	return contract.SiteSettings{Name: "流量控制台", Registration: "closed", Accent: "blue", PaymentsEnabled: true, MinimumRecharge: 1, MaximumRecharge: 100000000, DiagnosticsEnabled: true, DiagnosticsPerMinute: 6}
+	return contract.SiteSettings{Name: "流量控制台", Registration: "closed", Accent: "blue", PaymentsEnabled: true, Currency: contract.SettlementCurrency, MinimumRecharge: "1.00", MaximumRecharge: "1000000.00", DiagnosticsEnabled: true, DiagnosticsPerMinute: 6, GeoLookupURL: DefaultGeoLookupURL}
 }
 func (s *Server) SiteSettings(ctx context.Context) (contract.SiteSettings, error) {
 	v := defaultSite()
@@ -34,6 +38,9 @@ func (s *Server) SiteSettings(ctx context.Context) (contract.SiteSettings, error
 	if err == nil {
 		err = json.Unmarshal([]byte(raw), &v)
 	}
+	// 旧文档里没有 currency，也可能只有按分写的老字段；统一在这里补齐，
+	// 调用方拿到的永远是同一套单位。
+	v.Normalize()
 	return v, err
 }
 func (s *Server) site(w http.ResponseWriter, r *http.Request) {
@@ -50,10 +57,16 @@ func (s *Server) saveSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := UserFromContext(r.Context())
-	if strings.TrimSpace(v.Name) == "" || len(v.Name) > 100 || len(v.Announcement) > 8000 || !contains([]string{"closed", "open", "invite"}, v.Registration) || !contains([]string{"blue", "teal", "violet", "magenta", "amber", "graphite"}, v.Accent) || v.MinimumRecharge < 1 || v.MaximumRecharge < v.MinimumRecharge || v.MaximumRecharge > 100000000 || v.DiagnosticsPerMinute < 1 || v.DiagnosticsPerMinute > 30 {
+	v.Normalize()
+	minimum, maximum, amountErr := v.RechargeRange()
+	if strings.TrimSpace(v.Name) == "" || len(v.Name) > 100 || len(v.Announcement) > 8000 || !contains([]string{"closed", "open", "invite"}, v.Registration) || !contains([]string{"blue", "teal", "violet", "magenta", "amber", "graphite"}, v.Accent) || amountErr != nil || maximum > contract.MaxAmountCents || v.DiagnosticsPerMinute < 1 || v.DiagnosticsPerMinute > 30 || !contract.ValidGeoLookupURL(v.GeoLookupURL) {
 		fail(w, 400, "invalid site settings")
 		return
 	}
+	// 存回去的是规范化之后的写法：界面上「1」和「1.0」都会变成「1.00」。
+	v.MinimumRecharge = contract.FormatAmount(minimum)
+	v.MaximumRecharge = contract.FormatAmount(maximum)
+	v.GeoLookupURL = strings.TrimSpace(v.GeoLookupURL)
 	expected := v.Version
 	v.Version++
 	err := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
@@ -77,14 +90,23 @@ func (s *Server) saveSite(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "settings changed; reload before saving")
 		return
 	}
+	// 查询地址换了就立刻生效，不用等下一次回读。
+	s.refreshGeo(v.GeoLookupURL)
 	reply(w, 200, v)
 }
+
+// PaymentAllowed 判断一笔充值是否落在站点允许的区间里。amount 是整数分：
+// 站点设置对外是元，闸门这里仍然是分。
 func (s *Server) PaymentAllowed(ctx context.Context, amount int64) error {
 	v, e := s.SiteSettings(ctx)
 	if e != nil {
 		return e
 	}
-	if !v.PaymentsEnabled || amount < v.MinimumRecharge || amount > v.MaximumRecharge {
+	minimum, maximum, e := v.RechargeRange()
+	if e != nil {
+		return e
+	}
+	if !v.PaymentsEnabled || amount < minimum || amount > maximum {
 		return errors.New("recharge disabled or outside configured limits")
 	}
 	return nil

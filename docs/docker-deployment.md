@@ -121,7 +121,7 @@ sudo bash install-docker.sh --bundle /path/to/downloads
 
 升级采用显式步骤：备份 → 校验新版本 Docker 包 → `docker load -i 新镜像包.tar.gz` → 修改 `.env` 的 `TFP_IMAGE` 为新版本及当前架构 → `docker compose up -d --wait`。保留数据目录和域名配置，勿重新初始化管理员。数据库迁移可能不兼容旧版程序，回退需要同时恢复升级前备份。
 
-镜像只部署面板服务；Agent 仍需安装在真实入口/出口节点。此处的 HTTPS 反代测试不替代真实 1Panel 安装、Linux 跨机转发、容量与商户实付验收。
+镜像只部署面板服务；Agent 仍需安装在真实入口/出口节点。镜像已经把 `/agent` 放在 `/panel` 旁边，面板因此会从自身可执行文件所在目录发布 Agent，控制台「设备组 → 接入设备」生成的命令可直接在目标设备上执行。要给与面板不同架构的设备接入，把 `agent-linux-<arch>` 放进一个目录并把 `TFP_AGENT_DIR` 指向它。此处的 HTTPS 反代测试不替代真实 1Panel 安装、Linux 跨机转发、容量与商户实付验收。
 
 
 v0.1.0 在空域名提示处退出时尚未创建安装配置和数据库，直接重新下载 v0.1.1 脚本执行即可。已经成功安装的旧版需按上述升级步骤导入新镜像、更新 Compose 配置；保留 data/ 和管理员账号，按需将 TFP_ORIGIN 留空。

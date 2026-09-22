@@ -53,13 +53,22 @@ type Ledger struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Order struct {
-	ID         string    `json:"id"`
-	Channel    string    `json:"channel"`
-	Amount     int64     `json:"amount_cents,string"`
-	Currency   string    `json:"currency"`
-	Status     string    `json:"status"`
-	PaymentURL string    `json:"payment_url,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID      string `json:"id"`
+	Channel string `json:"channel"`
+	// Amount 是钱包到账金额，Payable 是实际付给通道的金额；两者的差额就是
+	// 通道手续费。没有配置手续费的通道两者永远相等。
+	Amount   int64  `json:"amount_cents,string"`
+	Payable  int64  `json:"payable_cents,string"`
+	Fee      int64  `json:"fee_cents,string"`
+	Currency string `json:"currency"`
+	// PayableCrypto 是按通道汇率折算的加密货币报价，仅供展示与记录：
+	// 真正收多少由网关按其商户汇率决定。
+	PayableCrypto  string    `json:"payable_crypto,omitempty"`
+	CryptoCurrency string    `json:"crypto_currency,omitempty"`
+	Rate           string    `json:"rate,omitempty"`
+	Status         string    `json:"status"`
+	PaymentURL     string    `json:"payment_url,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 type Writer func(context.Context, func(*sql.Tx) error) error
 type Service struct {
@@ -111,13 +120,13 @@ func (s *Service) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS commerce_ledger(id VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,amount BIGINT NOT NULL,balance BIGINT NOT NULL,kind VARCHAR(32) NOT NULL,reference_id VARCHAR(128) NOT NULL UNIQUE,created_at VARCHAR(40) NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS commerce_entitlements(id VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,plan_id VARCHAR(64) NOT NULL,version BIGINT NOT NULL,starts_at VARCHAR(40) NOT NULL,expires_at VARCHAR(40) NOT NULL,quota BIGINT NOT NULL,used BIGINT NOT NULL,allocated BIGINT NOT NULL,UNIQUE(user_id,version))`,
 		`CREATE TABLE IF NOT EXISTS commerce_purchases(user_id VARCHAR(64) NOT NULL,idempotency_key VARCHAR(128) NOT NULL,plan_id VARCHAR(64) NOT NULL,expected_version BIGINT NOT NULL,entitlement_id VARCHAR(64) NOT NULL,PRIMARY KEY(user_id,idempotency_key))`,
-		`CREATE TABLE IF NOT EXISTS commerce_orders(id VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,channel VARCHAR(32) NOT NULL,amount BIGINT NOT NULL,status VARCHAR(32) NOT NULL,payment_url TEXT NOT NULL,created_at VARCHAR(40) NOT NULL,idempotency_key VARCHAR(128) NOT NULL,provider_tx VARCHAR(128),UNIQUE(user_id,idempotency_key))`,
+		`CREATE TABLE IF NOT EXISTS commerce_orders(id VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,channel VARCHAR(32) NOT NULL,amount BIGINT NOT NULL,payable_cents BIGINT NOT NULL DEFAULT 0,status VARCHAR(32) NOT NULL,payment_url TEXT NOT NULL,created_at VARCHAR(40) NOT NULL,idempotency_key VARCHAR(128) NOT NULL,provider_tx VARCHAR(128),UNIQUE(user_id,idempotency_key))`,
 		`CREATE TABLE IF NOT EXISTS commerce_leases(id VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,node_id VARCHAR(64) NOT NULL,rule_id VARCHAR(64) NOT NULL,entitlement_id VARCHAR(64) NOT NULL,expires_at VARCHAR(40) NOT NULL,bytes BIGINT NOT NULL,used BIGINT NOT NULL,multiplier VARCHAR(80) NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS commerce_usage(id VARCHAR(128) PRIMARY KEY,lease_id VARCHAR(64) NOT NULL,payload TEXT NOT NULL,charged BIGINT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS commerce_lease_reservations(lease_id VARCHAR(64) PRIMARY KEY,budget BIGINT NOT NULL,closed INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS commerce_attempts(order_id VARCHAR(64) PRIMARY KEY,state VARCHAR(32) NOT NULL,provider_id VARCHAR(128) NOT NULL,updated_at VARCHAR(40) NOT NULL)`,
 	}
-	err := storage.MigrateNamespace(ctx, s.DB, s.Dialect, "commerce", 6, func(conn *sql.Conn) error {
+	err := storage.MigrateNamespace(ctx, s.DB, s.Dialect, "commerce", 7, func(conn *sql.Conn) error {
 		var current int
 		if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM commerce_schema").Scan(&current); err != nil {
 			return err
@@ -183,6 +192,14 @@ func (s *Service) Migrate(ctx context.Context) error {
 				return err
 			}
 		}
+		if current < 7 {
+			// 通道手续费：订单要同时记住「到账多少」和「实付多少」。旧订单
+			// 落在默认值 0 上，读取时按「实付等于到账」处理，不会凭空多出
+			// 一笔历史手续费。
+			if err := storage.EnsureColumn(ctx, conn, s.Dialect, "commerce_orders", "payable_cents", "BIGINT NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
+		}
 		return s.migrateFunding(ctx, conn)
 	})
 	if err != nil {
@@ -234,6 +251,22 @@ func (s *Service) Entitlement(ctx context.Context, user string) (Entitlement, er
 	}
 	return e, err
 }
+
+// HasActiveEntitlement 报告该用户此刻是否有未过期的权益。
+//
+// 「没有权益」不是错误 —— 它是最常见的一种状态（新账号还没买套餐），所以这里
+// 把 ErrNoRows 归到 false，而不是往外抛。
+func (s *Service) HasActiveEntitlement(ctx context.Context, user string) (bool, error) {
+	e, err := s.Entitlement(ctx, user)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return e.ID != "" && e.ExpiresAt.After(time.Now()), nil
+}
+
 func (s *Service) Plans(ctx context.Context) ([]Plan, error) {
 	rows, e := s.DB.QueryContext(ctx, s.q("SELECT p.id,p.name,p.price,p.quota,p.months,COALESCE(st.active,1),COALESCE(st.version,1),COALESCE(st.kind,'period'),COALESCE(lim.payload,'{}') FROM commerce_plans p LEFT JOIN commerce_plan_states st ON st.plan_id=p.id LEFT JOIN commerce_plan_limits lim ON lim.plan_id=p.id ORDER BY p.id"))
 	if e != nil {

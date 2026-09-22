@@ -1,66 +1,281 @@
+/**
+ * 设计令牌。
+ *
+ * 数值与姊妹面板 Telegram_session_Adblock 的 theme.css 对齐，让两个控制台
+ * 看起来是同一个产品。分四组：与主题无关的常量、暗色（默认）、浅色覆盖、
+ * 六套配色的色相/彩度轴。
+ *
+ * ── 两条硬规则 ────────────────────────────────────────────────
+ *
+ * 1. 明暗是一个轴，品牌色相是**另一个**轴。配色只移动品牌色与第一团
+ *    环境光，表面、灰阶、语义三色与所有非颜色量共享 —— 否则每加一套
+ *    配色都要重新验一遍对比度。
+ *
+ * 2. 没有配色占用绿或红色相。成功恒绿、危险恒红，暖色与品红都与它们
+ *    拉开足够距离，主按钮不会被读成破坏性操作。
+ */
+
+/* ══════════════════ 与主题无关的常量 ══════════════════ */
+
 :root {
-  --bg: #f1f3f7;
-  --surface: #fff;
-  --ink: #202630;
-  --muted: #687383;
-  --line: #dfe4eb;
-  --hover: #00000006;
-  --accent: oklch(55% 0.19 256);
-  --on-accent: white;
-  --success: #287650;
-  --danger: #b62a43;
-  --warn: #875907;
-  --soft: #eef3fc;
-  --radius: 16px;
-  --space: 8px;
-  --font: Inter, system-ui, "Microsoft YaHei", sans-serif;
-  color-scheme: light;
-}
-:root[data-theme="dark"] {
-  --bg: #10141d;
-  --surface: #191f2b;
-  --ink: #e6eaf0;
-  --muted: #9ba7b9;
-  --line: #2b3444;
-  --hover: #ffffff08;
-  --accent: oklch(73% 0.15 256);
-  --success: #6fd2a4;
-  --danger: #ff899a;
-  --warn: #eac17a;
-  --soft: #202d43;
+  /* 字体。Inter 自托管；中文回落到系统字体栈，不下载任何远程字体。 */
+  --font-sans:
+    Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono:
+    ui-monospace, "JetBrains Mono", SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
+
+  /* 字阶：11/12/13/14/16/20/28/40，每档都带配套行高 —— 
+     字号与行高分开写，迟早会配出 13px/18px 这种读起来发紧的组合。 */
+  --text-2xs: 11px;
+  --text-2xs--line-height: 16px;
+  --text-xs: 12px;
+  --text-xs--line-height: 18px;
+  --text-sm: 13px;
+  --text-sm--line-height: 20px;
+  --text-base: 14px;
+  --text-base--line-height: 22px;
+  --text-lg: 16px;
+  --text-lg--line-height: 24px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 28px;
+  --text-2xl--line-height: 34px;
+  --text-3xl: 40px;
+  --text-3xl--line-height: 46px;
+
+  /* 间距 4/8/12/16/20/24/32/40 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* 圆角 8/12/16/24 */
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-3xl: 24px;
+
+  /* 标题收紧字距 —— 这是「设计感」里性价比最高的一条 */
+  --tracking-tight: -0.022em;
+
+  /* 动效时长与缓动。统一从这里取，禁止散落的魔法数字：
+     一个 120ms 的 hover 配一个 500ms 的展开，整体就会显得笨重。 */
+  --duration-micro: 120ms;
+  --duration-state: 200ms;
+  --duration-layout: 320ms;
+  --duration-page: 480ms;
+  --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-state: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 外壳尺寸 */
+  --shell-sidebar: 220px;
+  --shell-topbar: 56px;
+  --page-max: 1400px;
+
   color-scheme: dark;
 }
+
+/* ══════════════════ 六套配色：只定义色相与彩度 ══════════════════ */
+
+:root {
+  --accent-h: 250;
+  --accent-c: 0.16;
+}
 :root[data-accent="teal"] {
-  --accent: oklch(55% 0.1 210);
+  --accent-h: 195;
+  --accent-c: 0.13;
 }
 :root[data-accent="violet"] {
-  --accent: oklch(56% 0.2 294);
+  --accent-h: 295;
+  --accent-c: 0.16;
 }
 :root[data-accent="magenta"] {
-  --accent: oklch(54% 0.18 330);
+  --accent-h: 335;
+  --accent-c: 0.16;
 }
 :root[data-accent="amber"] {
-  --accent: oklch(53% 0.12 75);
+  --accent-h: 75;
+  --accent-c: 0.13;
 }
 :root[data-accent="graphite"] {
-  --accent: oklch(45% 0.02 260);
+  --accent-h: 260;
+  --accent-c: 0.02;
 }
-:root[data-theme="dark"][data-accent="teal"] {
-  --accent: oklch(74% 0.11 210);
+
+/* ══════════════════ 暗色（默认） ══════════════════ */
+
+/**
+ * 层级靠**明度差**建立，而不是靠粗边框。纯黑在 OLED 上有「黑洞感」，
+ * 卡片与背景分不清层次，所以底色带一点点蓝紫倾向。
+ */
+:root {
+  --color-bg-0: #07080b;
+  --color-bg-1: #0c0e13;
+  --color-bg-2: #11141b;
+  --color-bg-3: #171b24;
+  --color-bg-4: #1e2330;
+
+  /* 悬浮与选中态：中性 alpha 叠加，不用品牌色着色 ——
+     否则每一套配色都要重新验一遍选中态的可读性。 */
+  --color-hover: rgb(255 255 255 / 0.04);
+  --color-active: rgb(255 255 255 / 0.07);
+
+  /* 描边三档，越靠上越亮，模拟顶光 */
+  --color-line-faint: rgb(255 255 255 / 0.05);
+  --color-line: rgb(255 255 255 / 0.09);
+  --color-line-strong: rgb(255 255 255 / 0.16);
+
+  /* 卡片顶部的一像素内高光 —— 暗色质感的关键就在这一条 */
+  --color-highlight: rgb(255 255 255 / 0.07);
+
+  /* 文字四级灰阶 */
+  --color-ink: #e9ebf2;
+  --color-ink-muted: #9aa1b2;
+  --color-ink-subtle: #626a7c;
+  --color-ink-faint: #414958;
+
+  /* 品牌：用 oklch，调亮调暗时色相不会偏移
+     （用 hex 把蓝色调暗会偏紫，调亮会偏青）。 */
+  --color-accent: oklch(0.7 var(--accent-c) var(--accent-h));
+  --color-accent-bright: oklch(0.78 var(--accent-c) var(--accent-h));
+  --color-accent-deep: oklch(0.55 calc(var(--accent-c) + 0.02) calc(var(--accent-h) + 12));
+  --color-accent-soft: oklch(0.7 var(--accent-c) var(--accent-h) / 0.13);
+  --color-on-accent: #ffffff;
+  /* 品牌渐变的第二个色标。默认取紫罗兰，让主按钮读起来是「有方向的」。 */
+  --color-brand-to: oklch(0.66 0.2 295);
+
+  /* 语义三色恒绿恒红，独立于品牌色轴 */
+  --color-success: oklch(0.74 0.16 155);
+  --color-success-soft: oklch(0.74 0.16 155 / 0.13);
+  --color-warn: oklch(0.8 0.14 80);
+  --color-warn-soft: oklch(0.8 0.14 80 / 0.13);
+  --color-danger: oklch(0.68 0.2 25);
+  --color-danger-soft: oklch(0.68 0.2 25 / 0.13);
+
+  /* 环境光晕。高明度 + 高彩度：近黑底上只有饱和的颜色才有「光」的感觉。
+     第一团跟随品牌色相，配色切换时环境光跟着走；后三团固定为
+     蓝紫 / 紫罗兰 / 青，三个以上光斑才会读成「空间」。 */
+  --orb-a: oklch(0.7 0.21 var(--accent-h));
+  --orb-b: oklch(0.66 0.21 280);
+  --orb-c: oklch(0.64 0.24 296);
+  --orb-d: oklch(0.76 0.14 200);
+  --ambient-opacity: 0.5;
+
+  /* 玻璃层。暗色下要比背景更透，模糊才显出来。 */
+  --glass-base: var(--color-bg-1);
+  --glass-alpha: 52%;
+  --glass-deep-base: var(--color-bg-2);
+  --glass-deep-alpha: 66%;
+  --glass-shadow: rgb(0 0 0 / 0.7);
+  /* 光标聚光的颜色。暗色下用白提亮。 */
+  --spot-color: rgb(255 255 255 / 0.08);
+
+  --shadow-raise: 0 24px 64px -16px var(--glass-shadow);
+
+  /* 下拉框的箭头。系统绘制的那个在暗色下是一块白色图形，和这套界面里其它
+     任何东西都不是一个来源，所以自己画一张：线宽与 sprite 里的图标一致。 */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239aa1b2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
-:root[data-theme="dark"][data-accent="violet"] {
-  --accent: oklch(74% 0.15 294);
+
+/* 石墨是唯一例外：近中性色在暗色下偏亮，白字读不出来。 */
+:root[data-accent="graphite"] {
+  --color-on-accent: #0b0e14;
+  --color-brand-to: oklch(0.72 0.03 260);
 }
-:root[data-theme="dark"][data-accent="magenta"] {
-  --accent: oklch(74% 0.14 330);
+:root[data-accent="violet"] {
+  --color-brand-to: oklch(0.66 0.2 335);
 }
-:root[data-theme="dark"][data-accent="amber"] {
-  --accent: oklch(78% 0.12 75);
+:root[data-accent="teal"] {
+  --color-brand-to: oklch(0.7 0.16 250);
 }
-:root[data-theme="dark"][data-accent="graphite"] {
-  --accent: oklch(82% 0.02 260);
-  --on-accent: #17202b;
+:root[data-accent="amber"] {
+  --color-brand-to: oklch(0.7 0.16 40);
 }
-:root[data-theme="dark"] {
-  --on-accent: #10141d;
+
+/* ══════════════════ 浅色 ══════════════════ */
+
+/**
+ * 只覆盖颜色令牌 —— 间距、圆角、动效与主题无关，不该跟着变。
+ *
+ * 两处与暗色**逻辑相反**的地方：
+ *   光斑：暗色要高明度高彩度，浅色要极高明度极低彩度。直接把暗色的
+ *         光斑搬过来会得到两团脏色，像渲染故障而不是光。
+ *   玻璃：暗色下玻璃要比背景更透，浅色下要比背景更白更实。
+ *
+ * 另一个前提是背景必须先有底色。底色接近纯白时白卡片压在上面分不出
+ * 层次，光斑也无处附着，所以画布压到 #eceff5。这两件事必须一起调。
+ */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-bg-0: #eceff5;
+  --color-bg-1: #ffffff;
+  --color-bg-2: #ffffff;
+  --color-bg-3: #f2f4f8;
+  --color-bg-4: #e4e8ef;
+
+  --color-hover: rgb(12 16 24 / 0.035);
+  --color-active: rgb(12 16 24 / 0.06);
+
+  --color-line-faint: rgb(12 16 24 / 0.08);
+  --color-line: rgb(12 16 24 / 0.13);
+  --color-line-strong: rgb(12 16 24 / 0.18);
+  --color-highlight: rgb(255 255 255 / 0.9);
+
+  --color-ink: #12151c;
+  --color-ink-muted: #596172;
+  --color-ink-subtle: #858da0;
+  --color-ink-faint: #b4bac7;
+
+  /* 浅底上的品牌色必须压暗，否则链接与主按钮文字对比度不足 */
+  --color-accent: oklch(0.55 calc(var(--accent-c) + 0.02) var(--accent-h));
+  --color-accent-bright: oklch(0.62 calc(var(--accent-c) + 0.02) var(--accent-h));
+  --color-accent-deep: oklch(0.45 calc(var(--accent-c) + 0.02) var(--accent-h));
+  --color-accent-soft: oklch(0.55 var(--accent-c) var(--accent-h) / 0.1);
+  --color-on-accent: #ffffff;
+  --color-brand-to: oklch(0.56 0.2 295);
+
+  --color-success: oklch(0.52 0.14 155);
+  --color-success-soft: oklch(0.52 0.14 155 / 0.12);
+  --color-warn: oklch(0.55 0.12 70);
+  --color-warn-soft: oklch(0.55 0.12 70 / 0.12);
+  --color-danger: oklch(0.55 0.19 25);
+  --color-danger-soft: oklch(0.55 0.19 25 / 0.12);
+
+  --orb-a: oklch(0.86 0.065 var(--accent-h));
+  --orb-b: oklch(0.88 0.058 280);
+  --orb-c: oklch(0.87 0.07 296);
+  --orb-d: oklch(0.9 0.048 200);
+  --ambient-opacity: 0.72;
+
+  --glass-base: #ffffff;
+  --glass-alpha: 68%;
+  --glass-deep-base: #ffffff;
+  --glass-deep-alpha: 88%;
+  /* 浅色下的投影要克制：白底上的重投影只会显脏 */
+  --glass-shadow: rgb(15 18 26 / 0.14);
+  --spot-color: oklch(0.55 var(--accent-c) var(--accent-h) / 0.1);
+
+  --shadow-raise: 0 24px 64px -16px var(--glass-shadow);
+
+  /* 浅色下箭头要用浅色的 ink-muted，否则在白底上看不见 */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23596172' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+:root[data-theme="light"][data-accent="graphite"] {
+  --color-brand-to: oklch(0.5 0.02 260);
+}
+:root[data-theme="light"][data-accent="violet"] {
+  --color-brand-to: oklch(0.56 0.2 335);
+}
+:root[data-theme="light"][data-accent="teal"] {
+  --color-brand-to: oklch(0.55 0.16 250);
+}
+:root[data-theme="light"][data-accent="amber"] {
+  --color-brand-to: oklch(0.55 0.16 40);
 }

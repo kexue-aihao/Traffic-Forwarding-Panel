@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"strconv"
@@ -99,6 +101,50 @@ func (s *Server) groups(w http.ResponseWriter, r *http.Request) {
 	}
 	reply(w, 200, map[string]any{"items": items, "total": total})
 }
+
+// groupJoinKey 返回设备组的固定接入密钥。
+//
+// 明文存储，与 commerce_webhook_subscriptions.secret 同一理由：面板必须能把它
+// **再次展示**给运营方，存哈希就取不回来了。它不同于节点身份凭据 —— 那是一次性
+// 下发、只存哈希的；这把密钥的用途就是被反复复制。只有管理员能取，而且不进
+// GET /groups 的列表响应（那个接口普通用户也能调）。
+func (s *Server) groupJoinKey(w http.ResponseWriter, r *http.Request) {
+	group := r.PathValue("id")
+	var key string
+	if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT join_key FROM cp_groups WHERE id=?`), group).Scan(&key); e != nil {
+		fail(w, 404, "unknown group")
+		return
+	}
+	reply(w, 200, map[string]any{"group_id": group, "join_key": key})
+}
+
+// rotateGroupJoinKey 换一把新密钥。已分发出去的命令会立刻失效 —— 这是撤销的
+// 唯一手段，界面上必须把这句话说清楚。
+func (s *Server) rotateGroupJoinKey(w http.ResponseWriter, r *http.Request) {
+	group := r.PathValue("id")
+	key, e := storage.RandomKey()
+	if e != nil {
+		fail(w, 500, "access key generation failed")
+		return
+	}
+	actor, _ := UserFromContext(r.Context())
+	e = s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		res, e := tx.ExecContext(r.Context(), s.q(`UPDATE cp_groups SET join_key=? WHERE id=?`), key, group)
+		if e != nil {
+			return e
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return errConflict
+		}
+		return s.AuditTx(r.Context(), tx, actor.ID, "group.join-key", group)
+	})
+	if e != nil {
+		fail(w, 409, "access key rotation failed")
+		return
+	}
+	reply(w, 200, map[string]any{"group_id": group, "join_key": key})
+}
+
 func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 	var g contract.Group
 	if !decode(w, r, &g) {
@@ -117,7 +163,7 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, p := range g.BlockedProtocols {
-		if !contains([]string{"tcp", "udp", "direct", "tls", "ws", "wss", "http", "socks", "network:tcp", "network:udp", "transport:direct", "transport:tls", "transport:ws", "transport:wss", "transport:http", "app:http", "app:socks"}, p) {
+		if !contains([]string{"tcp", "udp", "direct", "tls", "ws", "wss", "http", "socks", "network:tcp", "network:udp", "transport:direct", "transport:direct-tls", "transport:tls", "transport:ws", "transport:wss", "transport:http", "app:http", "app:socks"}, p) {
 			fail(w, 400, "unsupported blocked protocol")
 			return
 		}
@@ -134,7 +180,13 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
 		if create {
-			_, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_groups(id,name,payload,version) VALUES(?,?,?,?)`), g.ID, g.Name, strJSON(g), g.Version)
+			// 接入密钥在设备组诞生时就有，之后固定不变 —— 运营方复制一次命令
+			// 就能反复使用，装失败不必回控制台重新生成。
+			key, e := storage.RandomKey()
+			if e != nil {
+				return e
+			}
+			_, e = tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_groups(id,name,payload,version,join_key) VALUES(?,?,?,?,?)`), g.ID, g.Name, strJSON(g), g.Version, key)
 			if e != nil {
 				return e
 			}
@@ -217,8 +269,37 @@ func redact(rule *contract.Rule) {
 		}
 	}
 }
+
+// allocateListen 在设备组允许的端口范围里随机挑一个尚未预留的端口。
+//
+// 规则的监听地址留空时用它：让操作方从 20000–29999 里手挑一个是无谓的负担，
+// 挑重复了还会撞上「物理机端口预留」。随机起点 + 环形扫描，既不会每次都挑到
+// 同一个端口，也能在范围快满时找到空位。
+func (s *Server) allocateListen(ctx context.Context, tx *sql.Tx, groupPayload, node, network string) (string, error) {
+	var g contract.Group
+	if e := json.Unmarshal([]byte(groupPayload), &g); e != nil {
+		return "", e
+	}
+	if g.PortMax < g.PortMin || g.PortMin < 1 || g.PortMax > 65535 {
+		return "", errors.New("该设备组没有可用的端口范围")
+	}
+	span := g.PortMax - g.PortMin + 1
+	start := rand.IntN(span)
+	for i := 0; i < span; i++ {
+		port := g.PortMin + (start+i)%span
+		var n int
+		if e := tx.QueryRowContext(ctx, s.q("SELECT COUNT(*) FROM cp_ports WHERE node_id=? AND network=? AND port=?"), node, network, port).Scan(&n); e != nil {
+			return "", e
+		}
+		if n == 0 {
+			return fmt.Sprintf(":%d", port), nil
+		}
+	}
+	return "", errors.New("该设备组的端口范围内已无空闲端口")
+}
+
 func validateRule(rule contract.Rule) (int, error) {
-	if len(rule.Name) > 190 || strings.TrimSpace(rule.Name) == "" || !contains([]string{"tcp", "udp"}, rule.Network) || !contains([]string{"direct", "tls", "ws", "wss", "http"}, rule.Transport) {
+	if len(rule.Name) > 190 || strings.TrimSpace(rule.Name) == "" || !contains([]string{"tcp", "udp"}, rule.Network) || !contains([]string{"direct", "direct-tls", "tls", "ws", "wss", "http"}, rule.Transport) {
 		return 0, errors.New("invalid name, network or transport")
 	}
 	host, p, e := net.SplitHostPort(rule.Listen)
@@ -240,13 +321,21 @@ func validateRule(rule contract.Rule) (int, error) {
 	if e != nil || pn < 1 || pn > 65535 {
 		return 0, errors.New("invalid target port")
 	}
-	if rule.Transport != "direct" && (rule.Tunnel == nil || rule.Tunnel.Endpoint == "" || rule.Tunnel.Token == "") {
+	// direct 与 direct-tls 都没有出口：前者明文直连目标，后者把到目标的那一段
+	// 包进 TLS。两者的差别只在要不要校验名，所以隧道端点与凭据都不适用。
+	if rule.Transport != "direct" && rule.Transport != "direct-tls" && (rule.Tunnel == nil || rule.Tunnel.Endpoint == "" || rule.Tunnel.Token == "") {
 		return 0, errors.New("tunnel endpoint and credential required")
 	}
 	if rule.Transport == "direct" && rule.Tunnel != nil {
 		return 0, errors.New("direct forwarding cannot contain a tunnel")
 	}
-	if rule.Tunnel != nil {
+	if rule.Transport == "direct-tls" && rule.Tunnel != nil && (rule.Tunnel.Endpoint != "" || rule.Tunnel.Token != "" || len(rule.Tunnel.Chain) > 0) {
+		return 0, errors.New("direct-tls only accepts a verification name, not a tunnel")
+	}
+	if rule.Transport == "direct-tls" && rule.Network != "tcp" {
+		return 0, errors.New("direct-tls supports tcp only")
+	}
+	if rule.Transport != "direct" && rule.Transport != "direct-tls" && rule.Tunnel != nil {
 		if e := tunnel.ValidateChain(contract.TunnelHop{Transport: rule.Transport, Endpoint: rule.Tunnel.Endpoint, ServerName: rule.Tunnel.ServerName, Token: rule.Tunnel.Token}, rule.Tunnel.Chain); e != nil {
 			return 0, e
 		}
@@ -329,10 +418,6 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 		return e
 	}
 	rule.ExitUnavailable = false
-	port, e := validateRule(*rule)
-	if e != nil {
-		return e
-	}
 	var payload string
 	groupQuery := `SELECT g.payload FROM cp_groups g WHERE g.id=? AND EXISTS(SELECT 1 FROM cp_node_groups ng WHERE ng.group_id=g.id AND ng.node_id=?)`
 	if s.Store.Dialect != "sqlite" {
@@ -340,6 +425,18 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 	}
 	if e = tx.QueryRowContext(ctx, s.q(groupQuery), rule.GroupID, rule.NodeID).Scan(&payload); e != nil {
 		return errors.New("node not in group")
+	}
+	// 监听地址留空 = 从设备组允许的范围里随机分配。
+	if strings.TrimSpace(rule.Listen) == "" {
+		listen, e := s.allocateListen(ctx, tx, payload, rule.NodeID, rule.Network)
+		if e != nil {
+			return e
+		}
+		rule.Listen = listen
+	}
+	port, e := validateRule(*rule)
+	if e != nil {
+		return e
 	}
 	var g contract.Group
 	if e = json.Unmarshal([]byte(payload), &g); e != nil {

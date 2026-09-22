@@ -34,8 +34,12 @@ type Options struct {
 	AdminTestBytes int64
 	Entitlements   Entitlements
 	ResourceLimits func(context.Context, *sql.Tx, string) (contract.ResourceLimits, error)
-	LeaseCurrent   func(context.Context, *sql.Tx, string, *contract.Lease) (bool, error)
-	RetireLease    func(context.Context, *sql.Tx, string, string, int64) error
+	// ActiveEntitlement 报告用户是否有未过期的权益。探针是付费能力，普通用户
+	// 要有它才能看 —— 用函数字段而不是扩充 Entitlements 接口，与旁边的
+	// LeaseCurrent / RetireLease 保持同一种写法。
+	ActiveEntitlement func(context.Context, string) (bool, error)
+	LeaseCurrent      func(context.Context, *sql.Tx, string, *contract.Lease) (bool, error)
+	RetireLease       func(context.Context, *sql.Tx, string, string, int64) error
 }
 type Server struct {
 	Store      *storage.Store
@@ -47,6 +51,7 @@ type Server struct {
 	taskMu     sync.Mutex
 	terminalMu sync.Mutex
 	terminals  map[string]*terminalBridge
+	geo        *geoCache
 }
 type limit struct {
 	since time.Time
@@ -55,7 +60,7 @@ type limit struct {
 type userKey struct{}
 
 func New(s *storage.Store, o Options) *Server {
-	return &Server{Store: s, opts: o, probes: map[string]contract.Probe{}, limits: map[string]limit{}, history: newProbeHistory(time.Now()), terminals: map[string]*terminalBridge{}}
+	return &Server{Store: s, opts: o, probes: map[string]contract.Probe{}, limits: map[string]limit{}, history: newProbeHistory(time.Now()), terminals: map[string]*terminalBridge{}, geo: newGeoCache()}
 }
 func UserFromContext(ctx context.Context) (contract.User, bool) {
 	u, ok := ctx.Value(userKey{}).(contract.User)
@@ -287,6 +292,17 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/agent/leases/retire", s.agent(s.retireLease))
 	mux.HandleFunc("POST /api/v1/auth/tokens", s.RequireUser(s.createToken))
 	mux.HandleFunc("DELETE /api/v1/auth/tokens/{id}", s.RequireUser(s.revokeToken))
+	// 管理员给账号发凭据：建完账号拿到密钥交给用户，事后能看、能重置、能撤。
+	mux.HandleFunc("GET /api/v1/users/{id}/tokens", s.admin(s.listUserTokens))
+	mux.HandleFunc("POST /api/v1/users/{id}/tokens", s.admin(s.createUserToken))
+	mux.HandleFunc("POST /api/v1/users/{id}/tokens/{token_id}/reset", s.admin(s.resetToken))
+	mux.HandleFunc("DELETE /api/v1/users/{id}/tokens/{token_id}", s.admin(s.revokeUserToken))
+	// 探针页面归属组的设备地址。带 /api/v1 前缀的是面板自身的接口；不带前缀
+	// 的两个是给客户脚本用的稳定入口，路径按约定写死，不随版本变化。
+	mux.HandleFunc("GET /api/v1/online/device/ip", s.RequireUser(s.deviceIP))
+	mux.HandleFunc("GET /api/v1/online/device/ip/list", s.RequireUser(s.deviceIPList))
+	mux.HandleFunc("GET /online/device/ip", s.RequireUser(s.deviceIP))
+	mux.HandleFunc("GET /online/device/ip/list", s.RequireUser(s.deviceIPList))
 	mux.HandleFunc("POST /api/v1/auth/password", s.RequireUser(s.changePassword))
 	mux.HandleFunc("PUT /api/v1/users/{id}/status", s.admin(s.disableUser))
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
@@ -309,6 +325,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/groups", s.RequireUser(s.groups))
 	mux.HandleFunc("POST /api/v1/groups", s.admin(s.saveGroup))
 	mux.HandleFunc("PUT /api/v1/groups/{id}", s.admin(s.saveGroup))
+	mux.HandleFunc("GET /api/v1/groups/{id}/join-key", s.admin(s.groupJoinKey))
+	mux.HandleFunc("POST /api/v1/groups/{id}/join-key", s.admin(s.rotateGroupJoinKey))
 	mux.HandleFunc("GET /api/v1/nodes", s.RequireUser(s.nodes))
 	mux.HandleFunc("POST /api/v1/nodes/enrollment", s.admin(s.enroll))
 	mux.HandleFunc("GET /api/v1/rules", s.RequireUser(s.rules))
@@ -335,6 +353,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/agent/control/result", s.agent(s.agentControlResult))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/operation-access", s.operationsAdmin(s.operationAccess))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/terminal", s.operationsAdmin(s.createTerminal))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/looking-glass", s.operationsAdmin(s.createLookingGlass))
+	mux.HandleFunc("GET /api/v1/looking-glass/{id}", s.RequireUser(s.lookingGlass))
+	mux.HandleFunc("POST /api/v1/agent/looking-glass", s.agent(s.claimLookingGlass))
+	mux.HandleFunc("POST /api/v1/agent/looking-glass/result", s.agent(s.finishLookingGlass))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/upgrade", s.operationsAdmin(s.createUpgrade))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/operations", s.operationsAdmin(s.nodeOperations))
 	mux.HandleFunc("POST /api/v1/node-operations/{id}/cancel", s.operationsAdmin(s.cancelOperation))
@@ -438,3 +460,7 @@ func (s *Server) audit(w http.ResponseWriter, r *http.Request) {
 func strJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
 
 var errConflict = fmt.Errorf("conflict")
+
+// errEnrollment 覆盖两种接入凭据的失败：一次性令牌无效/过期/已用，或设备组
+// 接入密钥不认识。对外只回一句笼统的话，不区分是哪一种。
+var errEnrollment = fmt.Errorf("invalid enrollment")

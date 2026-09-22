@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import Select from "../components/Select.vue";
 import { api, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
 import { formatDateTime } from "../core/format";
@@ -232,9 +233,8 @@ function muteHook(h: Hook) {
 function hookMuted(h: Hook) {
   return !!h.muted_until && Date.parse(h.muted_until) > Date.now();
 }
-function changeEvents(h: Hook, event: EventTarget | null) {
-  if (event instanceof HTMLSelectElement)
-    return updateHook(h, { events: event.value.split(",") });
+function changeEvents(h: Hook, value: string) {
+  return updateHook(h, { events: value.split(",") });
 }
 let active = true;
 onUnmounted(() => {
@@ -534,7 +534,9 @@ onMounted(load);
               required
               maxlength="128"
               autocomplete="off" /></label
-          ><button class="primary" :disabled="busy">兑换</button>
+          ><div class="form-actions">
+            <button class="primary" :disabled="busy">兑换</button>
+          </div>
         </form>
       </section>
       <section class="card">
@@ -566,11 +568,11 @@ onMounted(load);
       </p>
       <form @submit.prevent="createHook">
         <label
-          >通知通道<select v-model="hookFormat" aria-label="通知通道">
+          >通知通道<Select v-model="hookFormat" aria-label="通知通道">
             <option value="webhook">签名 Webhook</option>
             <option value="feishu">飞书群机器人</option>
             <option value="discord">Discord Webhook</option>
-          </select></label
+          </Select></label
         >
         <label
           >接收地址<input
@@ -580,11 +582,11 @@ onMounted(load);
             required
             maxlength="2048" /></label
         ><label
-          >订阅事件<select v-model="hookEvents" aria-label="订阅事件">
+          >订阅事件<Select v-model="hookEvents" aria-label="订阅事件">
             <option v-for="o in eventOptions" :key="o.value" :value="o.value">
               {{ o.label }}
             </option>
-          </select></label
+          </Select></label
         ><button :disabled="busy">添加通知地址</button>
       </form>
       <p v-if="!hooks.length" class="muted">暂无通知地址。</p>
@@ -595,11 +597,11 @@ onMounted(load);
             · 静默至 {{ formatDateTime(h.muted_until!) }}</span
           >
         </p>
-        <select
+        <Select
           :aria-label="`通知事件 ${h.url}`"
           :value="h.events.join(',')"
           :disabled="busy"
-          @change="changeEvents(h, $event.target)"
+          @change="changeEvents(h, $event)"
         >
           <option v-for="o in eventOptions" :key="o.value" :value="o.value">
             {{ o.label }}
@@ -610,7 +612,7 @@ onMounted(load);
           >
             自定义事件
           </option>
-        </select>
+        </Select>
         <div class="actions">
           <button
             :disabled="busy"
@@ -658,12 +660,12 @@ onMounted(load);
         <summary>导入规则</summary>
         <form @submit.prevent="previewImport">
           <label
-            >导入方式<select v-model="importMode" aria-label="导入方式">
+            >导入方式<Select v-model="importMode" aria-label="导入方式">
               <option value="create">新增规则</option>
               <option value="update_by_port">
                 按节点、协议和端口更新已有规则
               </option>
-            </select></label
+            </Select></label
           >
           <label
             >规则 JSON<textarea
@@ -681,14 +683,16 @@ onMounted(load);
                 item.error || (item.action === "update" ? "将更新" : "将新增")
               }}
             </p>
-            <button
-              type="button"
-              class="primary"
-              :disabled="busy || preview.some((x) => x.error)"
-              @click="importRules"
-            >
-              确认并创建导入任务
-            </button>
+            <div class="form-actions">
+              <button
+                type="button"
+                class="primary"
+                :disabled="busy || preview.some((x) => x.error)"
+                @click="importRules"
+              >
+                确认并创建导入任务
+              </button>
+            </div>
           </div>
         </form>
       </details>

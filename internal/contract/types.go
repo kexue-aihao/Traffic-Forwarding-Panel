@@ -129,18 +129,30 @@ type IPObservation struct {
 }
 
 type Probe struct {
-	NodeID        string          `json:"node_id"`
-	SampledAt     time.Time       `json:"sampled_at"`
-	CPUPercent    *float64        `json:"cpu_percent"`
-	MemoryUsed    *uint64         `json:"memory_used,string"`
-	MemoryTotal   *uint64         `json:"memory_total,string"`
-	DiskUsed      *uint64         `json:"disk_used,string"`
-	DiskTotal     *uint64         `json:"disk_total,string"`
-	UploadBPS     *float64        `json:"upload_bps"`
-	DownloadBPS   *float64        `json:"download_bps"`
-	UptimeSeconds *uint64         `json:"uptime_seconds,string"`
-	Load1         *float64        `json:"load1"`
-	PublicIPs     []IPObservation `json:"public_ips,omitempty"`
+	NodeID        string    `json:"node_id"`
+	SampledAt     time.Time `json:"sampled_at"`
+	CPUPercent    *float64  `json:"cpu_percent"`
+	MemoryUsed    *uint64   `json:"memory_used,string"`
+	MemoryTotal   *uint64   `json:"memory_total,string"`
+	DiskUsed      *uint64   `json:"disk_used,string"`
+	DiskTotal     *uint64   `json:"disk_total,string"`
+	UploadBPS     *float64  `json:"upload_bps"`
+	DownloadBPS   *float64  `json:"download_bps"`
+	UptimeSeconds *uint64   `json:"uptime_seconds,string"`
+	Load1         *float64  `json:"load1"`
+	// CPU 型号是静态的，但「这台机器性能怎么样」第一个要看的就是它 ——
+	// 光有占用率回答不了「为什么这台一直满载」。
+	CPUModel  *string         `json:"cpu_model"`
+	SwapUsed  *uint64         `json:"swap_used,string"`
+	SwapTotal *uint64         `json:"swap_total,string"`
+	PublicIPs []IPObservation `json:"public_ips,omitempty"`
+
+	// 以下三个字段由控制面在返回探针时补齐，Agent 从不上报：节点名、所属
+	// 设备组和位置图标。放在 Probe 上而不是另做一层响应结构，是因为实时
+	// 推送、历史查询和前端都已经按这个形状对齐了。
+	NodeName string       `json:"node_name,omitempty"`
+	GroupIDs []string     `json:"group_ids,omitempty"`
+	Location *GeoLocation `json:"location,omitempty"`
 }
 
 type UsageRecord struct {
@@ -163,4 +175,37 @@ type APIError struct {
 	Code      string `json:"code"`
 	Error     string `json:"error"`
 	RequestID string `json:"request_id,omitempty"`
+}
+
+// GeoLocation 是探针卡片上的位置图标所依据的地区信息。
+//
+// 只有国家/地区码是必需的：图标就靠它画。国家和城市是给人看的补充。
+// 探针页面按地区区分设备，但不因此暴露机器地址 —— 普通用户看得到位置、
+// 看不到 IP，管理员两者都能看到。
+type GeoLocation struct {
+	CountryCode string `json:"country_code"`
+	CountryName string `json:"country_name,omitempty"`
+	Region      string `json:"region,omitempty"`
+	City        string `json:"city,omitempty"`
+	// Source 说明这条位置是怎么来的：geo（查到的）或 node（节点自带）。
+	Source string `json:"source,omitempty"`
+}
+
+// DeviceIP 是探针页面归属组在某一刻对外暴露的地址。
+//
+// 机器被替换或换 IP 之后，客户脚本要拿到的是「现在这一个」。所以响应里
+// 同时给出节点身份与观测时间：换了机器看 node_id，只换 IP 看 address 与
+// observed_at，两者都是同一个列表的字段，不需要另外的接口。
+type DeviceIP struct {
+	NodeID     string       `json:"node_id"`
+	NodeName   string       `json:"node_name"`
+	GroupID    string       `json:"group_id"`
+	GroupName  string       `json:"group_name"`
+	Address    string       `json:"address"`
+	Family     string       `json:"family"`
+	Source     string       `json:"source"`
+	ObservedAt time.Time    `json:"observed_at"`
+	Online     bool         `json:"online"`
+	LastSeen   *time.Time   `json:"last_seen,omitempty"`
+	Location   *GeoLocation `json:"location,omitempty"`
 }

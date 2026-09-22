@@ -7,8 +7,13 @@ import { displayTimeZoneLabel, formatDateTime } from "../core/format";
 interface Token {
   id: string;
   name: string;
-  expires_at: string;
+  // 明文只在创建/重置那一次返回；列表里只有前缀，用来分辨「这把是哪一把」。
+  prefix: string;
   scope: string;
+  created_at: string;
+  expires_at: string | null;
+  permanent: boolean;
+  last_used_at?: string | null;
 }
 const tokens = ref<Token[]>([]);
 const error = ref("");
@@ -20,6 +25,8 @@ const password = ref("");
 const confirm = ref("");
 const name = ref("");
 const days = ref(30);
+// 永久凭据是明确的选择，不是默认值：忘了填有效期不该悄悄发一把不过期的钥匙。
+const permanent = ref(false);
 const secret = ref("");
 const revoke = ref<Token | null>(null);
 const dirty = computed(
@@ -51,6 +58,7 @@ function open(next: "password" | "token") {
   password.value = "";
   confirm.value = "";
   name.value = "";
+  permanent.value = false;
   secret.value = "";
   formError.value = "";
 }
@@ -84,7 +92,13 @@ async function save() {
     } else {
       const result = await api<{ token: string }>("/auth/tokens", "POST", {
         name: name.value,
-        expires_at: new Date(Date.now() + days.value * 86400000).toISOString(),
+        ...(permanent.value
+          ? { permanent: true }
+          : {
+              expires_at: new Date(
+                Date.now() + days.value * 86400000,
+              ).toISOString(),
+            }),
       });
       secret.value = result.token;
       await load();
@@ -132,8 +146,9 @@ onMounted(load);
       </div>
       <p class="muted">
         Token
-        仅访问账号自己的资源。即使由管理员创建，也不具有管理员操作权限。密钥只展示一次。
-        有效期使用{{ displayTimeZoneLabel }}。
+        仅访问账号自己的资源。即使由管理员创建，也不具有管理员操作权限。密钥只在创建或重置的那一次展示，
+        之后连管理员也取不回来 —— 遗失或泄露只能重置。有效期可以是有限时长，也可以设为永久。
+        时间显示使用{{ displayTimeZoneLabel }}。
       </p>
       <p v-if="error" role="alert" class="error">
         无法读取 Token 列表：{{ error }} <button @click="load">重试</button>
@@ -144,18 +159,24 @@ onMounted(load);
           <thead>
             <tr>
               <th>名称</th>
+              <th>密钥前缀</th>
               <th>有效期</th>
-              <th>范围</th>
+              <th>最近使用</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="token in tokens" :key="token.id">
               <td data-label="名称">{{ token.name }}</td>
-              <td data-label="有效期">
-                {{ formatDateTime(token.expires_at) }}
+              <td data-label="密钥前缀">
+                <code>{{ token.prefix || "—" }}</code>
               </td>
-              <td data-label="范围">自身资源</td>
+              <td data-label="有效期">
+                {{ token.permanent ? "永久有效" : formatDateTime(token.expires_at) }}
+              </td>
+              <td data-label="最近使用">
+                {{ token.last_used_at ? formatDateTime(token.last_used_at) : "尚未使用" }}
+              </td>
               <td data-label="操作">
                 <button
                   class="danger"
@@ -237,16 +258,31 @@ onMounted(load);
                 v-model="name"
                 required
                 maxlength="190" /></label
-            ><label
+            ><label class="check"
+              ><input
+                v-model="permanent"
+                type="checkbox"
+              />永久有效（不过期）</label
+            ><label v-if="!permanent"
               >有效天数<input
                 v-model.number="days"
                 type="number"
                 min="1"
                 max="364"
-                required /></label></template
-          ><button class="primary" :disabled="busy">
-            {{ busy ? "正在提交…" : "确认提交" }}
-          </button></template
+                required /></label
+            ><p v-else class="warning">
+              永久 Token 不会自动失效，泄露后风险一直存在。脚本用不上了要记得撤销。
+            </p></template
+          ><div class="form-actions">
+            <button
+              class="primary"
+              :disabled="busy"
+              :data-busy="String(busy)"
+              :aria-busy="busy"
+            >
+              确认提交
+            </button>
+          </div></template
         >
       </form>
     </Modal>
@@ -257,9 +293,11 @@ onMounted(load);
       @close="revoke = null"
       ><p>撤销 {{ revoke.name }} 后，使用它的自动化调用将失效。</p>
       <p v-if="formError" role="alert" class="error">{{ formError }}</p>
-      <button class="danger" :disabled="busy" @click="remove">
-        确认撤销
-      </button></Modal
+      <div class="form-actions">
+        <button class="danger" :disabled="busy" @click="remove">
+          确认撤销
+        </button>
+      </div></Modal
     >
   </section>
 </template>

@@ -7,6 +7,7 @@ import Operations from "./pages/Operations.vue";
 import Settings from "./pages/Settings.vue";
 import Exits from "./pages/Exits.vue";
 import Account from "./pages/Account.vue";
+import LookingGlass from "./pages/LookingGlass.vue";
 import { state } from "./core/state";
 import { rotateRequests } from "./core/api";
 import { clear } from "./core/motion";
@@ -22,6 +23,7 @@ export const router = createRouter({
     { path: "/operations", component: Operations },
     { path: "/wallet", redirect: "/commerce" },
     { path: "/account", component: Account },
+    { path: "/diagnostics", component: LookingGlass },
     {
       path: "/:resource(rules|nodes|groups|users|audit)",
       component: Resources,

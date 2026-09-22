@@ -23,6 +23,7 @@ export default defineConfig({
       closeBundle() {
         mkdirSync(output, { recursive: true });
         copyFileSync("static/theme.js", resolve(output, "theme.js"));
+        copyFileSync("static/favicon.svg", resolve(output, "favicon.svg"));
         copyFileSync(
           "node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2",
           resolve(output, "inter.woff2"),
@@ -37,6 +38,7 @@ export default defineConfig({
         );
         const names = [
           "activity",
+          "radar",
           "arrow-right-left",
           "server",
           "users",

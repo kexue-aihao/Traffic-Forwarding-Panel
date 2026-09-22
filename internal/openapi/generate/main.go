@@ -115,7 +115,7 @@ func main() {
 			panic(err)
 		}
 	}
-	for _, v := range []any{contract.SiteSettings{}, contract.Exit{}, contract.Diagnostic{}, platform.ImportPreviewItem{}, commerce.PurchaseRefund{}, contract.User{}, contract.Group{}, contract.Node{}, contract.Rule{}, contract.Config{}, contract.Registration{}, contract.Registered{}, contract.Ack{}, contract.Probe{}, contract.UsageBatch{}, contract.APIError{}, commerce.Plan{}, commerce.Wallet{}, commerce.Order{}, commerce.Ledger{}, commerce.Entitlement{}, commerce.AutoRenew{}, commerce.RedeemCode{}, commerce.ReferralCode{}, commerce.Commission{}, commerce.Refund{}, commerce.WebhookSubscription{}, commerce.WebhookSettings{}, alerts.Policy{}, commerce.Event{}, platform.Task{}, platform.ProbeHistoryPoint{}} {
+	for _, v := range []any{contract.SiteSettings{}, contract.Exit{}, contract.Diagnostic{}, platform.ImportPreviewItem{}, commerce.PurchaseRefund{}, contract.User{}, contract.Group{}, contract.Node{}, contract.Rule{}, contract.Config{}, contract.Registration{}, contract.Registered{}, contract.Ack{}, contract.Probe{}, contract.UsageBatch{}, contract.APIError{}, commerce.Plan{}, commerce.Wallet{}, commerce.Order{}, commerce.Ledger{}, commerce.Entitlement{}, commerce.AutoRenew{}, commerce.RedeemCode{}, commerce.ReferralCode{}, commerce.Commission{}, commerce.Refund{}, commerce.WebhookSubscription{}, commerce.WebhookSettings{}, alerts.Policy{}, commerce.Event{}, platform.Task{}, platform.ProbeHistoryPoint{}, contract.APIToken{}, contract.DeviceIP{}} {
 		wire(reflect.TypeOf(v))
 	}
 	str, num, flag := scalar("string"), scalar("integer"), scalar("boolean")
@@ -126,13 +126,23 @@ func main() {
 	model("Login", schema{"captcha_id": str, "captcha_answer": str, "username": str, "password": schema{"type": "string", "writeOnly": true}}, "username", "password")
 	model("Session", schema{"user": ref("User")}, "user")
 	model("PasswordChange", schema{"current_password": str, "password": schema{"type": "string", "minLength": 12, "maxLength": 72}}, "current_password", "password")
-	model("TokenCreate", schema{"name": str, "expires_at": date}, "name", "expires_at")
-	model("Token", schema{"id": str, "name": str, "expires_at": date, "scope": schema{"const": "owner-resources"}}, "id", "name", "expires_at", "scope")
-	model("TokenSecret", schema{"id": str, "token": str, "expires_at": date, "scope": str}, "id", "token", "expires_at", "scope")
+	// 有效期二选一：给出 expires_at（一年以内），或声明 permanent。凭据明文
+	// 只在创建与重置的响应里出现一次，之后任何接口都取不回来。
+	model("TokenCreate", schema{"name": str, "expires_at": date, "permanent": flag}, "name")
+	tokenFields := schemas["APIToken"].(schema)["properties"].(schema)
+	secret := schema{"token": str, "user_id": str}
+	for key, value := range tokenFields {
+		secret[key] = value
+	}
+	model("TokenSecret", secret, "id", "token", "name", "prefix", "scope")
+	model("TokenPage", schema{"items": nullable(array(ref("APIToken"))), "total": num}, "items", "total")
+	model("DeviceIPView", schema{"device": ref("DeviceIP")}, "device")
+	model("DeviceIPPage", schema{"items": nullable(array(ref("DeviceIP"))), "total": num}, "items", "total")
 	model("UserCreate", schema{"username": str, "password": str, "role": schema{"type": "string", "enum": []string{"user", "admin"}}}, "username", "password", "role")
 	model("UserStatus", schema{"disabled": flag}, "disabled")
 	model("Enrollment", schema{"name": str, "group_ids": schema{"type": "array", "items": str, "minItems": 1, "maxItems": 100}}, "group_ids")
 	model("EnrollmentSecret", schema{"token": str, "expires_at": date}, "token", "expires_at")
+	model("GroupJoinKey", schema{"group_id": str, "join_key": str}, "group_id", "join_key")
 	model("NodeSecret", schema{"node_id": str, "token": str}, "node_id", "token")
 	model("Health", schema{"status": str, "database": str, "version": num}, "status", "database", "version")
 	model("Audit", schema{"id": str, "user_id": str, "action": str, "target": str, "created_at": date}, "id", "user_id", "action", "target", "created_at")
@@ -169,7 +179,7 @@ func main() {
 	model("ExportTask", schema{"rule_ids": schema{"type": "array", "items": str, "maxItems": 500}, "idempotency_key": schema{"type": "string", "minLength": 1, "maxLength": 128}}, "idempotency_key")
 	model("ImportTask", schema{"mode": schema{"type": "string", "enum": []string{"create", "update_by_port"}}, "rules": schema{"type": "array", "items": ref("Rule"), "minItems": 1, "maxItems": 1000}, "idempotency_key": schema{"type": "string", "minLength": 1, "maxLength": 128}}, "rules", "idempotency_key")
 	model("TaskCancel", schema{"status": schema{"const": "cancel_requested"}}, "status")
-	for _, name := range []string{"User", "Group", "Node", "Rule", "Audit", "Token", "Plan", "Order", "Ledger", "ProbeHistoryPoint", "PaymentChannel"} {
+	for _, name := range []string{"User", "Group", "Node", "Rule", "Audit", "Plan", "Order", "Ledger", "ProbeHistoryPoint", "PaymentChannel"} {
 		page(name+"Page", name, true)
 	}
 	for _, name := range []string{"Probe", "Task", "Refund", "RedeemCode", "Commission", "WebhookSubscription", "WebhookDelivery", "Event", "PurchaseSnapshot"} {
@@ -184,6 +194,9 @@ func main() {
 	model("OperationCreate", schema{"access_token": str, "idempotency_key": str}, "access_token", "idempotency_key")
 	model("UpgradeOperationCreate", schema{"access_token": str, "idempotency_key": str, "upgrade": ref("Upgrade")}, "access_token", "idempotency_key", "upgrade")
 	model("NodeOperation", schema{"id": str, "node_id": str, "kind": str, "status": str, "claim": str, "upgrade": nullable(ref("Upgrade")), "error": str, "created_at": date, "expires_at": date}, "id", "node_id", "kind", "status", "created_at", "expires_at")
+	model("LookingGlass", schema{"id": str, "node_id": str, "method": str, "target": str, "status": str, "output": str, "error": str, "created_at": date}, "id", "node_id", "method", "target", "status", "created_at")
+	model("LookingGlassInput", schema{"method": str, "target": str}, "method", "target")
+	model("LookingGlassDispatch", schema{"request": nullable(ref("LookingGlass"))})
 	model("NodeOperationList", schema{"items": array(ref("NodeOperation"))}, "items")
 	model("Control", schema{"operation": nullable(ref("NodeOperation")), "active": array(str)}, "active")
 	model("OperationResult", schema{"id": str, "claim": str, "status": str, "error": str}, "id", "claim", "status", "error")
@@ -215,6 +228,8 @@ func main() {
 		{"GET", "/diagnostics/{id}", "", "Diagnostic", "200", "user", "Read sanitized diagnostic result with current authorization", false},
 		{"POST", "/agent/diagnostics", "", "DiagnosticDispatch", "200", "agent", "Claim one bounded diagnostic task", false},
 		{"POST", "/agent/diagnostics/result", "Diagnostic", "", "204", "agent", "Submit fenced diagnostic result", false},
+		{"POST", "/agent/looking-glass", "", "LookingGlassDispatch", "200", "agent", "Claim one pending looking glass request", false},
+		{"POST", "/agent/looking-glass/result", "LookingGlass", "", "204", "agent", "Submit one fenced looking glass result", false},
 		{"GET", "/purchases/{id}/funding", "", "FundingList", "200", "user", "Read original funding and returned amounts", false},
 		{"POST", "/purchases/{id}/refund", "PurchaseRefundInput", "PurchaseRefund", "200", "admin", "Refund unused purchased quota to original wallet funds and reverse commissions", false},
 		{"GET", "/openapi.json", "", "OpenAPIDocument", "200", "public", "OpenAPI 3.1 document", false},
@@ -225,6 +240,12 @@ func main() {
 		{"GET", "/auth/tokens", "", "TokenPage", "200", "user", "List own API tokens; no secrets", true},
 		{"POST", "/auth/tokens", "TokenCreate", "TokenSecret", "201", "user", "Issue owner-resources token; expiry within one year", false},
 		{"DELETE", "/auth/tokens/{id}", "", "", "204", "user", "Revoke own token", false},
+		{"GET", "/users/{id}/tokens", "", "TokenPage", "200", "admin", "List one account's API tokens with prefixes and last use; never secrets", true},
+		{"POST", "/users/{id}/tokens", "TokenCreate", "TokenSecret", "201", "admin", "Issue an API token for an account; the secret is returned exactly once", false},
+		{"POST", "/users/{id}/tokens/{token_id}/reset", "Empty", "TokenSecret", "200", "admin", "Replace a token secret in place; the new secret is returned exactly once", false},
+		{"DELETE", "/users/{id}/tokens/{token_id}", "", "", "204", "admin", "Revoke an account's API token", false},
+		{"GET", "/online/device/ip", "", "DeviceIPView", "200", "user", "Latest address of the single device visible to this API token; 409 when the group has several", false},
+		{"GET", "/online/device/ip/list", "", "DeviceIPPage", "200", "user", "Latest addresses of every device visible to this API token, grouped and ordered", false},
 		{"GET", "/health", "", "Health", "200", "public", "Health and database kind", false},
 		{"GET", "/users", "", "UserPage", "200", "admin", "List users", true},
 		{"POST", "/users", "UserCreate", "User", "201", "admin", "Create user", false},
@@ -232,11 +253,15 @@ func main() {
 		{"GET", "/groups", "", "GroupPage", "200", "user", "Authorized groups; user_ids hidden for ordinary users", true},
 		{"POST", "/groups", "GroupCreate", "Group", "201", "admin", "Create device group", false},
 		{"PUT", "/groups/{id}", "GroupUpdate", "Group", "200", "admin", "Update group with version check", false},
+		{"GET", "/groups/{id}/join-key", "", "GroupJoinKey", "200", "admin", "Fixed per-group access key behind the device onboarding command; readable again at any time", false},
+		{"POST", "/groups/{id}/join-key", "Empty", "GroupJoinKey", "200", "admin", "Rotate the group access key; commands already distributed stop working", false},
 		{"GET", "/nodes", "", "NodePage", "200", "user", "Authorized nodes", true},
 		{"POST", "/nodes/enrollment", "Enrollment", "EnrollmentSecret", "201", "admin", "One-time node enrollment valid for 15 minutes", false},
 		{"POST", "/nodes/{id}/rotate-token", "Empty", "NodeSecret", "200", "admin", "Rotate node credential", false},
 		{"POST", "/nodes/{id}/operation-access", "OperationAccess", "OperationAccessSecret", "201", "admin", "Short-lived password reauthentication for node operations", false},
 		{"POST", "/nodes/{id}/terminal", "OperationCreate", "NodeOperation", "201", "admin", "Create an audited remote terminal task", false},
+		{"POST", "/nodes/{id}/looking-glass", "LookingGlassInput", "LookingGlass", "202", "admin", "Run ping, tcping or mtr from the node; argv is built server-side and never goes through a shell", false},
+		{"GET", "/looking-glass/{id}", "", "LookingGlass", "200", "user", "Poll one looking glass result", false},
 		{"POST", "/nodes/{id}/upgrade", "UpgradeOperationCreate", "NodeOperation", "201", "admin", "Create a signed Agent upgrade task", false},
 		{"GET", "/nodes/{id}/operations", "", "NodeOperationList", "200", "admin", "List node operation status", false},
 		{"POST", "/node-operations/{id}/cancel", "Empty", "", "204", "admin", "Cancel a pending node operation", false},

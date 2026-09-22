@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
+import Select from "./Select.vue";
 import { useRoute, useRouter } from "vue-router";
 import { api, errorText } from "../core/api";
 import {
@@ -114,10 +115,8 @@ function axisTime(timestamp: number) {
     ? formatTime(timestamp)
     : formatDate(timestamp);
 }
-function select(key: string, event: Event) {
-  void router.replace({
-    query: { ...route.query, [key]: (event.target as HTMLSelectElement).value },
-  });
+function select(key: string, value: string) {
+  void router.replace({ query: { ...route.query, [key]: value } });
 }
 async function load() {
   const request = ++generation;
@@ -182,31 +181,31 @@ onUnmounted(() => {
     </p>
     <div v-if="nodes.length" class="history-controls">
       <label
-        >历史节点<select
+        >历史节点<Select
           :value="selectedNode?.id"
           @change="select('node', $event)"
         >
           <option v-for="node in nodes" :key="node.id" :value="node.id">
             {{ node.name }}
           </option>
-        </select></label
+        </Select></label
       >
       <label
-        >历史时间范围<select
+        >历史时间范围<Select
           :value="range.id"
           @change="select('range', $event)"
         >
           <option v-for="item in ranges" :key="item.id" :value="item.id">
             {{ item.label }}
           </option>
-        </select></label
+        </Select></label
       >
       <label
-        >历史指标<select :value="metric.key" @change="select('metric', $event)">
+        >历史指标<Select :value="metric.key" @change="select('metric', $event)">
           <option v-for="item in metrics" :key="item.key" :value="item.key">
             {{ item.label }}{{ item.unit ? ` (${item.unit})` : "" }}
           </option>
-        </select></label
+        </Select></label
       >
     </div>
     <p v-if="loading" role="status">正在加载历史采样…</p>
@@ -312,7 +311,7 @@ onUnmounted(() => {
   width: 100%;
   height: 180px;
   display: block;
-  color: var(--accent);
+  color: var(--color-accent);
 }
 .history-plot {
   display: grid;
@@ -322,7 +321,7 @@ onUnmounted(() => {
 .history-x {
   display: flex;
   justify-content: space-between;
-  color: var(--muted);
+  color: var(--color-ink-muted);
   font-size: 12px;
 }
 .history-y {
@@ -335,15 +334,15 @@ onUnmounted(() => {
   gap: 8px;
 }
 .history-guide {
-  stroke: var(--line);
+  stroke: var(--color-line);
   stroke-dasharray: 4 4;
 }
 .history-scrubber {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--color-ink-muted);
 }
 .history-scrubber input {
-  accent-color: var(--accent);
+  accent-color: var(--color-accent);
 }
 .history-selection {
   font-size: 12px;

@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { api, errorText, ApiError } from "../core/api";
 import ProbeHistory from "../components/ProbeHistory.vue";
+import LocationFlag from "../components/LocationFlag.vue";
+import Select from "../components/Select.vue";
 import { displayTimeZoneLabel, formatDateTime } from "../core/format";
 interface Probe {
   node_id: string;
@@ -14,6 +16,9 @@ interface Probe {
   upload_bps: number | null;
   download_bps: number | null;
   load1: number | null;
+  cpu_model: string | null;
+  swap_used: string | null;
+  swap_total: string | null;
   uptime_seconds: string | null;
   public_ips?: {
     address: string;
@@ -21,10 +26,35 @@ interface Probe {
     family: string;
     observed_at: string;
   }[];
+  // 以下字段由控制面补齐：节点名、所属设备组和位置图标。
+  node_name?: string;
+  group_ids?: string[];
+  location?: {
+    country_code: string;
+    country_name?: string;
+    region?: string;
+    city?: string;
+    source?: string;
+  };
 }
 const probes = ref<Probe[]>([]);
 const names = ref<Record<string, string>>({});
 const nodes = ref<{ id: string; name: string }[]>([]);
+const groups = ref<{ id: string; name: string }[]>([]);
+// 探针页面是按设备组看的：选了组就只看这个组的机器，没选就合并显示
+// 当前账号有权查看的全部设备。
+const group = ref("");
+const groupNames = computed(() =>
+  Object.fromEntries(groups.value.map((g) => [g.id, g.name])),
+);
+function nodeTitle(p: Probe) {
+  return p.node_name || names.value[p.node_id] || p.node_id;
+}
+function groupLabel(p: Probe) {
+  return (p.group_ids || [])
+    .map((id) => groupNames.value[id] || id)
+    .join("、");
+}
 const error = ref("");
 const connected = ref(false);
 const now = ref(Date.now());
@@ -44,8 +74,10 @@ function accept(items: Probe[]) {
     }
   }
 }
-function bytes(value: string | null) {
-  if (value === null) return "未知";
+function bytes(value: string | null | undefined) {
+  // 缺失（undefined）与未知（null）都要当成「没有这个数」：老版本 Agent 不
+  // 上报交换分区，字段就是缺的，不该让整张卡片渲染不出来。
+  if (value === null || value === undefined) return "未知";
   const n = BigInt(value);
   return n >= 1073741824n
     ? `${Number(n / 1048576n) / 1024} GiB`
@@ -68,16 +100,19 @@ const count = computed(() => probes.value.length);
 async function load() {
   error.value = "";
   try {
-    const [p, n] = await Promise.all([
-      api<{ items: Probe[] }>("/probes"),
-      loadNodes(),
+    const scope = group.value ? `?group_id=${encodeURIComponent(group.value)}` : "";
+    const [p, n, g] = await Promise.all([
+      api<{ items: Probe[] }>("/probes" + scope),
+      loadNodes(scope),
+      loadGroups(),
     ]);
     if (!alive) return;
     accept(p.items);
     nodes.value = n;
+    groups.value = g;
     names.value = Object.fromEntries(n.map((x) => [x.id, x.name]));
     events?.close();
-    events = new EventSource("/api/v1/probes/events", {
+    events = new EventSource("/api/v1/probes/events" + scope, {
       withCredentials: true,
     });
     events.onopen = () => {
@@ -104,13 +139,27 @@ async function load() {
     error.value = errorText(e);
   }
 }
-async function loadNodes() {
+// scope 带上 group_id 时，历史选择器只列这个组的机器，与上面的探针卡片一致。
+async function loadNodes(scope: string) {
   const result: { id: string; name: string }[] = [];
   for (let page = 1; ; page++) {
     const next = await api<{
       items: { id: string; name: string }[];
       total: number;
-    }>(`/nodes?page=${page}&page_size=100`);
+    }>(`/nodes${scope ? scope + "&" : "?"}page=${page}&page_size=100`);
+    result.push(...next.items);
+    if (!alive || !next.items.length || result.length >= next.total)
+      return result;
+  }
+}
+/** 设备组列表就是探针页面的分组选择器：能选到的组，账号都有权查看。 */
+async function loadGroups() {
+  const result: { id: string; name: string }[] = [];
+  for (let page = 1; ; page++) {
+    const next = await api<{
+      items: { id: string; name: string }[];
+      total: number;
+    }>(`/groups?page=${page}&page_size=100`);
     result.push(...next.items);
     if (!alive || !next.items.length || result.length >= next.total)
       return result;
@@ -135,12 +184,36 @@ onUnmounted(() => {
         <p class="eyebrow">LIVE TELEMETRY</p>
         <h1>服务器探针</h1>
         <p class="muted">
+          <span class="live-dot" :data-live="String(connected)" aria-hidden="true" />
           {{ count }} 个可见采样 ·
           {{ connected ? "实时连接已建立" : "实时连接未建立" }}
           · {{ displayTimeZoneLabel }}
         </p>
       </div>
       <button @click="load">重新连接</button>
+    </div>
+    <div class="card probe-scope">
+      <label
+        >设备组<Select
+          :model-value="group"
+          aria-label="设备组"
+          @change="
+            (value: string) => {
+              group = value;
+              void load();
+            }
+          "
+        >
+          <option value="">全部可见设备</option>
+          <option v-for="g in groups" :key="g.id" :value="g.id">
+            {{ g.name }}
+          </option>
+        </Select></label
+      >
+      <p class="small muted">
+        探针是付费能力：只有拥有有效套餐、且设备属于所选设备组的账号才能查看，
+        页面里也只有该组的机器。上方历史查询跟随同一个范围。
+      </p>
     </div>
     <p v-if="error" class="warning" role="status">{{ error }}</p>
     <ProbeHistory :nodes="nodes" />
@@ -150,12 +223,27 @@ onUnmounted(() => {
     <div class="probe-grid">
       <article v-for="p in probes" :key="p.node_id" class="card probe">
         <div class="section-heading">
-          <h2>{{ names[p.node_id] || p.node_id }}</h2>
+          <h2 class="probe-name">
+            <LocationFlag
+              :code="p.location?.country_code"
+              :name="p.location?.country_name"
+            />{{ nodeTitle(p) }}
+          </h2>
           <span class="badge">{{
             now - Date.parse(p.sampled_at) > 30000 ? "数据陈旧" : "近期采样"
           }}</span>
         </div>
         <p class="small muted">采样于 {{ formatDateTime(p.sampled_at) }}</p>
+        <p
+          v-if="p.location?.country_name || groupLabel(p)"
+          class="small muted probe-place"
+        >
+          <template v-if="p.location?.country_name"
+            >位置 {{ p.location.country_name
+            }}<template v-if="p.location.city">·{{ p.location.city }}</template
+            ><template v-if="groupLabel(p)"> · </template></template
+          ><template v-if="groupLabel(p)">设备组 {{ groupLabel(p) }}</template>
+        </p>
         <dl class="metrics">
           <div>
             <dt>上行</dt>
@@ -164,6 +252,10 @@ onUnmounted(() => {
           <div>
             <dt>下行</dt>
             <dd>{{ rate(p.download_bps) }}</dd>
+          </div>
+          <div>
+            <dt>CPU 型号</dt>
+            <dd>{{ p.cpu_model || "未知" }}</dd>
           </div>
           <div>
             <dt>CPU</dt>
@@ -185,13 +277,17 @@ onUnmounted(() => {
             <dt>磁盘 已用 / 总量</dt>
             <dd>{{ bytes(p.disk_used) }} / {{ bytes(p.disk_total) }}</dd>
           </div>
+          <div>
+            <dt>虚拟交换 已用 / 总量</dt>
+            <dd>{{ bytes(p.swap_used) }} / {{ bytes(p.swap_total) }}</dd>
+          </div>
         </dl>
         <svg
           v-if="(histories[p.node_id]?.length || 0) > 1"
           class="chart"
           viewBox="0 0 300 76"
           role="img"
-          :aria-label="`${names[p.node_id] || p.node_id} 本次会话上行趋势，自动缩放`"
+          :aria-label="`${nodeTitle(p)} 本次会话上行趋势，自动缩放`"
         >
           <polyline
             :points="points(p.node_id)"
@@ -208,8 +304,40 @@ onUnmounted(() => {
             >
           </p>
         </div>
-        <p v-else class="small muted">公网地址未提供或当前账号无查看权限。</p>
+        <p v-else class="small muted">
+          公网地址不对普通账号展示。脚本取地址请用下方接口。
+        </p>
       </article>
     </div>
+    <section class="card probe-api">
+      <h2>设备地址接口</h2>
+      <p class="small muted">
+        给脚本用：带上管理员发给你的 API Token，就能取到本页面所选设备组当前的
+        机器地址。同一组只有一台机器时用单台接口，多台时用列表接口 —— 机器被替换
+        或换 IP 之后，返回的地址会跟着变，调用方不需要改代码。
+      </p>
+      <dl class="metrics">
+        <div>
+          <dt>单台设备</dt>
+          <dd><code>GET /online/device/ip</code></dd>
+        </div>
+        <div>
+          <dt>多台设备</dt>
+          <dd><code>GET /online/device/ip/list</code></dd>
+        </div>
+        <div>
+          <dt>鉴权</dt>
+          <dd><code>Authorization: Bearer &lt;API Token&gt;</code></dd>
+        </div>
+        <div>
+          <dt>限定设备组</dt>
+          <dd><code>?group_id=&lt;设备组 ID&gt;</code></dd>
+        </div>
+      </dl>
+      <p class="small muted">
+        多台机器时单台接口返回 409 并提示改用列表；接口只返回当前账号有权查看的
+        设备，与这个页面看到的是同一份数据。
+      </p>
+    </section>
   </section>
 </template>

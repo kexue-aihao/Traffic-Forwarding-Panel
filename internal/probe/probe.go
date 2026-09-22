@@ -31,6 +31,8 @@ type Collector struct {
 	previous map[string]gnet.IOCountersStat
 	ips      []contract.IPObservation
 	ipSample time.Time
+	// CPU 型号不会变，采一次就缓存 —— 每 5 秒读一遍 /proc/cpuinfo 没有意义。
+	cpuModel *string
 }
 
 func (c *Collector) Sample(ctx context.Context, nodeID string) contract.Probe {
@@ -58,6 +60,16 @@ func (c *Collector) Sample(ctx context.Context, nodeID string) contract.Probe {
 	}
 	if v, e := load.AvgWithContext(ctx); e == nil {
 		p.Load1 = &v.Load1
+	}
+	if c.cpuModel == nil {
+		if v, e := cpu.InfoWithContext(ctx); e == nil && len(v) > 0 && v[0].ModelName != "" {
+			model := v[0].ModelName
+			c.cpuModel = &model
+		}
+	}
+	p.CPUModel = c.cpuModel
+	if v, e := mem.SwapMemoryWithContext(ctx); e == nil {
+		p.SwapUsed, p.SwapTotal = &v.Used, &v.Total
 	}
 	if values, e := gnet.IOCountersWithContext(ctx, true); e == nil {
 		next := map[string]gnet.IOCountersStat{}

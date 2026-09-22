@@ -305,6 +305,9 @@ func TestRegistrationConfigAckProbeAndRestart(t *testing.T) {
 			json.NewEncoder(w).Encode(contract.Registered{NodeID: "registered-node", Token: "persisted-secret"})
 		case "/api/v1/agent/diagnostics":
 			json.NewEncoder(w).Encode(map[string]any{"diagnostic": nil})
+		case "/api/v1/agent/looking-glass":
+			// Agent 每几秒领一次网络诊断；这个用例里没有待办。
+			json.NewEncoder(w).Encode(map[string]any{"request": nil})
 		case "/api/v1/agent/config":
 			json.NewEncoder(w).Encode(cfg)
 		case "/api/v1/agent/ack":

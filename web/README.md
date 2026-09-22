@@ -12,7 +12,9 @@ npm test
 
 Node >=22.12，推荐 Node 24。浏览器回归需已安装 Playwright Chromium/Firefox/WebKit：`npx playwright install`。测试启动仅监听 localhost 的独立契约 fixture，使用生产 CSP，不连接真实支付、Agent 或数据库，因此不是后端端到端验收。覆盖登录、五档视口、脏对话框、API文本安全、指标未知状态、超出 JS 安全整数范围的金额、套餐确认、主题和会话失效；截图写 `.gocache/`。
 
-构建输出 `internal/webui/assets` 必须随源代码提交，不手改产物。Vite 保留 `/assets/inter.woff2` 绝对 URL 的提示是预期行为；字体和主题脚本在构建结束后发布。Go 托管层须支持 `/`、`/admin`、`/assets/*`，提供显式 MIME 和 `go:embed all:assets`。主题脚本是外部经典脚本，不放宽 CSP。
+构建输出 `internal/webui/assets` 必须随源代码提交，不手改产物。Vite 保留 `/assets/inter.woff2` 绝对 URL 的提示是预期行为；字体、主题脚本、favicon 与图标 sprite 在构建结束后发布。Go 托管层须支持 `/`、`/admin`、`/assets/*`，提供显式 MIME 和 `go:embed all:assets`。主题脚本是外部经典脚本，不放宽 CSP；防闪烁用的内联 `<style>` 由 `style-src 'unsafe-inline'` 覆盖，不涉及脚本。
+
+设计令牌与姊妹面板 `Telegram_session_Adblock` 的 `theme.css` 对齐：表面五级、文字四级、描边三档、`--text-2xs`~`--text-3xl` 带配套行高、`--duration-*` 与三条缓动。明暗是一个轴、品牌色相是另一个轴，配色只移动品牌色与第一团环境光，表面与灰阶共享。默认暗色（画布 `#07080b`），`web/static/theme.js` 在 `<head>` 最前把它涂上。新增一套配色要同步三处：`App.vue` 的 `accents`、`static/theme.js` 的数组、`tokens.css` 的 `[data-accent]` 色相块。加一个图标要改 `vite.config.ts` 里的名字数组。
 
 接口均请求 `/api/v1`；Cookie 同源；写请求携带 `X-Requested-With: fetch`。页面 GET 切换取消，认证 GET 不被路由启动取消，mutation 不自动重试或导航取消。SSE 订阅在页面退出时关闭，断网重连并显示陈旧采样；401 清理会话。
 

@@ -277,6 +277,19 @@ func (s *Server) RunProbeHistory(ctx context.Context) {
 
 func (s *Server) probeHistoryList(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFromContext(r.Context())
+	// 探针是付费能力，三个出口都要挡：列表、SSE 推送、历史查询。
+	// 只挡其中一个等于没挡。
+	if u.Role != "admin" && s.opts.ActiveEntitlement != nil {
+		ok, e := s.opts.ActiveEntitlement(r.Context(), u.ID)
+		if e != nil {
+			fail(w, 500, "权益校验不可用")
+			return
+		}
+		if !ok {
+			fail(w, 403, "需要有效的套餐权益才能查看探针")
+			return
+		}
+	}
 	node := r.PathValue("node_id")
 	q := `SELECT COUNT(*) FROM cp_nodes n WHERE n.id=?`
 	args := []any{node}

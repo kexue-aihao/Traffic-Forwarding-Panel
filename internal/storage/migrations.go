@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -83,6 +84,15 @@ func MigrateNamespace(ctx context.Context, db *sql.DB, dialect, namespace string
 	return err
 }
 
+// RandomKey 生成 32 字节十六进制密钥 —— 与节点凭据、一次性接入令牌同一强度。
+func RandomKey() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
 func EnsureIndex(ctx context.Context, conn *sql.Conn, dialect, table, name, columns string, unique bool) error {
 	if !sqlIdentifier.MatchString(table) || !sqlIdentifier.MatchString(name) {
 		return errors.New("invalid index identifier")
@@ -110,6 +120,57 @@ func EnsureIndex(ctx context.Context, conn *sql.Conn, dialect, table, name, colu
 		query += "IF NOT EXISTS "
 	}
 	query += name + " ON " + table + "(" + columns + ")"
+	_, err := conn.ExecContext(ctx, query)
+	return err
+}
+
+// EnsureColumn 幂等地给已有表补一列。
+//
+// 与 EnsureIndex 同一理由：MySQL 的 DDL 自动提交，迁移中途失败后重跑会再撞上
+// 同一条 ALTER。先查一遍 information_schema，重跑就是安全的。
+func EnsureColumn(ctx context.Context, conn *sql.Conn, dialect, table, column, definition string) error {
+	if !sqlIdentifier.MatchString(table) || !sqlIdentifier.MatchString(column) {
+		return errors.New("invalid column identifier")
+	}
+	switch dialect {
+	case "mysql":
+		var exists int
+		if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name=?", table, column).Scan(&exists); err != nil {
+			return err
+		}
+		if exists > 0 {
+			return nil
+		}
+	case "sqlite":
+		// SQLite 不支持 ADD COLUMN IF NOT EXISTS。新建的库在建表语句里就已经
+		// 带上这些列了，所以这一步在旧库上是补列，在新库上是空操作。
+		rows, err := conn.QueryContext(ctx, "PRAGMA table_info("+table+")")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cid, notNull, primaryKey int
+			var name, kind string
+			var defaultValue sql.NullString
+			if err = rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+				return err
+			}
+			if name == column {
+				return nil
+			}
+		}
+		if err = rows.Err(); err != nil {
+			return err
+		}
+	}
+	// Postgres 把 IF NOT EXISTS 放在 ADD COLUMN 之后，SQLite 则完全不支持 ——
+	// 好在 SQLite 的迁移跑在 BEGIN IMMEDIATE 事务里，失败会整体回滚。
+	query := "ALTER TABLE " + table + " ADD COLUMN "
+	if dialect == "postgres" {
+		query += "IF NOT EXISTS "
+	}
+	query += column + " " + definition
 	_, err := conn.ExecContext(ctx, query)
 	return err
 }

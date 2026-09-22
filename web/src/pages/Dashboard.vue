@@ -40,7 +40,10 @@ onMounted(load);
     <p v-if="error" class="error" role="alert">
       {{ error }} <button @click="load">重试</button>
     </p>
-    <p v-else-if="busy" class="empty">正在读取数据…</p>
+    <div v-else-if="busy" class="stats" aria-busy="true">
+      <p class="sr-only" role="status">正在读取数据</p>
+      <div v-for="n in 3" :key="n" class="skeleton skeleton-stat" />
+    </div>
     <div v-else class="stats">
       <RouterLink
         v-for="item in stats"

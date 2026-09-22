@@ -50,14 +50,16 @@ curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/down
 
 在 1Panel 新建反向代理网站，填写你的域名、代理地址 `http://127.0.0.1:18080`，申请证书并开启 HTTPS；启用 WebSocket，关闭代理缓存。管理员入口 `https://你的域名/admin`。详见 [Docker 与 1Panel 部署](docs/docker-deployment.md)，其中包括 OpenResty 使用桥接网络时的配置、离线安装、支付配置和备份方式。
 
-镜像包含 `/panel` 与 `/agent`，默认以 UID/GID 65532 运行。此安装仅部署面板；用于承载转发流量的 Agent 仍部署到相应入口/出口节点。
+镜像包含 `/panel` 与 `/agent`，默认以 UID/GID 65532 运行。此安装仅部署面板；用于承载转发流量的 Agent 仍部署到相应入口/出口节点。面板会把自身携带的 Agent 产物与一份接入安装脚本发布在 `/download/` 下，因此接入一台设备只需要在控制台复制一条命令到目标机上执行。
 
 ## Agent、支付和接口
 
-- [Agent 安装、出口白名单与四承载示例](examples/agent-README.md)：入口 Agent 注册后拉取配置，出口显式提供证书和凭据；WS/HTTP 内层同样使用 TLS，禁止证书验证降级。
+- [Agent 安装、出口白名单与四承载示例](examples/agent-README.md)：入口 Agent 可用控制台生成的一条命令接入（下载、装 systemd 服务、注册），注册后拉取配置；出口仍需显式提供证书和凭据；WS/HTTP 内层同样使用 TLS，禁止证书验证降级。
 - [支付配置示例](examples/payments.example.json)：复制到仓库外的受保护文件，填写商户资料，以 `-payments /path/payments.json -origin https://panel.example.com` 启动。示例占位值不能直接付款。
 - [支付协议与固定版本](docs/payment/protocol-sources.md)、[支付实现边界](docs/payment/implementation-status.md)：已接入的渠道仍需分别验证真实商户；Cyber 已跳过。
-- [API 契约](docs/api-contract.md)：浏览器使用 Cookie；自动化使用可撤销、到期的独立 API Token，目前权限为所有者资源。
+- [API 契约](docs/api-contract.md)：浏览器使用 Cookie；自动化使用独立 API Token（权限固定为所有者资源）。管理员建号后即可在「用户管理」里签发凭据交给用户：明文只在创建或重置的那一次显示，之后连管理员也取不回来，遗失只能重置；有效期可选有限时长或永久。
+- 探针页面按设备组查看，只有持有效套餐且设备属于该组的账号能看到，页面里也只有该组的机器。机器按 IP 归属地显示位置图标便于区分；普通用户看得到位置、看不到机器地址。客户脚本可用 API Token 调 `GET /online/device/ip`（单台）或 `GET /online/device/ip/list`（多台）取本组机器当前地址，机器被替换或换 IP 之后返回新值。
+- 站点金额单位是元（结算币种人民币），充值区间在站点设置里以元填写；每条支付通道可单独设置额外手续费与人民币兑 USDT 的汇率，充值界面按它算出应付金额。
 
 钱包以人民币整数分记账；充值后再余额购买套餐。续费立即重置周期和配额，从购买成功时间增加上海自然月并夹紧月末。不会沿用旧到期时间，也不会在每月 1 日另送配额。
 

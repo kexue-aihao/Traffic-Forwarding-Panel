@@ -1,6 +1,20 @@
 # 实施状态
 
-更新：2026-09-21。本文记录实际实现及证据，不把需求目标当作验收结果。功能补齐及 Docker 一键部署已纳入正式版 `v0.1.1`；完整 P0–P6 生产验收尚未完成。
+更新：2026-09-22。本文记录实际实现及证据，不把需求目标当作验收结果。功能补齐及 Docker 一键部署已纳入正式版 `v0.1.1`；完整 P0–P6 生产验收尚未完成。
+
+## 2026-09-22 本轮变更
+
+| 需求 | 实现 | 边界 |
+|---|---|---|
+| 转发规则：监听地址留空随机分配 | 已有 `allocateListen` 按设备组端口范围随机起点环形扫描；本轮补齐测试与界面文案，目标地址接受 `域名:端口` 与 `IP:端口` | 随机分配只在创建时发生，规则创建后监听地址不可改 |
+| 探针只给付费用户、只含本组设备 | `GET /probes` 与 SSE 支持 `group_id`；非本人所属组返回 403；探针补 `node_name/group_ids/location` | 位置图标对普通用户可见，机器地址仍只有管理员与凭据接口能看到 |
+| 探针页面的设备地址接口 | `GET /online/device/ip`（单台，多台 409）与 `GET /online/device/ip/list`（列表），另有 `/api/v1` 同义路径；Bearer 凭据鉴权 + 权益校验 + 设备组过滤；地址优先 IPv4 | 返回的是 Agent 最近一次上报的观测值，不是主动探测；机器离线时保留最后已知地址并标 `online:false` |
+| 账号与 API 凭据 | 管理员为账号签发（`POST /users/{id}/tokens`）、查看、重置、撤销；明文只在创建/重置那一次返回，列表只给 `prefix` 与 `last_used_at`；有效期 `expires_at` 或 `permanent:true` 二选一 | Bearer 一律按普通用户处理，不继承管理员权限 |
+| 探针页面能力 | CPU 型号/占用、内存、磁盘、虚拟交换、负载、网卡速率均已上报并展示；新增按国家/地区码绘制的位置图标 | 旗面是几何基元拼的近似图形，认不出的码退回带码徽章，不冒充国旗 |
+| 站点金额单位 | SiteSettings 的充值区间改为**元**（`minimum_recharge/maximum_recharge`），新增 `currency`；旧的分字段读回时自动换算；下单接口接受 `amount`（元），`amount_cents` 保留兼容 | 账本仍按整数分记账；套餐价格字段未改单位 |
+| 通道汇率与手续费 | 每条支付通道可配 `fee_percent/fee_fixed`（加在充值金额之上，到账不变）与 `rate/crypto_currency`（折算应付 USDT）；订单新增 `payable_cents/fee_cents/payable_crypto`，回调按实付核对、按到账入账 | 折算金额是报价：网关仍按其商户汇率结算，两边需配同一汇率 |
+
+本轮实际运行：`go test ./... -count=1`、`go vet ./...` 全通过（含新增的 `internal/contract` 金额/站点换算、`internal/commerce` 手续费与汇率、`internal/platform` 凭据/设备地址/位置解析测试）；`npm run typecheck`、`npm run build`、`npm test`（Chromium/Firefox/WebKit）与 `npm run test:live`（真实 Go/SQLite 控制面，新增设备地址接口与管理员签发凭据的端到端断言）在三个引擎通过。位置查询默认启用公共服务 `https://ipwho.is/{ip}`，运营方可在站点设置里换成自己的服务或留空关闭；测试中显式关闭，不外发任何地址。
 
 ## 已实现
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/agentdist"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/alerts"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/commerce"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/openapi"
@@ -24,6 +25,9 @@ type Options struct {
 	TrustProxy    bool
 	EPay          payment.EPay
 	Channels      map[string]commerce.Channel
+	// AgentDir 是发布给设备接入用的 Agent 产物目录，空值表示面板可执行文件
+	// 所在目录 —— 容器镜像正是把 /agent 放在 /panel 旁边。
+	AgentDir string
 }
 
 type App struct {
@@ -73,7 +77,7 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	if err := billing.Migrate(ctx); err != nil {
 		return nil, err
 	}
-	control := platform.New(store, platform.Options{Origin: opts.Origin, TrustProxy: opts.TrustProxy, SecureCookies: opts.SecureCookies, Entitlements: billing, LeaseCurrent: billing.LeaseCurrent, RetireLease: billing.RetireLease, ResourceLimits: billing.LimitsTx})
+	control := platform.New(store, platform.Options{Origin: opts.Origin, TrustProxy: opts.TrustProxy, SecureCookies: opts.SecureCookies, Entitlements: billing, LeaseCurrent: billing.LeaseCurrent, RetireLease: billing.RetireLease, ResourceLimits: billing.LimitsTx, ActiveEntitlement: billing.HasActiveEntitlement})
 	billing.PaymentAllowed = control.PaymentAllowed
 	if err := control.MigrateProbeHistory(ctx); err != nil {
 		return nil, err
@@ -89,6 +93,7 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	monitor.Register(mux, control)
 	openapi.Register(mux)
 	webui.Register(mux)
+	agentdist.Register(mux, opts.AgentDir)
 	return &App{Alerts: monitor, Handler: webui.Security(mux), Platform: control, Commerce: billing, channels: channels}, nil
 }
 

@@ -150,6 +150,22 @@ try {
         "transport:ws",
         "app:socks",
       ]);
+      // 面板托管接入脚本与 Agent 产物，两个路由都必须**免登录**可取 ——
+      // 接入命令在目标设备上执行，那里没有会话。
+      const installer = await fetch(base + "/download/agent-install.sh");
+      assert.equal(installer.status, 200, "接入脚本必须免登录可取");
+      assert.match(installer.headers.get("content-type"), /shellscript/);
+      const installerBody = await installer.text();
+      assert.match(installerBody, /^#!\/usr\/bin\/env bash/);
+      assert.match(installerBody, /\/download\/agent\/linux\//);
+      const absent = await fetch(base + "/download/agent/plan9/sparc");
+      assert.equal(absent.status, 404);
+      assert.match(
+        await absent.text(),
+        /plan9\/sparc/,
+        "缺产物时必须说明是哪个平台，而不是回一个空 404",
+      );
+
       await admin.getByRole("link", { name: "服务器", exact: true }).click();
       await admin.getByRole("button", { name: "生成接入凭据" }).click();
       await admin
@@ -157,11 +173,74 @@ try {
         .fill(`simulated-${browserName}`);
       await admin.getByLabel(`group-${browserName}`, { exact: true }).check();
       await admin.getByRole("button", { name: "保存", exact: true }).click();
-      const enrollment = (
-        await admin.getByLabel("一次性接入凭据").inputValue()
-      ).split("\n")[0];
+      // 交给运营方的是一条自包含命令，令牌藏在里面。从命令里取令牌，
+      // 顺带把命令本身的形状也钉住。
+      const onboardCommand = (
+        await admin.getByLabel("设备接入命令").textContent()
+      ).trim();
+      assert.match(
+        onboardCommand,
+        /^bash <\(curl -fLsS https?:\/\/[^\s]+\/download\/agent-install\.sh\) -t '[0-9a-f]{64}' -u 'https?:\/\/[^']+' -n 'simulated-[^']+'$/,
+      );
+      const enrollment = onboardCommand.match(/-t '([0-9a-f]{64})'/)[1];
       assert.ok(enrollment.length > 20);
-      await admin.getByRole("button", { name: "已保存，关闭" }).click();
+      await admin
+        .locator("dialog")
+        .getByRole("button", { name: "关闭", exact: true })
+        .click();
+
+      // 「接入设备」给的是设备组的**固定**接入密钥：命令里没有会过期的令牌，
+      // 同一组的设备共用这一条，装失败可以直接再跑一次。
+      //
+      // 用一把独立的空组来验证，不往 group-${browserName} 里塞节点 —— 后面
+      // 探针视图的断言依赖该组成员看到的历史桶数量，多出节点会把默认选中项挤掉。
+      await admin.getByRole("link", { name: "设备组", exact: true }).click();
+      await admin.getByRole("button", { name: "新增", exact: true }).click();
+      await admin.getByLabel("名称", { exact: true }).fill(`join-${browserName}`);
+      await save(admin);
+      const joinRow = admin.locator("tr", { hasText: `join-${browserName}` });
+      await joinRow.getByRole("button", { name: "接入设备" }).click();
+      await admin.locator("dialog").waitFor();
+      const groupCommand = (
+        await admin.getByLabel("设备接入命令").textContent()
+      ).trim();
+      assert.match(
+        groupCommand,
+        /^bash <\(curl -fLsS https?:\/\/[^\s]+\/download\/agent-install\.sh\) -t '[0-9a-f]{64}' -u 'https?:\/\/[^']+'$/,
+        "固定密钥的命令不带 -n：设备名由设备自报",
+      );
+      const groupKey = groupCommand.match(/-t '([0-9a-f]{64})'/)[1];
+      await admin.keyboard.press("Escape");
+      await admin.locator("dialog").waitFor({ state: "detached" });
+
+      // 关掉再打开必须还是同一把 —— 这正是「固定」的含义，也是一次性令牌
+      // 做不到的地方。
+      await joinRow.getByRole("button", { name: "接入设备" }).click();
+      await admin.locator("dialog").waitFor();
+      assert.equal(
+        (await admin.getByLabel("设备接入命令").textContent()).trim(),
+        groupCommand,
+        "重复打开必须给出同一条命令",
+      );
+
+      // 用这把密钥真的接入两台设备。本机没有 Linux 目标机，所以走 API 而不是
+      // 执行那条 bash 命令 —— 这里验证的是凭据在控制面这一侧确实可用、可重复。
+      for (const name of ["key-a-" + browserName, "key-b-" + browserName]) {
+        const joined = await fetch(base + "/api/v1/agent/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            token: groupKey,
+            name,
+            agent_version: "test",
+            os: "linux",
+            arch: "amd64",
+          }),
+        });
+        assert.equal(joined.status, 201, await joined.text());
+      }
+      await admin.keyboard.press("Escape");
+      await admin.locator("dialog").waitFor({ state: "detached" });
       const registration = await admin.request.post(
         base + "/api/v1/agent/register",
         {
@@ -171,7 +250,7 @@ try {
             agent_version: "ui-test-simulation",
             os: "simulated",
             arch: "simulated",
-            capabilities: ["tcp", "direct"],
+            capabilities: ["tcp", "direct", "looking-glass-v1"],
           },
         },
       );
@@ -236,55 +315,20 @@ try {
         (await user.request.get(base + "/api/v1/users")).status(),
         403,
       );
+      // 探针是付费能力：这个账号此时还没有有效权益，列表与历史都要拒。
+      // 内容断言放在下面购买套餐之后。
       await user.getByRole("link", { name: "实时探针", exact: true }).click();
       await user
-        .getByRole("heading", { name: `simulated-${browserName}` })
+        .getByText("需要有效的套餐权益才能查看探针", { exact: false })
         .waitFor();
       assert.equal(
-        (await user.locator("body").innerText()).includes("203.0.113.99"),
-        false,
+        (await user.request.get(base + "/api/v1/probes")).status(),
+        403,
       );
-      const history = user.getByRole("region", { name: "历史趋势" });
-      await history.getByText("4 个采样桶 · 3 个CPU有效值").waitFor();
-      await history
-        .locator(".history-selection")
-        .getByText("0 %", { exact: true })
-        .waitFor();
-      assert.equal(await history.locator("polyline").count(), 1);
-      const ownHistory = await user.request.get(
-        base + `/api/v1/probes/${registered.node_id}/history`,
+      assert.equal(
+        (await user.request.get(base + `/api/v1/probes/${registered.node_id}/history`)).status(),
+        403,
       );
-      assert.equal(ownHistory.status(), 200);
-      const historical = await ownHistory.json();
-      assert.equal(historical.total, 4);
-      assert.equal(historical.items[0].memory_percent, 50);
-      assert.equal(historical.items[0].disk_percent, null);
-      assert.equal(JSON.stringify(historical).includes("public_ips"), false);
-      assert.equal(JSON.stringify(historical).includes("203.0.113.99"), false);
-      for (const forbiddenNode of historyNodeIDs)
-        assert.equal(
-          (
-            await user.request.get(
-              base + `/api/v1/probes/${forbiddenNode}/history`,
-            )
-          ).status(),
-          404,
-          "history obeys current node membership",
-        );
-      historyNodeIDs.push(registered.node_id);
-      await user.getByLabel("历史时间范围").selectOption("30d");
-      await history.getByText("1 个采样桶 · 1 个CPU有效值").waitFor();
-      await history
-        .locator(".history-selection")
-        .getByText("40 %", { exact: true })
-        .waitFor();
-      await user.reload();
-      await history.getByText("1 个采样桶 · 1 个CPU有效值").waitFor();
-      assert.equal(await user.getByLabel("历史时间范围").inputValue(), "30d");
-      const userNodes = await (
-        await user.request.get(base + "/api/v1/nodes")
-      ).json();
-      assert.equal(userNodes.items.length, 1);
       await user.getByRole("link", { name: "转发规则", exact: true }).click();
       await user.getByRole("button", { name: "新增", exact: true }).click();
       await user
@@ -488,6 +532,59 @@ try {
       assert.equal(beforeAddon.limits.max_connections_per_node, 10);
       assert.equal(beforeAddon.limits.max_ips_per_node, 2);
       assert.equal(beforeAddon.limits.bytes_per_second_per_node, "1048576");
+      // 有了权益，探针才可见：只包含本组设备，且对普通用户隐藏公网 IP。
+      await user.getByRole("link", { name: "实时探针", exact: true }).click();
+      await user
+        .getByRole("heading", { name: `simulated-${browserName}` })
+        .waitFor();
+      assert.equal(
+        (await user.locator("body").innerText()).includes("203.0.113.99"),
+        false,
+      );
+      const history = user.getByRole("region", { name: "历史趋势" });
+      await history.getByText("4 个采样桶 · 3 个CPU有效值").waitFor();
+      await history
+        .locator(".history-selection")
+        .getByText("0 %", { exact: true })
+        .waitFor();
+      assert.equal(await history.locator("polyline").count(), 1);
+      assert.equal(
+        (await user.request.get(base + `/api/v1/probes/${registered.node_id}/history`)).status(),
+        200,
+      );
+      const historical = await (
+        await user.request.get(base + `/api/v1/probes/${registered.node_id}/history`)
+      ).json();
+      assert.equal(historical.total, 4);
+      assert.equal(historical.items[0].memory_percent, 50);
+      assert.equal(historical.items[0].disk_percent, null);
+      assert.equal(JSON.stringify(historical).includes("public_ips"), false);
+      assert.equal(JSON.stringify(historical).includes("203.0.113.99"), false);
+      for (const forbiddenNode of historyNodeIDs)
+        assert.equal(
+          (
+            await user.request.get(
+              base + `/api/v1/probes/${forbiddenNode}/history`,
+            )
+          ).status(),
+          404,
+          "history obeys current node membership",
+        );
+      historyNodeIDs.push(registered.node_id);
+      await user.getByLabel("历史时间范围").selectOption("30d");
+      await history.getByText("1 个采样桶 · 1 个CPU有效值").waitFor();
+      await history
+        .locator(".history-selection")
+        .getByText("40 %", { exact: true })
+        .waitFor();
+      await user.reload();
+      await history.getByText("1 个采样桶 · 1 个CPU有效值").waitFor();
+      assert.equal(await user.getByLabel("历史时间范围").inputValue(), "30d");
+      const userNodes = await (
+        await user.request.get(base + "/api/v1/nodes")
+      ).json();
+      assert.equal(userNodes.items.length, 1);
+
       await admin
         .getByRole("link", { name: "套餐与钱包", exact: true })
         .click();
@@ -520,6 +617,9 @@ try {
         .getByRole("button", { name: "确认提交", exact: true })
         .click();
       await admin.locator("dialog").waitFor({ state: "detached" });
+      // 上面的探针断言把用户留在了探针页，这里回到套餐与钱包 —— 下面几条
+      // 断言都在这个页面上。
+      await user.getByRole("link", { name: "套餐与钱包", exact: true }).click();
       await user.getByRole("button", { name: "刷新状态", exact: true }).click();
       const userAddon = user
         .locator("article")
@@ -567,7 +667,32 @@ try {
       await registrationContext.close();
       await admin.getByLabel("注册策略",{exact:true}).selectOption("closed");
       await admin.getByRole("button",{name:"保存站点设置",exact:true}).click();
-      await admin.getByRole("button",{name:"保存站点设置",exact:true}).waitFor();
+      // 提交中的按钮转圈而不是换文字（换文字会让宽度跳），所以同步信号是
+      // data-busy 消失，而不是文案变回来。
+      await admin.locator('button[data-busy="true"]').waitFor({state:"detached"});
+      // 网络诊断（LookingGlass）：页面把请求排给节点，节点领走并回传结果。
+      // 这里由测试自己扮演 Agent —— 面板侧并不知道对面是谁。
+      await admin.getByRole("link", {name:"网络诊断",exact:true}).click();
+      // 显式选中本轮这台机器：同一个数据库里还留着前几个浏览器引擎注册的
+      // 同名节点，页面的默认选中项并不保证是本轮的这一个。
+      await admin
+        .getByLabel("诊断节点",{exact:true})
+        .selectOption(registered.node_id);
+      await admin.getByLabel("诊断方式",{exact:true}).selectOption("tcping");
+      await admin.getByLabel("诊断目标",{exact:true}).fill("127.0.0.1:9");
+      await admin.getByRole("button",{name:"开始诊断",exact:true}).click();
+      // 等请求真正落库再让节点来领 —— click() 在异步提交完成前就返回了。
+      await admin.getByText("诊断编号",{exact:false}).waitFor();
+      const pending=await (await admin.request.post(base+"/api/v1/agent/looking-glass",{headers:{Authorization:`Bearer ${registered.token}`}})).json();
+      assert.ok(pending.request?.id,"节点应当领到这条诊断");
+      assert.match(pending.request.target,/^127.0.0.1:9$/,"下发的目标应当是规范化之后的值");
+      await admin.request.post(base+"/api/v1/agent/looking-glass/result",{headers:{Authorization:`Bearer ${registered.token}`},data:{...pending.request,output:"第 1 次：成功（1 ms）\n"}});
+      await admin.getByText("第 1 次：成功",{exact:false}).waitFor();
+      // 非法目标在创建时就被拒绝，且不会排进队列。
+      await admin.getByLabel("诊断目标",{exact:true}).fill("example.com; id");
+      await admin.getByRole("button",{name:"开始诊断",exact:true}).click();
+      await admin.getByText("主机名不合法",{exact:false}).waitFor();
+
       // A second registered fixture node is used only as an exit directory entry.
       const fixtureHeaders={Origin:base,"X-Requested-With":"fetch"};
       const exitEnrollment=await (await admin.request.post(base+"/api/v1/nodes/enrollment",{headers:fixtureHeaders,data:{name:`exit-${browserName}`,group_ids:[savedGroup.id]}})).json();
@@ -632,6 +757,34 @@ try {
       await user.getByRole("button", { name: "确认提交" }).click();
       const apiToken = await user.getByLabel("API Token 密钥").inputValue();
       assert.ok(apiToken.length > 20);
+      // 探针页面预留的设备地址接口。客户脚本拿的就是这把 Token：它只能看到
+      // 持有人自己那一组机器，返回的是机器当前上报的对外地址。
+      const devices = await (
+        await fetch(base + "/api/v1/online/device/ip/list", {
+          headers: { Authorization: `Bearer ${apiToken}` },
+        })
+      ).json();
+      const simulated = devices.items.find(
+        (d) => d.address === "203.0.113.99",
+      );
+      assert.ok(simulated, "设备地址接口必须给出本组机器当前的 IP");
+      assert.equal(simulated.node_id, registered.node_id);
+      assert.equal(simulated.online, true);
+      assert.equal(simulated.family, "ipv4");
+      assert.equal(
+        (
+          await fetch(base + "/online/device/ip/list", {
+            headers: { Authorization: `Bearer ${apiToken}` },
+          })
+        ).status,
+        200,
+        "客户脚本用的不带前缀路径也要可用",
+      );
+      assert.equal(
+        (await fetch(base + "/api/v1/online/device/ip/list")).status,
+        401,
+        "没有 Token 取不到设备地址",
+      );
       assert.equal(
         (
           await fetch(base + "/api/v1/nodes", {
@@ -660,6 +813,73 @@ try {
         ).status,
         401,
       );
+      // 管理员给账号发凭据：建完账号就能把密钥交给用户，明文只在这一次出现。
+      // 上一步退款留下的提示浮层会盖住侧边导航，先收起来再点。
+      const adminToast = admin.getByRole("button", {
+        name: "关闭通知",
+        exact: true,
+      });
+      if (await adminToast.count()) await adminToast.click();
+      await admin.getByRole("link", { name: "用户管理", exact: true }).click();
+      const userRow = admin.locator("tr", { hasText: username });
+      await userRow.getByRole("button", { name: "API 凭据" }).click();
+      await admin
+        .getByLabel("凭据名称", { exact: true })
+        .fill(`admin-issued-${browserName}`);
+      await admin
+        .getByRole("checkbox", { name: "永久有效（不过期）" })
+        .check();
+      await admin.getByRole("button", { name: "生成凭据", exact: true }).click();
+      const issued = await admin.getByLabel("API Token 密钥").inputValue();
+      assert.ok(issued.length > 20);
+      await admin.getByRole("button", { name: "已复制，继续管理" }).click();
+      assert.equal(
+        await admin.locator("dialog table tbody tr").count(),
+        1,
+        "同一个账号的凭据应当列在一起，便于重置",
+      );
+      assert.match(
+        await admin.locator("dialog table tbody tr").first().innerText(),
+        /永久有效/,
+      );
+      assert.equal(
+        (
+          await fetch(base + "/api/v1/online/device/ip/list", {
+            headers: { Authorization: `Bearer ${issued}` },
+          })
+        ).status,
+        200,
+        "管理员发出的凭据同样可以取设备地址",
+      );
+      // 重置之后旧密钥立刻失效，新密钥也只显示这一次。
+      await admin.getByRole("button", { name: "重置", exact: true }).click();
+      const rotated = await admin.getByLabel("API Token 密钥").inputValue();
+      assert.notEqual(rotated, issued);
+      await admin.getByRole("button", { name: "已复制，继续管理" }).click();
+      for (const stale of [issued]) {
+        assert.equal(
+          (
+            await fetch(base + "/api/v1/online/device/ip/list", {
+              headers: { Authorization: `Bearer ${stale}` },
+            })
+          ).status,
+          401,
+          "重置后旧密钥必须失效",
+        );
+      }
+      assert.equal(
+        (
+          await fetch(base + "/api/v1/online/device/ip/list", {
+            headers: { Authorization: `Bearer ${rotated}` },
+          })
+        ).status,
+        200,
+      );
+      await admin.getByRole("button", { name: "撤销", exact: true }).click();
+      await admin.getByText("这个账号还没有 API 凭据。", { exact: true }).waitFor();
+      // 用完就关：留着的对话框会挡住后面的页面操作。
+      await admin.getByRole("button", { name: "关闭对话框" }).click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
       const nextPassword = randomUUID();
       await user.getByRole("button", { name: "修改密码", exact: true }).click();
       await user.getByLabel("当前密码", { exact: true }).fill(userPassword);
@@ -734,7 +954,7 @@ try {
       await user.getByRole("button", { name: "登录控制台" }).waitFor();
       assert.deepEqual(exceptions, []);
       console.log(
-        `${browserName}: REAL Go/SQLite/embedded UI PASS (login, user/group/enrollment, simulated Agent/probe privacy, persisted history fixture API/permissions/chart, zero wallet + insufficient funds, redeem credit, webhook CRUD/mute/enable + alert policy/events, export task result, auto-renew toggle, plan limits/edit/add-on purchase, site/invitation registration, managed exits + Proxy Protocol editor, import preview/port update, purchase refund funding, three-hop editor, Token isolation/revocation, password, disable + session revoke)`,
+        `${browserName}: REAL Go/SQLite/embedded UI PASS (login, user/group/enrollment, simulated Agent/probe privacy, persisted history fixture API/permissions/chart, zero wallet + insufficient funds, redeem credit, webhook CRUD/mute/enable + alert policy/events, export task result, auto-renew toggle, plan limits/edit/add-on purchase, site/invitation registration, managed exits + Proxy Protocol editor, import preview/port update, purchase refund funding, three-hop editor, Token isolation/revocation, admin-issued token issue/reset/revoke, device address API permission, password, disable + session revoke)`,
       );
       await userContext.close();
     } finally {

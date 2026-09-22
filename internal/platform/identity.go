@@ -13,34 +13,162 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Name      string    `json:"name"`
-		ExpiresAt time.Time `json:"expires_at"`
+// tokenPrefixLen 是明文里留下来做「这是哪一把」标识的长度。8 位十六进制足够
+// 分辨几十把钥匙，又短到不可能反推出凭据本身。
+const tokenPrefixLen = 8
+
+// permanentExpiry 是「永不过期」在数据库里的写法。0 与任何真实时间戳都不冲突：
+// 有限期凭据的 expires_at 一定大于 0，所以老数据不需要迁移。
+const permanentExpiry = int64(0)
+
+type tokenRequest struct {
+	Name      string     `json:"name"`
+	ExpiresAt *time.Time `json:"expires_at"`
+	Permanent bool       `json:"permanent"`
+}
+
+// validate 要求调用方明确选择有效期：要么给一个一年以内的时刻，要么显式
+// permanent。不能「两个都没填」就悄悄发一把永久钥匙 —— 那是最不该默认的一种。
+func (t tokenRequest) validate(now time.Time) error {
+	if strings.TrimSpace(t.Name) == "" || len(t.Name) > 190 {
+		return errors.New("token 需要名字")
 	}
+	if t.Permanent == (t.ExpiresAt != nil) {
+		return errors.New("有效期二选一：给出 expires_at，或声明 permanent")
+	}
+	if t.ExpiresAt != nil && (!t.ExpiresAt.After(now) || t.ExpiresAt.After(now.Add(contract.MaxTokenLifetime))) {
+		return errors.New("有效期必须在将来，且不超过一年")
+	}
+	return nil
+}
+
+func (t tokenRequest) expiry(now time.Time) int64 {
+	if t.Permanent {
+		return permanentExpiry
+	}
+	return t.ExpiresAt.Unix()
+}
+
+// createToken 给自己发一把凭据。
+func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
+	var in tokenRequest
 	if !decode(w, r, &in) {
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" || len(in.Name) > 190 || !in.ExpiresAt.After(time.Now()) || in.ExpiresAt.After(time.Now().Add(365*24*time.Hour)) {
-		fail(w, 400, "token requires name and expiry within one year")
+	if e := in.validate(time.Now()); e != nil {
+		fail(w, 400, e.Error())
 		return
 	}
 	u, _ := UserFromContext(r.Context())
+	s.issueToken(w, r, u.ID, in, "token.create", true)
+}
+
+// createUserToken 是管理员路径：先建账号，再把凭据发给对方。
+//
+// 「密钥只显示一次」是这里唯一的交付方式：面板存的是摘要，事后任何接口都取不
+// 回明文。忘了或者弄丢了只能重置 —— 重置同样只显示这一次。
+func (s *Server) createUserToken(w http.ResponseWriter, r *http.Request) {
+	var in tokenRequest
+	if !decode(w, r, &in) {
+		return
+	}
+	if e := in.validate(time.Now()); e != nil {
+		fail(w, 400, e.Error())
+		return
+	}
+	target := r.PathValue("id")
+	var exists int
+	if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_users WHERE id=?`), target).Scan(&exists); e != nil || exists != 1 {
+		fail(w, 404, "unknown user")
+		return
+	}
+	s.issueToken(w, r, target, in, "token.issue", false)
+}
+
+func (s *Server) issueToken(w http.ResponseWriter, r *http.Request, user string, in tokenRequest, action string, self bool) {
 	raw := token()
 	tid := id()
+	expiry := in.expiry(time.Now())
+	actor, _ := UserFromContext(r.Context())
+	created := time.Now().UTC()
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_tokens(id,token_hash,user_id,name,expires_at) VALUES(?,?,?,?,?)`), tid, digest(raw), u.ID, in.Name, in.ExpiresAt.Unix())
+		_, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_tokens(id,token_hash,user_id,name,expires_at,prefix,created_at,last_used_at) VALUES(?,?,?,?,?,?,?,0)`), tid, digest(raw), user, in.Name, expiry, raw[:tokenPrefixLen], created.Unix())
 		if e != nil {
 			return e
 		}
-		return s.AuditTx(r.Context(), tx, u.ID, "token.create", tid)
+		return s.AuditTx(r.Context(), tx, actor.ID, action, tid)
 	})
 	if e != nil {
 		fail(w, 500, "token creation failed")
 		return
 	}
-	reply(w, 201, map[string]any{"id": tid, "token": raw, "expires_at": in.ExpiresAt, "scope": "owner-resources"})
+	out := map[string]any{"id": tid, "token": raw, "name": in.Name, "prefix": raw[:tokenPrefixLen], "permanent": in.Permanent, "scope": contract.TokenScopeOwnerResources, "created_at": created}
+	if in.Permanent {
+		out["expires_at"] = nil
+	} else {
+		out["expires_at"] = in.ExpiresAt.UTC()
+	}
+	if !self {
+		out["user_id"] = user
+	}
+	reply(w, 201, out)
 }
+
+// resetToken 换一把新密钥，行本身保留（同一个 id、名字和有效期）。
+//
+// 这是凭据泄露或遗失后的唯一补救手段：明文既然取不回来，就只能作废重发。
+func (s *Server) resetToken(w http.ResponseWriter, r *http.Request) {
+	target, tid := r.PathValue("id"), r.PathValue("token_id")
+	raw := token()
+	actor, _ := UserFromContext(r.Context())
+	var expires int64
+	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		res, e := tx.ExecContext(r.Context(), s.q(`UPDATE cp_tokens SET token_hash=?,prefix=?,created_at=?,last_used_at=0 WHERE id=? AND user_id=?`), digest(raw), raw[:tokenPrefixLen], time.Now().Unix(), tid, target)
+		if e != nil {
+			return e
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return errConflict
+		}
+		if e = tx.QueryRowContext(r.Context(), s.q(`SELECT expires_at FROM cp_tokens WHERE id=?`), tid).Scan(&expires); e != nil {
+			return e
+		}
+		return s.AuditTx(r.Context(), tx, actor.ID, "token.reset", tid)
+	})
+	if e != nil {
+		fail(w, 404, "token not found")
+		return
+	}
+	out := map[string]any{"id": tid, "token": raw, "prefix": raw[:tokenPrefixLen], "permanent": expires == permanentExpiry}
+	if expires != permanentExpiry {
+		out["expires_at"] = time.Unix(expires, 0).UTC()
+	} else {
+		out["expires_at"] = nil
+	}
+	reply(w, 200, out)
+}
+
+// revokeUserToken 让管理员能撤掉发给用户的钥匙。
+func (s *Server) revokeUserToken(w http.ResponseWriter, r *http.Request) {
+	target, tid := r.PathValue("id"), r.PathValue("token_id")
+	actor, _ := UserFromContext(r.Context())
+	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		res, e := tx.ExecContext(r.Context(), s.q(`DELETE FROM cp_tokens WHERE id=? AND user_id=?`), tid, target)
+		if e != nil {
+			return e
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return errConflict
+		}
+		return s.AuditTx(r.Context(), tx, actor.ID, "token.revoke", tid)
+	})
+	if e != nil {
+		fail(w, 404, "token not found")
+		return
+	}
+	w.WriteHeader(204)
+}
+
 func (s *Server) revokeToken(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFromContext(r.Context())
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
@@ -146,13 +274,25 @@ func (s *Server) disableUser(w http.ResponseWriter, r *http.Request) {
 
 // bearerUser deliberately constrains machine API keys to ordinary owner access;
 // full administrator financial/operational keys need explicit future scopes.
+//
+// 这同时是探针页面设备地址接口的鉴权路径：客户脚本带的就是这种密钥。有效期
+// 在 SQL 里判定 —— 永久凭据写的是 expires_at=0，正好绕开时间比较。
 func (s *Server) bearerUser(r *http.Request) (contract.User, error) {
 	var u contract.User
 	var disabled int
+	var tokenID string
 	raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT u.id,u.username,u.role,u.disabled FROM cp_tokens t JOIN cp_users u ON u.id=t.user_id WHERE t.token_hash=? AND t.expires_at>?`), digest(raw), time.Now().Unix()).Scan(&u.ID, &u.Username, &u.Role, &disabled)
+	e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT u.id,u.username,u.role,u.disabled,t.id FROM cp_tokens t JOIN cp_users u ON u.id=t.user_id WHERE t.token_hash=? AND (t.expires_at=? OR t.expires_at>?)`), digest(raw), permanentExpiry, time.Now().Unix()).Scan(&u.ID, &u.Username, &u.Role, &disabled, &tokenID)
 	if e != nil || disabled != 0 {
 		return u, errors.New("authentication required")
+	}
+	// 最近使用时间按分钟节流：脚本可能每秒调一次接口，而它只是一条给人看的
+	// 线索，不值得为每次请求排一次写。
+	if s.allow("token-use:"+tokenID, 1) {
+		_ = s.Store.Write(r.Context(), storage.Background, func(tx *sql.Tx) error {
+			_, e := tx.ExecContext(r.Context(), s.q(`UPDATE cp_tokens SET last_used_at=? WHERE id=?`), time.Now().Unix(), tokenID)
+			return e
+		})
 	}
 	u.Role = "user"
 	return u, nil
@@ -206,33 +346,70 @@ func (s *Server) rotateNodeToken(w http.ResponseWriter, r *http.Request) {
 	reply(w, 200, map[string]any{"node_id": node, "token": raw})
 }
 
+// accessTokens 读出一批凭据的公开字段。明文与摘要都不在这里 —— 这个函数的
+// 返回值会被直接序列化给管理员看。
+func (s *Server) accessTokens(ctx context.Context, user string, n, o int) ([]contract.APIToken, int, error) {
+	var total int
+	if e := s.Store.DB.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_tokens WHERE user_id=?`), user).Scan(&total); e != nil {
+		return nil, 0, e
+	}
+	rows, e := s.Store.DB.QueryContext(ctx, s.q(`SELECT id,name,prefix,expires_at,created_at,last_used_at FROM cp_tokens WHERE user_id=? ORDER BY created_at DESC,id LIMIT ? OFFSET ?`), user, n, o)
+	if e != nil {
+		return nil, 0, e
+	}
+	defer rows.Close()
+	items := []contract.APIToken{}
+	for rows.Next() {
+		var t contract.APIToken
+		var expires, created, used int64
+		if e = rows.Scan(&t.ID, &t.Name, &t.Prefix, &expires, &created, &used); e != nil {
+			return nil, 0, e
+		}
+		t.UserID = user
+		t.Scope = contract.TokenScopeOwnerResources
+		t.Permanent = expires == permanentExpiry
+		t.CreatedAt = time.Unix(created, 0).UTC()
+		if !t.Permanent {
+			at := time.Unix(expires, 0).UTC()
+			t.ExpiresAt = &at
+		}
+		if used > 0 {
+			at := time.Unix(used, 0).UTC()
+			t.LastUsedAt = &at
+		}
+		items = append(items, t)
+	}
+	return items, total, rows.Err()
+}
+
 func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFromContext(r.Context())
 	n, o := pages(r)
-	var total int
-	if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_tokens WHERE user_id=?`), u.ID).Scan(&total); e != nil {
-		fail(w, 500, "token query failed")
-		return
-	}
-	rows, e := s.Store.DB.QueryContext(r.Context(), s.q(`SELECT id,name,expires_at FROM cp_tokens WHERE user_id=? ORDER BY id LIMIT ? OFFSET ?`), u.ID, n, o)
+	items, total, e := s.accessTokens(r.Context(), u.ID, n, o)
 	if e != nil {
 		fail(w, 500, "token query failed")
 		return
 	}
-	defer rows.Close()
-	items := []map[string]any{}
-	for rows.Next() {
-		var tid, name string
-		var expiry int64
-		if e = rows.Scan(&tid, &name, &expiry); e != nil {
-			fail(w, 500, "token query failed")
-			return
-		}
-		items = append(items, map[string]any{"id": tid, "name": name, "expires_at": time.Unix(expiry, 0).UTC(), "scope": "owner-resources"})
+	reply(w, 200, map[string]any{"items": items, "total": total})
+}
+
+// listUserTokens 是管理员视角：账号列表里点开某个用户，看得到他手上有哪些
+// 凭据、最近用过没有，从而决定重置哪一条 —— 明文取不回来，能管的就这些。
+func (s *Server) listUserTokens(w http.ResponseWriter, r *http.Request) {
+	target := r.PathValue("id")
+	var username string
+	if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT username FROM cp_users WHERE id=?`), target).Scan(&username); e != nil {
+		fail(w, 404, "unknown user")
+		return
 	}
-	if rows.Err() != nil {
+	n, o := pages(r)
+	items, total, e := s.accessTokens(r.Context(), target, n, o)
+	if e != nil {
 		fail(w, 500, "token query failed")
 		return
 	}
-	reply(w, 200, map[string]any{"items": items, "total": total})
+	for i := range items {
+		items[i].Username = username
+	}
+	reply(w, 200, map[string]any{"items": items, "total": total, "user": map[string]string{"id": target, "username": username}})
 }

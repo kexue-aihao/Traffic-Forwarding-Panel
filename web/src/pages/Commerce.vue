@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import Select from "../components/Select.vue";
 import { useRoute, useRouter } from "vue-router";
 import Modal from "../components/Modal.vue";
 import { api, ApiError, errorText } from "../core/api";
@@ -37,7 +38,14 @@ interface Plan {
 interface Order {
   id: string;
   channel: string;
+  // amount_cents 是钱包到账金额，payable_cents 是实际付给通道的金额，
+  // 差额就是通道手续费。fee_cents 与 payable_crypto 由服务端算好。
   amount_cents: string;
+  payable_cents?: string;
+  fee_cents?: string;
+  payable_crypto?: string;
+  crypto_currency?: string;
+  rate?: string;
   currency: string;
   status: string;
   payment_url?: string;
@@ -49,6 +57,11 @@ interface Channel {
   enabled: boolean;
   status: string;
   reason: string;
+  // 手续费与汇率都由服务端配置，前端只负责把结果算给用户看。
+  fee_percent?: string;
+  fee_fixed?: string;
+  crypto_currency?: string;
+  rate?: string;
 }
 interface Entitlement {
   limits?: ResourceLimits;
@@ -89,13 +102,16 @@ const selected = ref<Plan | null>(null);
 const charging = ref(false);
 const creating = ref(false);
 const editingPlan = ref<Plan | null>(null);
-const amount = ref("1000");
+// 充值金额以元为单位填写（最多两位小数），与站点设置一致。
+const amount = ref("100");
 const channel = ref("");
 const formError = ref("");
 const key = ref("");
+// 未确认的支付意图跨刷新保留：金额以元记账，重试时必须原样重发，
+// 否则幂等键会把两次不同的请求判成冲突。
 const chargeDraft = ref<{
   channel: string;
-  amount_cents: string;
+  amount: string;
   idempotency_key: string;
 } | null>(null);
 const draftStorageKey = "tfp-charge-draft:" + state.user?.id;
@@ -108,14 +124,14 @@ try {
     typeof saved === "object" &&
     "channel" in saved &&
     typeof saved.channel === "string" &&
-    "amount_cents" in saved &&
-    typeof saved.amount_cents === "string" &&
+    "amount" in saved &&
+    typeof saved.amount === "string" &&
     "idempotency_key" in saved &&
     typeof saved.idempotency_key === "string"
   )
     chargeDraft.value = {
       channel: saved.channel,
-      amount_cents: saved.amount_cents,
+      amount: saved.amount,
       idempotency_key: saved.idempotency_key,
     };
 } catch {
@@ -232,6 +248,41 @@ function money(cents: string) {
   const a = neg ? -n : n;
   return `${neg ? "-" : ""}${a / 100n}.${String(a % 100n).padStart(2, "0")}`;
 }
+
+const selectedChannel = computed(
+  () => channels.value.find((c) => c.id === channel.value) || null,
+);
+
+/**
+ * 充值报价：钱包到账多少、手续费多少、实付多少、折合多少 USDT。
+ *
+ * 这里算的只是一份**预估**，真正下单和入账以服务端的同一套规则为准；界面提前
+ * 把数字摆出来，是为了让人在点「支付」之前就知道自己要付多少。手续费按万分之
+ * 一向下取整到分，与后端一致。
+ */
+const chargeQuote = computed(() => {
+  const yuan = amount.value.trim();
+  if (!/^[0-9]+(\.[0-9]{1,2})?$/.test(yuan)) return null;
+  const cents = Math.round(Number(yuan) * 100);
+  if (!Number.isFinite(cents) || cents < 1) return null;
+  const c = selectedChannel.value;
+  const percent = Number(c?.fee_percent || "0");
+  const fixed = Math.round(Number(c?.fee_fixed || "0") * 100);
+  const fee = Math.floor((cents * Math.round(percent * 100)) / 10000) + fixed;
+  const payable = cents + fee;
+  const rate = Number(c?.rate || "0");
+  const crypto =
+    c?.crypto_currency && rate > 0
+      ? `${(Math.ceil((payable / 100 / rate) * 100) / 100).toFixed(2)} ${c.crypto_currency}`
+      : "";
+  return {
+    amount: money(String(cents)),
+    fee: money(String(fee)),
+    payable: money(String(payable)),
+    crypto,
+    currency: c?.crypto_currency || "",
+  };
+});
 async function load() {
   const version = ++loadVersion;
   loading.value = true;
@@ -350,7 +401,7 @@ function startCharge() {
   charging.value = true;
   if (chargeDraft.value) {
     channel.value = chargeDraft.value.channel;
-    amount.value = chargeDraft.value.amount_cents;
+    amount.value = chargeDraft.value.amount;
   }
   key.value = chargeDraft.value?.idempotency_key || crypto.randomUUID();
   formError.value = "";
@@ -394,7 +445,7 @@ async function submit() {
     } else if (charging.value) {
       chargeDraft.value ??= {
         channel: channel.value,
-        amount_cents: amount.value,
+        amount: amount.value.trim(),
         idempotency_key: key.value,
       };
       persistDraft();
@@ -549,7 +600,7 @@ watch(
           到期后使用钱包余额购买所选套餐，并从成功时刻重置周期；余额不足时每小时重试。
         </p>
         <label for="renew-plan">自动续费套餐</label
-        ><select
+        ><Select
           id="renew-plan"
           v-model="renewPlan"
           :disabled="renewBusy || loading || autoRenew.enabled"
@@ -562,7 +613,7 @@ watch(
           >
             {{ p.name }}
           </option>
-        </select>
+        </Select>
         <p v-if="renewError" role="alert" class="error">{{ renewError }}</p>
         <p v-if="autoRenew.last_error" class="warning">
           {{
@@ -677,6 +728,17 @@ watch(
             </td>
             <td data-label="金额">
               {{ money(o.amount_cents) }} {{ o.currency }}
+              <template v-if="o.fee_cents && o.fee_cents !== '0'">
+                <br /><span class="small muted"
+                  >实付 {{ money(o.payable_cents || o.amount_cents) }} · 手续费
+                  {{ money(o.fee_cents) }}</span
+                >
+              </template>
+              <template v-if="o.payable_crypto">
+                <br /><span class="small muted"
+                  >≈ {{ o.payable_crypto }} {{ o.crypto_currency }}</span
+                >
+              </template>
             </td>
             <td data-label="状态">{{ orderState(o) }}</td>
             <td data-label="创建时间">
@@ -798,7 +860,7 @@ watch(
           </p></template
         ><template v-else-if="charging"
           ><label
-            >支付渠道<select
+            >支付渠道<Select
               v-model="channel"
               required
               :disabled="!!chargeDraft"
@@ -809,26 +871,67 @@ watch(
                 :key="c.id"
                 :value="c.id"
               >
-                {{ channelName(c.id) }}
+                {{ channelName(c.id)
+                }}<template
+                  v-if="c.fee_percent && c.fee_percent !== '0.00' || (c.fee_fixed && c.fee_fixed !== '0.00')"
+                  >（手续费 {{ c.fee_percent }}% + ¥{{ c.fee_fixed }}）</template
+                >
               </option>
-            </select></label
+            </Select></label
           ><label
-            >充值金额（分）<input
+            >充值金额（元）<input
               v-model="amount"
               :disabled="!!chargeDraft"
-              inputmode="numeric"
-              pattern="[1-9][0-9]*"
+              inputmode="decimal"
+              pattern="[0-9]+(\.[0-9]{1,2})?"
               required
           /></label>
+          <dl v-if="chargeQuote" class="metrics">
+            <div>
+              <dt>钱包到账</dt>
+              <dd>¥ {{ chargeQuote.amount }}</dd>
+            </div>
+            <div>
+              <dt>通道手续费</dt>
+              <dd>
+                ¥ {{ chargeQuote.fee }}
+                <span
+                  v-if="
+                    (selectedChannel?.fee_percent &&
+                      selectedChannel.fee_percent !== '0.00') ||
+                    (selectedChannel?.fee_fixed &&
+                      selectedChannel.fee_fixed !== '0.00')
+                  "
+                  class="small muted"
+                  >（{{ selectedChannel?.fee_percent || "0.00" }}% + ¥{{
+                    selectedChannel?.fee_fixed || "0.00"
+                  }}）</span
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>实付</dt>
+              <dd>¥ {{ chargeQuote.payable }}</dd>
+            </div>
+            <div v-if="chargeQuote.crypto">
+              <dt>折合应付</dt>
+              <dd>
+                ≈ {{ chargeQuote.crypto }}
+                <span class="small muted">（汇率 {{ selectedChannel?.rate }}）</span>
+              </dd>
+            </div>
+          </dl>
           <p class="muted small">
-            创建订单不会增加余额，完成支付后由服务端确认到账。
+            创建订单不会增加余额，完成支付后由服务端确认到账。到账金额与实付金额分开
+            记账：手续费只增加实付，不影响钱包到账。加密货币金额是按通道汇率折算的
+            预估值，最终以支付页面显示的金额为准。
           </p></template
         ><template v-else
           ><label
-            >套餐类型<select v-model="planForm.kind" :disabled="!!editingPlan">
+            >套餐类型<Select v-model="planForm.kind" :disabled="!!editingPlan">
               <option value="period">周期套餐</option>
               <option value="addon">流量叠加包</option>
-            </select></label
+            </Select></label
           ><label>名称<input v-model="planForm.name" required /></label
           ><label
             >价格（分）<input
@@ -888,9 +991,16 @@ watch(
               min="1"
               max="120"
               required /></label></template
-        ><button class="primary" :disabled="busy">
-          {{ busy ? "正在提交…" : "确认提交" }}
-        </button>
+        ><div class="form-actions">
+          <button
+            class="primary"
+            :disabled="busy"
+            :data-busy="String(busy)"
+            :aria-busy="busy"
+          >
+            确认提交
+          </button>
+        </div>
       </form></Modal
     >
   </section>

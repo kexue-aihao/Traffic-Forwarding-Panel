@@ -50,6 +50,7 @@ func run() error {
 	initAdmin := flag.String("init-admin", "", "create first administrator then exit; reads password from stdin")
 	resetPassword := flag.String("reset-password", "", "reset local account password and revoke sessions; reads password from stdin")
 	paymentsFile := flag.String("payments", os.Getenv("TFP_PAYMENTS_FILE"), "operator-owned payment configuration JSON file")
+	agentDir := flag.String("agent-dir", os.Getenv("TFP_AGENT_DIR"), "directory holding the Agent binaries published for device onboarding; empty means the panel executable's directory, which is where the container image keeps /agent")
 	backupPath := flag.String("backup", "", "export a consistent sensitive database snapshot to a new JSONL file, then exit")
 	restorePath := flag.String("restore", "", "restore JSONL into an empty database, then exit; stop panel before use")
 	flag.Parse()
@@ -107,7 +108,7 @@ func run() error {
 			return e
 		}
 	}
-	application, err := app.New(ctx, store, app.Options{Origin: *origin, TrustProxy: *trustProxy, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, Channels: channels})
+	application, err := app.New(ctx, store, app.Options{Origin: *origin, TrustProxy: *trustProxy, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, Channels: channels, AgentDir: *agentDir})
 	if err != nil {
 		return err
 	}

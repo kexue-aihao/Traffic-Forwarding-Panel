@@ -6,10 +6,43 @@ const emit = defineEmits<{ close: [] }>();
 const dialog = ref<HTMLDialogElement>();
 const discard = ref(false);
 let previous: Element | null = null;
+let exitTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * 退场的时长，取自 CSS 的 --duration-state。
+ *
+ * 令牌是唯一的来源，这里只是把它读出来；读不到就退回 200ms —— 宁可动画早
+ * 结束一点，也不要让弹窗卡在屏幕上。
+ */
+function exitDuration() {
+  const d = dialog.value;
+  const raw = d
+    ? getComputedStyle(d).getPropertyValue("--duration-state").trim()
+    : "";
+  const ms = Number.parseFloat(raw);
+  if (!Number.isFinite(ms) || ms <= 0) return 200;
+  return raw.endsWith("ms") ? ms : ms * 1000;
+}
+
+/**
+ * 关闭。
+ *
+ * 顺序很关键：先 close() 让 CSS 的 allow-discrete 过渡把退场播完，再通知父
+ * 组件。反过来写的话，父组件一收到 close 就 v-if 掉这个组件，元素从 DOM 上
+ * 消失，任何过渡都来不及跑 —— 弹窗会「啪」地不见。
+ */
 function close() {
   if (props.busy) return;
   if (props.dirty && !discard.value) {
     discard.value = true;
+    return;
+  }
+  // 已经在退场了：连按 Esc 不该把它截断
+  if (exitTimer) return;
+  const d = dialog.value;
+  if (d?.open) {
+    d.close();
+    exitTimer = setTimeout(() => emit("close"), exitDuration());
     return;
   }
   emit("close");
@@ -20,6 +53,7 @@ onMounted(() => {
   dialog.value?.showModal();
 });
 onUnmounted(() => {
+  clearTimeout(exitTimer);
   state.modalOpen = false;
   dialog.value?.close();
   if (previous instanceof HTMLElement) previous.focus();

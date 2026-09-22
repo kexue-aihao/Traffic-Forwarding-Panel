@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import Select from "../components/Select.vue";
 import { useRoute, useRouter } from "vue-router";
 import Modal from "../components/Modal.vue";
 import NodeOperations from "../components/NodeOperations.vue";
+import OnboardCommand from "../components/OnboardCommand.vue";
+import OnboardPanel from "../components/OnboardPanel.vue";
 import { api, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
 import { displayTimeZoneLabel, formatDateTime } from "../core/format";
@@ -39,6 +42,156 @@ const formError = ref("");
 const selected = ref<Row | null>(null);
 const operationNode = ref<Row | null>(null);
 const token = ref("");
+// 承载。direct 与 direct-tls 都没有出口，区别只在到目标的那一段加不加密 ——
+// 前者把业务明文直接发出去，后者在同一条连接上先做 TLS 握手。
+const transports = [
+  { value: "direct", label: "direct（明文到目标）" },
+  { value: "direct-tls", label: "direct-tls（TLS 到目标）" },
+  { value: "tls", label: "tls" },
+  { value: "ws", label: "ws" },
+  { value: "wss", label: "wss" },
+  { value: "http", label: "http" },
+];
+const onboardTarget = ref<Row | null>(null);
+const joinKey = ref("");
+const confirmRotate = ref(false);
+
+/**
+ * 账号的 API 凭据。
+ *
+ * 管理员在这里给某个 UID 发密钥、看它有没有被用过、需要时重置 —— 这就是
+ * 「建完账号把钥匙交给用户」的完整闭环。明文只在创建与重置的那一次响应里
+ * 出现，之后连管理员也取不回来，所以界面必须把那一次展示做得足够醒目。
+ */
+interface UserToken {
+  id: string;
+  name: string;
+  prefix: string;
+  scope: string;
+  created_at: string;
+  expires_at: string | null;
+  permanent: boolean;
+  last_used_at?: string | null;
+}
+const tokenUser = ref<Row | null>(null);
+const userTokens = ref<UserToken[]>([]);
+const issueTokenName = ref("");
+const issuePermanent = ref(false);
+const issueTokenDays = ref(30);
+const issuedSecret = ref("");
+const issuedFor = ref("");
+const tokenBusy = ref(false);
+async function openUserTokens(row: Row) {
+  tokenUser.value = row;
+  userTokens.value = [];
+  issueTokenName.value = "";
+  issuePermanent.value = false;
+  issueTokenDays.value = 30;
+  issuedSecret.value = "";
+  issuedFor.value = "";
+  formError.value = "";
+  await loadUserTokens();
+}
+async function loadUserTokens() {
+  if (!tokenUser.value) return;
+  try {
+    const result = await api<{ items: UserToken[] }>(
+      `/users/${encodeURIComponent(String(tokenUser.value.id))}/tokens?page_size=100`,
+    );
+    userTokens.value = result.items;
+  } catch (e) {
+    formError.value = errorText(e);
+  }
+}
+async function issueUserToken() {
+  if (tokenBusy.value || !tokenUser.value) return;
+  tokenBusy.value = true;
+  formError.value = "";
+  try {
+    const result = await api<{ token: string }>(
+      `/users/${encodeURIComponent(String(tokenUser.value.id))}/tokens`,
+      "POST",
+      {
+        name: issueTokenName.value,
+        ...(issuePermanent.value
+          ? { permanent: true }
+          : {
+              expires_at: new Date(
+                Date.now() + issueTokenDays.value * 86400000,
+              ).toISOString(),
+            }),
+      },
+    );
+    issuedSecret.value = result.token;
+    issuedFor.value = issueTokenName.value;
+    issueTokenName.value = "";
+    await loadUserTokens();
+  } catch (e) {
+    formError.value = errorText(e);
+  } finally {
+    tokenBusy.value = false;
+  }
+}
+async function resetUserToken(token: UserToken) {
+  if (tokenBusy.value || !tokenUser.value) return;
+  tokenBusy.value = true;
+  formError.value = "";
+  try {
+    const result = await api<{ token: string }>(
+      `/users/${encodeURIComponent(String(tokenUser.value.id))}/tokens/${encodeURIComponent(token.id)}/reset`,
+      "POST",
+      {},
+    );
+    issuedSecret.value = result.token;
+    issuedFor.value = token.name;
+    await loadUserTokens();
+  } catch (e) {
+    formError.value = errorText(e);
+  } finally {
+    tokenBusy.value = false;
+  }
+}
+async function revokeUserToken(token: UserToken) {
+  if (tokenBusy.value || !tokenUser.value) return;
+  tokenBusy.value = true;
+  formError.value = "";
+  try {
+    await api(
+      `/users/${encodeURIComponent(String(tokenUser.value.id))}/tokens/${encodeURIComponent(token.id)}`,
+      "DELETE",
+    );
+    notice("API Token 已撤销，使用它的脚本会立刻失效。");
+    await loadUserTokens();
+  } catch (e) {
+    formError.value = errorText(e);
+  } finally {
+    tokenBusy.value = false;
+  }
+}
+// 刚建出来的那一行要高亮扫过一次：保存后列表会重新加载，新行出现在一堆
+// 长得一样的行里，没有任何提示的话用户得自己找。
+const highlighted = ref("");
+let highlightTimer: ReturnType<typeof setTimeout> | undefined;
+function highlight(id: unknown) {
+  clearTimeout(highlightTimer);
+  highlighted.value = String(id);
+  highlightTimer = setTimeout(() => (highlighted.value = ""), 600);
+}
+onUnmounted(() => clearTimeout(highlightTimer));
+// 令牌与过期时间分开存：接入命令要用裸令牌拼，过期时间要单独渲染。
+const tokenExpiry = ref("");
+// 一次性令牌那条命令。地址取浏览器当前的 origin：面板在反向代理后面时，
+// 那正是设备应当访问到的公网地址。
+const origin = location.origin;
+const entryCommand = computed(
+  () =>
+    `bash <(curl -fLsS ${origin}/download/agent-install.sh) -t '${token.value}' -u '${origin}' -n '${tokenName.value}'`,
+);
+const entryManual = computed(
+  () =>
+    `TFP_ENROLLMENT_TOKEN='${token.value}' tfp-agent -panel '${origin}' -name '${tokenName.value}'`,
+);
+const tokenName = ref("");
 const diagnosis = ref<{
   checks: { name: string; ok: boolean; detail: string }[];
 } | null>(null);
@@ -121,7 +274,7 @@ const form = ref({
   group_id: "",
   network: "tcp",
   transport: "direct",
-  listen: ":10000",
+  listen: "",
   target: "",
   enabled: true,
   endpoint: "",
@@ -187,6 +340,8 @@ async function open(row: Row | null = null) {
   selected.value = row;
   formError.value = "";
   token.value = "";
+  tokenExpiry.value = "";
+  tokenName.value = "";
   form.value = {
     exit_group_id: String(row?.exit_group_id || ""),
     exit_id: String(row?.exit_id || "auto"),
@@ -203,7 +358,7 @@ async function open(row: Row | null = null) {
     group_id: String(row?.group_id || ""),
     network: String(row?.network || "tcp"),
     transport: String(row?.transport || "direct"),
-    listen: String(row?.listen || ":10000"),
+    listen: String(row?.listen || ""),
     target: String(row?.target || ""),
     enabled: row?.enabled !== false,
     endpoint: String((row?.tunnel as Row | undefined)?.endpoint || ""),
@@ -314,7 +469,11 @@ function payload(): Row {
         : null,
     ...(f.transport === "direct" || f.exit_group_id
       ? {}
-      : {
+      : f.transport === "direct-tls"
+        ? f.server_name
+          ? { tunnel: { server_name: f.server_name } }
+          : {}
+        : {
           tunnel: {
             endpoint: f.endpoint,
             server_name: f.server_name,
@@ -342,18 +501,25 @@ async function save() {
       resource === "nodes"
         ? "/nodes/enrollment"
         : `/${resource}${selected.value ? "/" + encodeURIComponent(String(selected.value.id)) : ""}`;
-    const result = await api<{ token?: string; expires_at?: string }>(
+    const result = await api<{
+      id?: string;
+      token?: string;
+      expires_at?: string;
+    }>(
       path,
       selected.value ? "PUT" : "POST",
       data,
     );
     if (resource === "nodes") {
-      token.value = `${result.token}\n有效期至 ${formatDateTime(result.expires_at)}（${displayTimeZoneLabel}）`;
+      token.value = String(result.token || "");
+      tokenExpiry.value = String(result.expires_at || "");
+      tokenName.value = String(form.value.name || "");
       initial.value = JSON.stringify(form.value);
     } else {
       editing.value = false;
       notice("已保存。转发规则需等待节点应用回执。");
       await load();
+      highlight(result.id);
     }
   } catch (e) {
     formError.value = errorText(e);
@@ -407,6 +573,47 @@ function query(next: number) {
 }
 watch(() => route.query, load);
 onMounted(load);
+
+// 设备组的固定接入密钥：点「接入设备」时才按组去取。它不进 GET /groups 的
+// 列表响应 —— 那个接口普通用户也能调，而密钥只有管理员该看到。
+async function onboardGroup(group: Row) {
+  onboardTarget.value = group;
+  joinKey.value = "";
+  confirmRotate.value = false;
+  formError.value = "";
+  try {
+    const result = await api<{ join_key: string }>(
+      `/groups/${encodeURIComponent(String(group.id))}/join-key`,
+    );
+    joinKey.value = result.join_key;
+  } catch (e) {
+    formError.value = errorText(e);
+  }
+}
+// 轮换不可逆：已经分发到各处的命令会立刻失效，所以要点两次。
+async function rotateJoinKey() {
+  const group = onboardTarget.value;
+  if (!group || busy.value) return;
+  if (!confirmRotate.value) {
+    confirmRotate.value = true;
+    return;
+  }
+  busy.value = true;
+  formError.value = "";
+  try {
+    const result = await api<{ join_key: string }>(
+      `/groups/${encodeURIComponent(String(group.id))}/join-key`,
+      "POST",
+      {},
+    );
+    joinKey.value = result.join_key;
+    confirmRotate.value = false;
+  } catch (e) {
+    formError.value = errorText(e);
+  } finally {
+    busy.value = false;
+  }
+}
 function value(v: unknown, column: string) {
   if (
     [
@@ -439,7 +646,12 @@ const columns = computed(() =>
       : resource === "groups"
         ? ["name", "blocked_protocols", "multiplier", "port_min", "port_max"]
         : resource === "users"
-          ? ["username", "role", "disabled"]
+        ? ["username", "role", "disabled"]
+        : // 审计的列过去是从首行的对象键里取的，而 Go 的 JSON 编码会把 map 的键
+          // 按字典序排 —— 于是表头冒出 action / id / user_id 这些原始英文键，
+          // 顺序也随字段增删而变。这里写死，和时间一样只是展示口径。
+          resource === "audit"
+          ? ["created_at", "action", "target", "user_id"]
           : Object.keys(rows.value[0] || {}).slice(0, 6),
 );
 const labels: Record<string, string> = {
@@ -462,6 +674,9 @@ const labels: Record<string, string> = {
   role: "角色",
   disabled: "停用",
   created_at: "时间",
+  action: "操作",
+  user_id: "操作者",
+  id: "ID",
 };
 </script>
 <template>
@@ -522,7 +737,11 @@ const labels: Record<string, string> = {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in rows" :key="String(row.id)">
+            <tr
+              v-for="row in rows"
+              :key="String(row.id)"
+              :class="{ 'sweep-in': highlighted === String(row.id) }"
+            >
               <td
                 v-for="col in columns"
                 :key="col"
@@ -538,6 +757,12 @@ const labels: Record<string, string> = {
                 data-label="操作"
               >
                 <div class="toolbar">
+                  <button
+                    v-if="resource === 'groups'"
+                    @click="onboardGroup(row)"
+                  >
+                    接入设备
+                  </button>
                   <button v-if="resource === 'rules'" @click="diagnose(row)">
                     诊断</button
                   ><button
@@ -566,6 +791,12 @@ const labels: Record<string, string> = {
                     "
                   >
                     删除
+                  </button>
+                  <button
+                    v-if="resource === 'users'"
+                    @click="openUserTokens(row)"
+                  >
+                    API 凭据
                   </button>
                   <button
                     v-if="resource === 'users'"
@@ -630,6 +861,104 @@ const labels: Record<string, string> = {
       @close="operationNode = null"
     />
     <Modal
+      v-if="tokenUser"
+      :title="`${tokenUser.username} 的 API 凭据`"
+      :busy="tokenBusy"
+      @close="tokenUser = null"
+    >
+      <p v-if="formError" class="error" role="alert">{{ formError }}</p>
+      <template v-if="issuedSecret">
+        <p class="warning">
+          请立刻把这串密钥交给 {{ tokenUser.username }}。面板只存摘要，关闭之后
+          再也无法查看 —— 弄丢了只能重置。
+        </p>
+        <label v-if="issuedFor"
+          >{{ issuedFor }}<textarea
+            aria-label="API Token 密钥"
+            :value="issuedSecret"
+            readonly
+            rows="3"
+        /></label>
+        <div class="form-actions">
+          <button type="button" class="primary" @click="issuedSecret = ''">
+            已复制，继续管理
+          </button>
+        </div>
+      </template>
+      <template v-else>
+        <p class="muted small">
+          凭据只能访问持有人自己的资源与设备地址接口，不具有管理员权限。
+          有效期可以是有限时长或永久；永久凭据泄露后风险一直存在，用完请撤销。
+        </p>
+        <div v-if="userTokens.length" class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>密钥前缀</th>
+                <th>有效期</th>
+                <th>最近使用</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="t in userTokens" :key="t.id">
+                <td data-label="名称">{{ t.name }}</td>
+                <td data-label="密钥前缀"><code>{{ t.prefix || "—" }}</code></td>
+                <td data-label="有效期">
+                  {{ t.permanent ? "永久有效" : formatDateTime(t.expires_at) }}
+                </td>
+                <td data-label="最近使用">
+                  {{ t.last_used_at ? formatDateTime(t.last_used_at) : "尚未使用" }}
+                </td>
+                <td data-label="操作">
+                  <button :disabled="tokenBusy" @click="resetUserToken(t)">
+                    重置</button
+                  ><button
+                    class="danger"
+                    :disabled="tokenBusy"
+                    @click="revokeUserToken(t)"
+                  >
+                    撤销
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="empty">这个账号还没有 API 凭据。</p>
+        <form @submit.prevent="issueUserToken">
+          <label
+            >凭据名称<input
+              v-model="issueTokenName"
+              required
+              maxlength="190"
+              placeholder="例如：探针脚本" /></label
+          ><label class="check"
+            ><input v-model="issuePermanent" type="checkbox" />永久有效（不过期）</label
+          ><label v-if="!issuePermanent"
+            >有效天数<input
+              v-model.number="issueTokenDays"
+              type="number"
+              min="1"
+              max="364"
+              required
+          /></label>
+          <div class="form-actions">
+            <button
+              class="primary"
+              type="submit"
+              :disabled="tokenBusy"
+              :data-busy="String(tokenBusy)"
+              :aria-busy="tokenBusy"
+            >
+              生成凭据
+            </button>
+          </div>
+        </form>
+      </template>
+    </Modal>
+    <Modal
       v-if="editing"
       :title="
         resource === 'nodes'
@@ -642,15 +971,17 @@ const labels: Record<string, string> = {
       ><form @submit.prevent="save">
         <p v-if="formError" class="error" role="alert">{{ formError }}</p>
         <template v-if="token"
-          ><p>请立即保存凭据，关闭后不再展示。不要发送给未授权人员。</p>
-          <textarea
-            :value="token"
-            readonly
-            rows="5"
-            aria-label="一次性接入凭据"
-          /><button type="button" @click="editing = false">
-            已保存，关闭
-          </button></template
+          ><p class="muted small">
+            下面的接入命令只展示这一次，关闭后无法再次查看。不要发送给未授权人员。
+          </p>
+          <OnboardCommand
+            :command="entryCommand"
+            :manual="entryManual"
+            :expires-at="tokenExpiry"
+          />
+          <div class="form-actions">
+            <button type="button" @click="editing = false">关闭</button>
+          </div></template
         ><template v-else
           ><label v-if="resource !== 'users'"
             >名称<input v-model="form.name" required maxlength="100" /></label
@@ -669,14 +1000,14 @@ const labels: Record<string, string> = {
                 required
                 minlength="12" /></label
             ><label
-              >角色<select v-model="form.role">
+              >角色<Select v-model="form.role">
                 <option value="user">普通用户</option>
                 <option value="admin">管理员</option>
-              </select></label
+              </Select></label
             ></template
           ><template v-if="resource === 'rules'"
             ><label
-              >入口服务器<select
+              >入口服务器<Select
                 v-model="form.node_id" aria-label="入口服务器"
                 required
                 :disabled="!!selected"
@@ -689,9 +1020,9 @@ const labels: Record<string, string> = {
                 >
                   {{ n.name }}
                 </option>
-              </select></label
+              </Select></label
             ><label
-              >设备组<select
+              >设备组<Select
                 v-model="form.group_id" aria-label="设备组"
                 required
                 :disabled="!!selected"
@@ -704,10 +1035,10 @@ const labels: Record<string, string> = {
                 >
                   {{ g.name }}
                 </option>
-              </select></label
+              </Select></label
             >
             <label
-              >出口选择<select v-model="form.exit_group_id" aria-label="出口选择">
+              >出口选择<Select v-model="form.exit_group_id" aria-label="出口选择">
                 <option value="">直接转发或手工配置隧道</option>
                 <option
                   v-for="g in options.groups"
@@ -716,10 +1047,10 @@ const labels: Record<string, string> = {
                 >
                   {{ g.name }} · 出口倍率 {{ g.multiplier }}
                 </option>
-              </select></label
+              </Select></label
             >
             <label v-if="form.exit_group_id"
-              >出口节点<select v-model="form.exit_id" aria-label="出口节点">
+              >出口节点<Select v-model="form.exit_id" aria-label="出口节点">
                 <option value="auto">按权重自动选择</option>
                 <option
                   v-for="e in options.exits.filter(
@@ -730,7 +1061,7 @@ const labels: Record<string, string> = {
                 >
                   {{ e.name }} · {{ e.online ? "在线" : "离线" }}
                 </option>
-              </select></label
+              </Select></label
             >
             <p v-if="form.exit_group_id" class="small muted">
               自动选择该组内授权且在线的出口。流量按入口组倍率 ×
@@ -738,19 +1069,20 @@ const labels: Record<string, string> = {
             </p>
             <div class="form-grid">
               <label
-                >传输层<select v-model="form.network" :disabled="!!selected">
+                >传输层<Select v-model="form.network" :disabled="!!selected">
                   <option value="tcp">TCP</option>
                   <option value="udp">UDP</option>
-                </select></label
+                </Select></label
               ><label
-                >隧道<select v-model="form.transport" aria-label="隧道">
+                >隧道<Select v-model="form.transport" aria-label="隧道">
                   <option
-                    v-for="t in ['direct', 'tls', 'ws', 'wss', 'http']"
-                    :key="t"
+                    v-for="t in transports"
+                    :key="t.value"
+                    :value="t.value"
                   >
-                    {{ t }}
+                    {{ t.label }}
                   </option>
-                </select></label
+                </Select></label
               >
             </div>
             <p class="small muted">
@@ -763,14 +1095,19 @@ const labels: Record<string, string> = {
               >监听地址<input
                 v-model="form.listen"
                 :disabled="!!selected"
-                required
-                placeholder=":10000" /></label
+                placeholder="留空则从设备组端口范围自动分配" /></label
             ><label
               >目标地址<input
                 v-model="form.target"
                 required
                 placeholder="127.0.0.1:8080" /></label
-            ><template v-if="form.transport !== 'direct' && !form.exit_group_id"
+            ><template v-if="form.transport === 'direct-tls' && !form.exit_group_id"
+              ><label
+                >TLS 校验名<input
+                  v-model="form.server_name"
+                  placeholder="留空则用目标地址的主机部分" /></label
+            ></template><template
+              v-else-if="form.transport !== 'direct' && !form.exit_group_id"
               ><label>隧道端点<input v-model="form.endpoint" required /></label
               ><label>TLS 服务器名称<input v-model="form.server_name" /></label
               ><label
@@ -812,7 +1149,7 @@ const labels: Record<string, string> = {
                 >
                   <label :for="`hop-transport-${index}`"
                     >出口 {{ index + 2 }} 承载</label
-                  ><select
+                  ><Select
                     :id="`hop-transport-${index}`"
                     v-model="hop.transport"
                   >
@@ -823,7 +1160,7 @@ const labels: Record<string, string> = {
                     >
                       {{ t }}
                     </option>
-                  </select>
+                  </Select>
                   <label
                     >出口 {{ index + 2 }} 端点<input
                       v-model="hop.endpoint"
@@ -865,17 +1202,17 @@ const labels: Record<string, string> = {
               <legend>Proxy Protocol</legend>
               <div class="form-grid">
                 <label
-                  >接收<select v-model="form.proxy_accept" aria-label="接收">
+                  >接收<Select v-model="form.proxy_accept" aria-label="接收">
                     <option value="off">关闭</option>
                     <option value="v1">v1</option>
                     <option value="v2">v2</option>
-                  </select></label
+                  </Select></label
                 ><label
-                  >发送<select v-model="form.proxy_send" aria-label="发送">
+                  >发送<Select v-model="form.proxy_send" aria-label="发送">
                     <option value="off">关闭</option>
                     <option value="v1">v1</option>
                     <option value="v2">v2</option>
-                  </select></label
+                  </Select></label
                 >
               </div>
               <label v-if="form.proxy_accept !== 'off'"
@@ -1058,8 +1395,13 @@ const labels: Record<string, string> = {
             >
           </fieldset>
           <div class="form-actions">
-            <button class="primary" :disabled="busy">
-              {{ busy ? "正在提交…" : "保存" }}
+            <button
+              class="primary"
+              :disabled="busy"
+              :data-busy="String(busy)"
+              :aria-busy="busy"
+            >
+              保存
             </button>
           </div></template
         >
@@ -1071,9 +1413,11 @@ const labels: Record<string, string> = {
       @close="deleting = null"
       ><p>确认删除 {{ deleting.name }}？现有转发会在节点应用配置后停止。</p>
       <p v-if="formError" class="error" role="alert">{{ formError }}</p>
-      <button class="danger" :disabled="busy" @click="remove">
-        确认删除
-      </button></Modal
+      <div class="form-actions">
+        <button class="danger" :disabled="busy" @click="remove">
+          确认删除
+        </button>
+      </div></Modal
     >
     <Modal
       v-if="statusTarget"
@@ -1086,9 +1430,46 @@ const labels: Record<string, string> = {
         Token，并更新节点转发权限。
       </p>
       <p v-if="formError" class="error" role="alert">{{ formError }}</p>
-      <button :disabled="busy" @click="changeStatus">
-        确认修改状态
-      </button></Modal
+      <div class="form-actions">
+        <button :disabled="busy" @click="changeStatus">
+          确认修改状态
+        </button>
+      </div></Modal
+    >
+    <Modal
+      v-if="onboardTarget"
+      :title="`接入设备 · ${onboardTarget.name}`"
+      :busy="busy"
+      @close="
+        onboardTarget = null;
+        confirmRotate = false;
+      "
+      ><p v-if="formError" class="error" role="alert">{{ formError }}</p>
+      <p v-else-if="!joinKey" class="empty">正在读取接入密钥…</p>
+      <OnboardPanel v-else :access-key="joinKey" />
+      <div v-if="joinKey" class="actions">
+        <button
+          type="button"
+          class="danger"
+          :disabled="busy"
+          @click="rotateJoinKey"
+        >
+          {{
+            confirmRotate ? "确认轮换，已分发的命令将立即失效" : "轮换接入密钥"
+          }}
+        </button>
+        <button
+          v-if="confirmRotate"
+          type="button"
+          :disabled="busy"
+          @click="confirmRotate = false"
+        >
+          取消
+        </button>
+      </div>
+      <div class="form-actions">
+        <button type="button" @click="onboardTarget = null">关闭</button>
+      </div></Modal
     >
   </section>
 </template>

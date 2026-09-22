@@ -10,24 +10,36 @@
 | GET /auth/session | 无 | `{user: User}`；未登录 401 |
 | POST /auth/logout | `{}` | 204 |
 | POST /auth/password | `{current_password,password}` | 204；撤销旧会话和 Token |
-| GET /auth/tokens | 无 | 当前用户 Token 元数据，不返回明文/哈希 |
-| POST /auth/tokens | `{name,expires_at}` | `{id,token,expires_at,scope}`；仅创建时返回明文，最长一年 |
+| GET /auth/tokens | 分页 | 本人 Token 元数据（`id,name,prefix,scope,created_at,expires_at,permanent,last_used_at`），不返回明文/哈希 |
+| POST /auth/tokens | `{name,expires_at}` 或 `{name,permanent:true}` | `{id,token,name,prefix,expires_at,permanent,scope}`；仅创建时返回明文；有限期最长一年，`permanent` 需显式声明 |
 | DELETE /auth/tokens/{id} | 无 | 204；只能撤销本人 Token |
+| GET /users/{id}/tokens | 分页 | 管理员读取某账号的 Token 元数据；与本人视图同形，不返回明文/哈希 |
+| POST /users/{id}/tokens | 同 `POST /auth/tokens` | 管理员为账号签发；明文只在这一条响应里出现，交由用户保存 |
+| POST /users/{id}/tokens/{token_id}/reset | `{}` | 管理员就地换取新明文（同一 id/名称/有效期），旧密钥立即失效；明文同样只出现一次 |
+| DELETE /users/{id}/tokens/{token_id} | 无 | 204；管理员撤销某账号的 Token |
 | GET /users | 分页 | 管理员 User 列表 |
 | POST /users | `{username,password,role}` | 管理员创建 |
 | PUT /users/{id}/status | `{disabled}` | 管理员停用/启用，保留最后一个管理员 |
 | GET /groups | 分页 | 授权 Group 列表 |
 | POST /groups | `{name,user_ids,blocked_protocols,multiplier,port_min,port_max}` | 管理员 Group |
 | PUT /groups/{id} | 同上加 version | 管理员乐观锁 |
+| GET /groups/{id}/join-key | —— | 管理员 `{group_id,join_key}`，设备组的固定接入密钥；可随时再次读取 |
+| POST /groups/{id}/join-key | `{}` | 管理员 `{group_id,join_key}`，轮换后已分发出去的接入命令立即失效 |
 | GET /nodes | 分页 | 授权 Node 列表 |
 | POST /nodes/enrollment | `{name,group_ids}` | 管理员 `{token,expires_at}`，仅展示一次 |
 | POST /nodes/{id}/rotate-token | `{}` | 管理员；返回新凭据，旧节点凭据失效 |
+| POST /nodes/{id}/looking-glass | `{method,target}` | 管理员（Cookie 会话）；在节点上跑 ping / tcping / mtr，返回 `{id,status}`，结果用下面那条轮询 |
+| GET /looking-glass/{id} | —— | 创建者或管理员；`{status,output,error}`，两分钟内没被节点领走即 `expired` |
 | GET /rules | 分页 | 管理员全局/用户自有 Rule；无 tunnel.token、chain各跳token、lease |
 | POST /rules | `{name,node_id,group_id,network,transport,listen,target,enabled,tunnel?}` | Rule；管理员可指定 user_id |
+
+> 规则的 `listen` 留空时，面板会从**设备组允许的端口范围**里随机分配一个尚未预留的端口（随机起点 + 环形扫描，避免总挑到同一个或撞上端口预留）；显式给出则原样使用。
 | PUT /rules/{id} | 规则字段加 version | 乐观锁 |
 | DELETE /rules/{id}?version=N | 无 | 204；待节点确认解绑才释放端口 |
-| GET /probes | 无 | `{items: Probe[]}`；授权过滤，普通用户隐藏 public_ips |
-| GET /probes/events | 无 | SSE `event: probes` + 同上 JSON，每 5 秒重校验身份/授权 |
+| GET /probes | 可选 `group_id` | `{items: Probe[]}`；付费能力，需有效权益；只含授权设备组的机器，`group_id` 非本人所属组时 403。补 `node_name/group_ids/location`；普通用户隐藏 public_ips 但保留位置图标 |
+| GET /probes/events | 可选 `group_id` | SSE `event: probes` + 同上 JSON，每 5 秒重校验身份/授权 |
+| GET /online/device/ip | 可选 `group_id` | 探针页面预留的脚本接口：当前可见范围内**唯一**那台设备的 `{device:{...}}`；多台返回 409 并提示改用列表，无设备返回 404 |
+| GET /online/device/ip/list | 可选 `group_id` | `{items:[DeviceIP],total}`；一组多台时用它。机器被替换 `node_id` 变、只换 IP 时 `address/observed_at` 变，调用方无需改代码 |
 | GET /probes/{node_id}/history | `resolution=minute\|hour&from=RFC3339&to=RFC3339` | 授权节点聚合历史；无权限与节点不存在均404 |
 | GET /audit | 分页 | 管理员审计列表 |
 | GET /health | 无 | `{status,database,version}`，不含 DSN |
@@ -50,13 +62,19 @@
 
 共享 Go 类型见 `internal/contract/types.go`。探针实时接口先实现 SSE；WebSocket 作为后续相同权限语义传输适配，不能混称隧道 WSS。
 
-已挂载商业接口：`GET/POST /plans`（创建仅管理员）、`GET /wallet`、`GET /ledger`、`GET /orders`、`POST /orders`、`POST /purchases`、`GET /entitlement`、`GET /payment-channels`。plans/orders/ledger 使用统一分页，钱包/订单/账本/权益只能读当前用户。购买请求 `{plan_id,expected_version,idempotency_key}`；充值 `{channel,amount_cents,idempotency_key}`。先充值钱包，再余额购买，立即新周期/新有效期，旧事实不删除。
+`DeviceIP`：`{node_id,node_name,group_id,group_name,address,family,source,observed_at,online,last_seen?,location?}`。`address` 取该节点最近一次观测到的对外地址，**优先 IPv4**（客户拿它去连服务）；`online` 按最近心跳判断；`location` 是 `{country_code,country_name?,region?,city?,source}`，来自站点设置里的地区查询服务，查不到就没有这个字段 —— 客户端要能接受缺失。接口带 `Authorization: Bearer <API Token>`，也接受同源 Cookie 会话；`/online/device/ip` 与 `/online/device/ip/list` 两个不带 `/api/v1` 前缀的路径是为客户脚本保留的稳定入口，与带前缀的同名接口等价。
+
+已挂载商业接口：`GET/POST /plans`（创建仅管理员）、`GET /wallet`、`GET /ledger`、`GET /orders`、`POST /orders`、`POST /purchases`、`GET /entitlement`、`GET /payment-channels`。plans/orders/ledger 使用统一分页，钱包/订单/账本/权益只能读当前用户。购买请求 `{plan_id,expected_version,idempotency_key}`；充值 `{channel,amount,idempotency_key}`，金额**以元计**（`amount_cents` 仍兼容旧客户端，两者只能给一个）。先充值钱包，再余额购买，立即新周期/新有效期，旧事实不删除。
+
+通道级手续费与汇率：`payments.json` 的每条通道可设 `fee_percent`（百分数，最多两位小数）与 `fee_fixed`（元），手续费**加在充值金额之上** —— 钱包到账仍是用户填写的金额，实付是 `到账 + 手续费`，两者分别记在订单的 `amount_cents` 与 `payable_cents/fee_cents` 上，回调按实付核对、按到账入账。`rate` 是「1 单位加密货币折多少人民币」，`crypto_currency` 指定币种，用于给用户折算应付的 USDT（订单里是 `payable_crypto`）：Cryptomus/BEpusdt 下单时只收人民币金额由网关换算，TokenPay 以 `BaseCurrency` 计价，所以**网关侧要配同一个汇率**，报价与实收才会一致。`GET /payment-channels` 会返回 `fee_percent/fee_fixed/crypto_currency/rate` 供前端报价。
 
 `POST /orders/{id}/reconcile` 主动核对本人订单。`payment_uncertain` HTTP409 表示创建结果待核实，应保留原幂等键并查询订单；同键改金额或渠道冲突，不新建外部付款。`unsupported` HTTP422 表示该协议没有查单能力，不代表已付或失败。金额/订单号/币种验证与回调共用唯一入账事务。`POST /payments/{channel}/notify` 为供应商验签通知；EPay 还接受 GET。不得用浏览器返回页当作到账凭据。
 
 服务模式同时运行后台核对：每轮最多20单，查单每次15秒超时，重试按30秒起步至1小时退避且持久保存。没有查单能力的协议不调度；未知或查单失败保留pending，未伪装成已付/失败。恢复旧备份后的缺失调度记录会有界补齐。服务退出取消worker，数据库关闭前等待退出；本机管理命令不启动worker。
 
 Token 目前固定 `owner-resources` 范围：即使创建者是管理员，Bearer 请求也按普通用户资源权限处理；不提供管理员自动化权限或任意自定义 scope。
+
+Token 明文只在**创建或重置**的那一次响应里出现（库里只有 SHA-256 摘要），列表只给 `prefix`（明文前 8 位）用于辨认是哪一把。丢失或泄露的唯一补救是重置（同一行换新密钥、旧密钥立刻失效）或撤销重发。有效期二选一：`expires_at`（一年以内）或 `permanent:true`；两者都不给或都给一律 400，避免"忘了填就发了一把不过期的钥匙"。永久凭据在库里写 `expires_at=0`。`last_used_at` 按分钟节流更新，供运营方判断哪把凭据还在被使用。管理员在后台创建账号后即可代发凭据交给用户（`POST /users/{id}/tokens`），账号列表页直接展示前缀、有效期与最近使用，可就地重置或撤销。
 
 **规则与隧道**
 
@@ -150,7 +168,7 @@ Agent必须声明 `resource-limits-v1` 才会收到非零限制的规则；`POST
 
 | 方法/路径 | 请求 | 结果与权限 |
 |---|---|---|
-| GET /site | 无 | 公开 SiteSettings；默认关闭注册 |
+| GET /site | 无 | 公开 SiteSettings；默认关闭注册；金额与充值区间以元返回 |
 | PUT /site | SiteSettings，原 version | 管理员版本化保存；名称/公告为纯文本 |
 | GET /auth/captcha | 无 | 一次性图片验证码；3分钟有效，失败尝试也消费 |
 | POST /auth/register | `{username,password,invite?,captcha_id?,captcha_answer?}` | 普通账号注册，受开放/邀请模式及验证码控制 |
@@ -165,7 +183,7 @@ Agent必须声明 `resource-limits-v1` 才会收到非零限制的规则；`POST
 | GET /purchases/{id}/funding | 无 | 购买所有者/管理员读取来源分摊 |
 | POST /purchases/{id}/refund | `{amount_cents,idempotency_key,reason}` | 管理员购买退款，恢复原来源余额、移除可退配额并回冲佣金 |
 
-SiteSettings 包含 `version,name,announcement,registration,captcha,accent,payments_enabled,minimum_recharge_cents,maximum_recharge_cents,diagnostics_enabled,diagnostics_per_minute`。金额为分的十进制字符串，注册为 `closed|open|invite`；诊断每分钟1..30次。充值限制仅控制新订单，既有回调/查单继续。开启验证码后，登录与注册都提交 `captcha_id/captcha_answer`。
+SiteSettings 包含 `version,name,announcement,registration,captcha,accent,payments_enabled,currency,minimum_recharge,maximum_recharge,diagnostics_enabled,diagnostics_per_minute,geo_lookup_url`。**对外金额单位是元**（`"1.00"`，最多两位小数的十进制字符串），结算币种 `currency` 固定为 `CNY`；账本内部仍按整数分记账，换算只在边界发生。旧文档里的 `minimum_recharge_cents/maximum_recharge_cents` 仍能读回并自动换算成元，保存时不再写出。注册为 `closed|open|invite`；诊断每分钟1..30次。充值限制按**到账金额**控制新订单，既有回调/查单继续。`geo_lookup_url` 是探针位置图标的地区查询模板，必须 HTTPS 且含 `{ip}`，留空即关闭。开启验证码后，登录与注册都提交 `captcha_id,captcha_answer`。
 
 Rule 新增 `exit_group_id`、`exit_id`（具体ID或 `auto`），服务端生成 `selected_exit_id,billing_multiplier,exit_unavailable`。受管模式不公开底层 tunnel；授权组过滤、节点心跳、入口/出口协议策略和防同节点选路均在控制面校验。`auto` 使用加权稳定选择，路由改变重新下发并撤销旧租约。
 

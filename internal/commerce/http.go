@@ -160,20 +160,36 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 	mux.HandleFunc("POST /api/v1/orders", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
 		var p struct {
 			Channel string `json:"channel"`
-			Amount  int64  `json:"amount_cents,string"`
-			Key     string `json:"idempotency_key"`
+			// 充值金额以元为单位（"100" 或 "100.00"）；amount_cents 是为旧
+			// 客户端保留的兼容字段，两者只能给一个。
+			Yuan   string `json:"amount"`
+			Amount int64  `json:"amount_cents,string"`
+			Key    string `json:"idempotency_key"`
 		}
 		if e := decode(w, r, &p); e != nil {
 			send(w, nil, e)
 			return
 		}
+		amount := p.Amount
+		if strings.TrimSpace(p.Yuan) != "" {
+			if amount != 0 {
+				send(w, nil, errors.New("amount 与 amount_cents 只能给一个"))
+				return
+			}
+			parsed, err := contract.ParseAmount(p.Yuan)
+			if err != nil {
+				send(w, nil, err)
+				return
+			}
+			amount = parsed
+		}
 		var v Order
 		var e error
 		if channel, ok := o.Channels[p.Channel]; ok {
 			ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-			v, e = s.CreateAdapterOrder(r.Context(), u.ID, p.Channel, p.Key, p.Amount, channel, ip)
+			v, e = s.CreateAdapterOrder(r.Context(), u.ID, p.Channel, p.Key, amount, channel, ip)
 		} else {
-			v, e = s.CreateOrder(r.Context(), u.ID, p.Channel, p.Key, p.Amount, o.EPay)
+			v, e = s.CreateOrder(r.Context(), u.ID, p.Channel, p.Key, amount, o.EPay)
 		}
 		send(w, v, e)
 	}))
@@ -445,16 +461,22 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		send(w, map[string]any{"items": v}, e)
 	}))
 	mux.HandleFunc("GET /api/v1/payment-channels", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		// 通道列表同时是报价来源：前端拿 fee 与 rate 就能算出「充值 100 元
+		// 实付多少、折合多少 USDT」，不必自己再猜一遍规则。
 		type channel struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Enabled bool   `json:"enabled"`
-			Status  string `json:"status"`
-			Reason  string `json:"reason"`
+			ID             string `json:"id"`
+			Name           string `json:"name"`
+			Enabled        bool   `json:"enabled"`
+			Status         string `json:"status"`
+			Reason         string `json:"reason"`
+			FeePercent     string `json:"fee_percent"`
+			FeeFixed       string `json:"fee_fixed"`
+			CryptoCurrency string `json:"crypto_currency,omitempty"`
+			Rate           string `json:"rate,omitempty"`
 		}
 		list := []channel{}
 		for _, name := range []string{"epay", "epusdt", "bepusdt", "tokenpay", "cryptomus"} {
-			c := channel{ID: name, Name: name, Status: "unconfigured", Reason: "merchant configuration required"}
+			c := channel{ID: name, Name: name, Status: "unconfigured", Reason: "merchant configuration required", FeePercent: "0.00", FeeFixed: "0.00"}
 			if name == "epay" {
 				c.Status = "unconfigured"
 				c.Reason = "merchant configuration required"
@@ -468,6 +490,10 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 				c.Enabled = true
 				c.Status = "configured_unverified"
 				c.Reason = "merchant end-to-end verification not recorded"
+				c.FeePercent = contract.FormatAmount(int64(channel.FeeBPS))
+				c.FeeFixed = contract.FormatAmount(channel.FeeFixed)
+				c.CryptoCurrency = channel.CryptoCurrency
+				c.Rate = channel.Rate
 			}
 			list = append(list, c)
 		}

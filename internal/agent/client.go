@@ -103,6 +103,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	diagnosticDone := make(chan struct{})
 	go func() { defer close(diagnosticDone); a.runDiagnostics(diagnosticCtx) }()
 	defer func() { diagnosticCancel(); <-diagnosticDone }()
+	// 网络诊断（LookingGlass）。与终端不同，这条通道只做 ping / tcping / mtr，
+	// 参数结构化、不经过 shell，所以不需要 -enable-terminal。
+	glassCtx, glassCancel := context.WithCancel(ctx)
+	glassDone := make(chan struct{})
+	go func() { defer close(glassDone); a.runLookingGlass(glassCtx) }()
+	defer func() { glassCancel(); <-glassDone }()
 	interval := a.PollInterval
 	if interval == 0 {
 		interval = 5 * time.Second
@@ -222,5 +228,5 @@ func (a *Agent) retire(ctx context.Context) error {
 }
 
 func capabilities() []string {
-	return []string{"tcp", "udp", "direct", "tls", "ws", "wss", "http", "chain:3", "resource-limits-v1", "advanced-routing-v1", "proxy-protocol-v1", "diagnostics-v1", "block:http", "block:socks", "probe"}
+	return []string{"tcp", "udp", "direct", "direct-tls", "tls", "ws", "wss", "http", "chain:3", "resource-limits-v1", "advanced-routing-v1", "proxy-protocol-v1", "diagnostics-v1", "block:http", "block:socks", "looking-glass-v1", "probe"}
 }

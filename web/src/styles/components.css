@@ -1,453 +1,1565 @@
-.shell {
-  height: 100dvh;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-}
+/**
+ * 结构与视觉表现。
+ *
+ * ── 两条贯穿全文件的规则 ──────────────────────────────────────
+ *
+ * 1. **backdrop-filter 只用在真有内容从底下滚过的表面**：侧栏、顶栏、
+ *    对话框、toast。内容卡片一律实色 —— 给几十张卡片加模糊会白烧帧率，
+ *    而且在平滑渐变上看起来一模一样。
+ *
+ * 2. **环境光 orb 用 radial-gradient 绘制，不用 filter: blur()** ——
+ *    半视口大小的模糊元素每帧都会重新栅格化。漂移只动 translate3d，
+ *    从不 scale，周期 72–96 秒。移动大了像屏保，与「高级」是相反方向。
+ */
+
+/* ══════════════════ 环境光晕 ══════════════════ */
+
+/**
+ * 这是磨砂能读得出来的前提。
+ *
+ * backdrop-filter 只是把背后的内容模糊掉。如果背后是纯色，模糊之后还是
+ * 一块纯色 —— 面板看起来就只是「稍微亮一点的板子」。
+ *
+ * 位置是这里最关键的设计决策：光斑必须落在**磨砂表面覆盖的区域**上，
+ * 也就是左侧竖条（侧栏）与顶部横条（顶栏）的交汇处。放在对角线上没用，
+ * 因为那两处背后什么都没有，它们依然是死板的深色块。
+ */
 .ambient {
   position: fixed;
   inset: 0;
+  z-index: 0;
+  overflow: hidden;
   pointer-events: none;
+}
+
+.ambient-orb {
+  position: absolute;
+  border-radius: 50%;
+  opacity: var(--ambient-opacity, 0.5);
+  will-change: transform;
+}
+
+/* 漂移只动 translate3d，从不 scale */
+@keyframes drift-a {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(6%, 4%, 0);
+  }
+}
+@keyframes drift-b {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(-5%, 6%, 0);
+  }
+}
+@keyframes drift-c {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(4%, -5%, 0);
+  }
+}
+
+/* 左上：压在侧栏与顶栏的交汇处。这是最重要的一盏 ——
+   侧栏的磨砂能不能读出来，几乎全看它。 */
+.ambient-orb-a {
+  width: 780px;
+  height: 780px;
+  top: -180px;
+  left: -160px;
+  /* 多控制点把线性衰减做成近似高斯：两点式的「实心圆 + 柔和边」在近黑底上
+     会被读成一个盘子，而参考面板用 filter: blur() 得到的是一团光。
+     blur 每帧重新栅格化半视口大小的元素，这里用色标曲线换同样的观感。 */
   background: radial-gradient(
-    ellipse at 15% 0%,
-    color-mix(in oklch, var(--accent) 9%, transparent),
-    transparent 55%
+    circle,
+    var(--orb-a) 0%,
+    color-mix(in oklab, var(--orb-a) 62%, transparent) 30%,
+    color-mix(in oklab, var(--orb-a) 24%, transparent) 52%,
+    transparent 70%
+  );
+  animation: drift-a 84s ease-in-out infinite;
+}
+/* 顶部中段：让顶栏的磨砂有连续的、横跨的水平色带 */
+.ambient-orb-b {
+  width: 900px;
+  height: 480px;
+  top: -300px;
+  left: 28%;
+  background: radial-gradient(
+    circle,
+    var(--orb-b) 0%,
+    color-mix(in oklab, var(--orb-b) 62%, transparent) 30%,
+    color-mix(in oklab, var(--orb-b) 24%, transparent) 52%,
+    transparent 70%
+  );
+  animation: drift-b 96s ease-in-out infinite;
+}
+/* 右下：给画面下缘一点紫罗兰色温，同时避免整体偏冷成企业蓝 */
+.ambient-orb-c {
+  width: 820px;
+  height: 820px;
+  bottom: -400px;
+  right: -240px;
+  background: radial-gradient(
+    circle,
+    var(--orb-c) 0%,
+    color-mix(in oklab, var(--orb-c) 62%, transparent) 30%,
+    color-mix(in oklab, var(--orb-c) 24%, transparent) 52%,
+    transparent 70%
+  );
+  animation: drift-c 78s ease-in-out infinite;
+}
+/* 中部偏右：青色点缀。三个以上光斑才有纵深感 ——
+   两个容易看成一条对角线，三个以上才会读成「空间」。 */
+.ambient-orb-d {
+  width: 640px;
+  height: 640px;
+  top: 34%;
+  left: 48%;
+  background: radial-gradient(
+    circle,
+    var(--orb-d) 0%,
+    color-mix(in oklab, var(--orb-d) 62%, transparent) 30%,
+    color-mix(in oklab, var(--orb-d) 24%, transparent) 52%,
+    transparent 70%
+  );
+  opacity: calc(var(--ambient-opacity, 0.5) * 0.55);
+  animation: drift-a 108s ease-in-out infinite reverse;
+}
+
+/* ══════════════════ 表面 ══════════════════ */
+
+/**
+ * 光标聚光用到的三个量注册成 @property，各自有两处必要：
+ *   --spot-x / --spot-y 必须 inherits: false —— 它们是未注册时会被子元素
+ *     继承的自定义属性，鼠标每动一像素都要让整棵子树失效重算。
+ *   --spot-alpha 需要可过渡，才能在指针进入时淡入而不是「啪」地贴上
+ *     一块色块（8% 的强度下这是唯一能看出差别的地方）。
+ * 不支持 @property 的引擎会退化成「立即出现」，功能不受影响。
+ */
+@property --spot-x {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --spot-y {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --spot-alpha {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+/**
+ * 标准卡片。关键在于 border 与 inset 高光**一起**用：
+ * 只有 border 会显得平，只有高光在浅色下又会消失。
+ *
+ * 聚光的强度刻意压得很低（8%）：看得见的是「质感」，看得清的是「特效」，
+ * 后者是廉价的。它画在卡片自己的背景里，因此永远在文字**下面**，
+ * 不会像伪元素那样把正文洗淡。
+ */
+.surface {
+  background-color: var(--color-bg-1);
+  border: 0;
+  box-shadow: inset 0 1px 0 var(--color-highlight);
+  transition: --spot-alpha var(--duration-state) var(--ease-state);
+  background-image: radial-gradient(
+    240px circle at var(--spot-x) var(--spot-y),
+    color-mix(in oklab, var(--spot-color) calc(var(--spot-alpha) * 100%), transparent),
+    transparent 70%
   );
 }
+.surface:hover {
+  --spot-alpha: 1;
+}
+
+.surface-2 {
+  background: var(--color-bg-2);
+  border: 0;
+  box-shadow: inset 0 1px 0 var(--color-highlight);
+}
+
+/**
+ * 磨砂表面。
+ *
+ * saturate(180%) 是让模糊「有颜色」的关键：纯 blur 会把背后的环境光晕
+ * 洗成灰色，加饱和度才能透出那一层蓝紫色调。
+ *
+ * 代价是文字对比度会降一点，所以玻璃层只用在框架与浮层上 ——
+ * 正文卡片一律走 .surface 的实色。
+ */
+.glass {
+  background: color-mix(
+    in oklab,
+    var(--glass-base) var(--glass-alpha),
+    transparent
+  );
+  backdrop-filter: blur(24px) saturate(180%);
+}
+
+/* 更厚的一档，用于浮在内容最上层的模态。比 .glass 更不透明：
+   浮层上要读文字，不能为了好看牺牲可读性。 */
+.glass-deep {
+  background: color-mix(
+    in oklab,
+    var(--glass-deep-base) var(--glass-deep-alpha),
+    transparent
+  );
+  backdrop-filter: blur(32px) saturate(190%);
+}
+
+/* ══════════════════ 品牌 ══════════════════ */
+
+.brand-gradient {
+  background: linear-gradient(
+    125deg,
+    var(--color-accent-bright),
+    var(--color-brand-to)
+  );
+}
+
+/* ══════════════════ 外壳 ══════════════════ */
+
+/**
+ * 外壳是固定视口列：文档本身永不滚动，#view 是唯一滚动容器。
+ * .shell 必须是全高 flex 列 —— 这是 .layout 的 flex:1 能生效、
+ * #view 能拿到有界高度的前提。链条中任何一层退回普通块级元素，
+ * #view 的 overflow-y:auto 就不会触发，折叠线以下的内容会被裁掉。
+ */
+.shell {
+  position: relative;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  z-index: 1;
+}
+
 .layout {
+  position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
-  position: relative;
+  z-index: 1;
 }
+
+/* ── 侧栏 ─────────────────────────────────────────────── */
+
 .sidebar {
-  width: 244px;
-  flex: none;
-  border-right: 1px solid var(--line);
-  padding: 28px 18px;
   display: flex;
   flex-direction: column;
-  background: color-mix(in srgb, var(--surface) 75%, transparent);
-  backdrop-filter: blur(16px);
+  flex: none;
+  width: var(--shell-sidebar);
+  border-right: 1px solid var(--color-line-faint);
 }
+
 .brand {
   display: flex;
-  gap: 12px;
   align-items: center;
-  color: var(--ink);
+  gap: var(--space-2);
+  height: var(--shell-topbar);
+  flex: none;
+  padding: 0 var(--space-4);
+  color: var(--color-ink);
   text-decoration: none;
-  font-weight: 650;
-  font-size: 17px;
-  letter-spacing: -0.4px;
 }
-.brand small {
-  display: block;
-  font-size: 10px;
-  font-weight: 400;
-  color: var(--muted);
-  margin-top: 2px;
-}
+
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 42px;
-  border-radius: 12px;
-  background: var(--accent);
-  color: var(--on-accent);
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-lg);
+  color: var(--color-on-accent);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28);
 }
+.brand-mark .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.brand-name {
+  display: block;
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.brand small {
+  display: block;
+  font-size: var(--text-2xs);
+  line-height: var(--text-2xs--line-height);
+  font-weight: 400;
+  color: var(--color-ink-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .nav-caption {
-  font-size: 10px;
-  letter-spacing: 2px;
-  color: var(--muted);
-  margin: 40px 12px 12px;
+  font-size: var(--text-2xs);
+  line-height: var(--text-2xs--line-height);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-ink-faint);
+  margin: var(--space-4) var(--space-3) var(--space-2);
 }
+
 nav {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) 10px;
 }
+
 nav a {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 13px;
-  color: var(--muted);
-  padding: 11px 13px;
-  border-radius: 9px;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--radius-lg);
+  color: var(--color-ink-muted);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
   text-decoration: none;
-  font-weight: 500;
-}
-nav a[aria-current="page"] {
-  background: color-mix(in oklch, var(--accent) 10%, transparent);
-  color: var(--accent);
+  transition:
+    background-color var(--duration-micro) var(--ease-state),
+    color var(--duration-micro) var(--ease-state);
 }
 nav a:hover {
-  background: var(--hover);
+  background: var(--color-hover);
+  color: var(--color-ink);
 }
+nav a .icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* 当前项：中性 alpha 叠加 + 提亮文字，图标转品牌色。
+   不用整项染品牌色 —— 那样每一套配色都要重新验一遍可读性。 */
+nav a[aria-current="page"] {
+  background: var(--color-active);
+  color: var(--color-ink);
+  font-weight: 500;
+}
+nav a[aria-current="page"] .icon {
+  color: var(--color-accent-bright);
+}
+
+/* 滑动指示条：一个独立元素在导航项之间滑动，而不是每项各画一条。
+   差别不只是省几个节点 —— 换页因此变成一次连续的运动。 */
+.nav-indicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  pointer-events: none;
+  transition: transform var(--duration-layout) var(--ease-expo);
+}
+.nav-indicator[data-ready="false"] {
+  transition: none;
+}
+
 .sidebar-foot {
-  margin-top: auto;
-  padding: 20px 10px 0;
-  color: var(--muted);
-  font-size: 11px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-top: 1px solid var(--color-line-faint);
+  padding: 10px var(--space-3);
+  font-size: var(--text-xs);
+  line-height: var(--text-xs--line-height);
+  color: var(--color-ink-subtle);
 }
+
 .status-dot {
   display: inline-block;
-  border-radius: 50%;
   width: 6px;
   height: 6px;
-  background: var(--accent);
-  margin-right: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-accent);
 }
+
+/* ── 内容区 ───────────────────────────────────────────── */
+
 .content {
   display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
   min-height: 0;
-  flex-direction: column;
 }
+
+/* 顶栏吸在内容之上，内容滚到它下面时能透出一点，边界因此显得柔和 */
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  min-height: 76px;
-  padding: 16px 36px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface) 70%, transparent);
-  backdrop-filter: blur(16px);
+  gap: var(--space-4);
+  flex: none;
+  height: var(--shell-topbar);
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--color-line-faint);
 }
+
+.topbar > span:first-child,
+.topbar-title {
+  font-size: var(--text-base);
+  line-height: var(--text-base--line-height);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
+/* 顶栏的下拉与它旁边的按钮同属一组，所以走同一套幽灵样式 —— 一个带边框的
+   实心控件夹在几个幽灵按钮中间，会显得比它本身重要。 */
 .toolbar select {
-  max-width: 110px;
-  padding: 7px;
+  height: 32px;
+  padding: 0 26px 0 10px;
+  border-color: transparent;
+  border-radius: var(--radius-lg);
+  background-color: transparent;
+  background-position: right 7px center;
+  background-size: 14px 14px;
+  box-shadow: none;
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
 }
+.toolbar select:hover {
+  background-color: var(--color-hover);
+  border-color: transparent;
+  color: var(--color-ink);
+}
+.toolbar .username {
+  font-size: var(--text-xs);
+  color: var(--color-ink-muted);
+}
+.toolbar button {
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+  border-radius: var(--radius-lg);
+}
+.toolbar button:hover {
+  background: var(--color-hover);
+  color: var(--color-ink);
+}
+.toolbar button:has(.icon) {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+}
+.toolbar button .icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* 滚动发生在这里，而不是 body —— 顶栏与侧栏才能真正「吸」在上面 */
 #view {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 36px;
+  padding: var(--space-8);
 }
+
+/* 内边距挂在外壳的滚动容器上，页面自己只管居中和宽度 ——
+   这样登录页、启动失败页与业务页共享同一套边距，不会有哪个漏掉。 */
 .page {
-  max-width: 1440px;
-  margin: auto;
+  max-width: var(--page-max);
+  margin: 0 auto;
 }
+
 .page-heading {
   display: flex;
-  gap: 20px;
+  align-items: flex-start;
   justify-content: space-between;
-  align-items: center;
-  margin: 0 0 28px;
+  gap: var(--space-5);
+  margin: 0 0 var(--space-6);
 }
+.page-heading h1 {
+  margin: 0 0 var(--space-1);
+}
+.page-heading p.muted {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  max-width: 68ch;
+}
+
 .eyebrow {
-  font-size: 10px;
-  letter-spacing: 2.2px;
-  font-weight: 650;
-  color: var(--accent);
+  font-size: var(--text-2xs);
+  line-height: var(--text-2xs--line-height);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--color-ink-subtle);
+  margin: 0 0 var(--space-1);
 }
+
+.section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+}
+.section-heading h2,
+.section-heading h3 {
+  margin: 0;
+}
+
+/* ══════════════════ 卡片 ══════════════════ */
+
 .card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 24px;
-  margin-bottom: 20px;
-  box-shadow: inset 0 1px #ffffff0b;
+  background-color: var(--color-bg-1);
+  border: 0;
+  box-shadow: inset 0 1px 0 var(--color-highlight);
+  border-radius: var(--radius-2xl);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
   min-width: 0;
+  transition: --spot-alpha var(--duration-state) var(--ease-state);
+  background-image: radial-gradient(
+    240px circle at var(--spot-x) var(--spot-y),
+    color-mix(in oklab, var(--spot-color) calc(var(--spot-alpha) * 100%), transparent),
+    transparent 70%
+  );
 }
+.card:hover {
+  --spot-alpha: 1;
+}
+
 .stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 20px;
+  gap: var(--space-5);
+  margin-bottom: var(--space-5);
 }
+
 .stat {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  color: var(--ink);
+  gap: var(--space-2);
+  /* 统计卡是概览页唯一的横向内容，撑不起来整行就会显得又扁又空 ——
+     112px 的扁条在 1156px 的页宽下是 3.3:1，读起来像一条横幅而不是卡片。 */
+  min-height: 152px;
+  padding: var(--space-5);
+  color: var(--color-ink);
   text-decoration: none;
+  transition:
+    --spot-alpha var(--duration-state) var(--ease-state),
+    transform var(--duration-state) var(--ease-expo),
+    border-color var(--duration-state) var(--ease-expo);
+}
+.stat:hover {
+  transform: translateY(-2px);
+  background-color: var(--color-bg-2);
+}
+.stat > .muted:first-child {
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  color: var(--color-ink-muted);
 }
 .stat strong {
-  overflow-wrap: anywhere;
-  font-size: 36px;
-  font-weight: 550;
-  line-height: 1.2;
-  letter-spacing: -1px;
+  /* 数字是这个页面上唯一的「读数」，用字阶最大的一档把卡片撑满 */
+  font-size: var(--text-3xl);
+  line-height: var(--text-3xl--line-height);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  margin-top: auto;
 }
 .stat small {
-  font-size: 12px;
-  letter-spacing: 0;
+  font-size: var(--text-xs);
+  line-height: var(--text-xs--line-height);
+  color: var(--color-ink-subtle);
 }
-.toggle-row {
+/* 统计卡是 flex 列，里面的按钮默认会被拉成整卡宽 —— 那是「整卡可点」的
+   形状，而这里是一个普通按钮，按内容宽度就够。 */
+.stat > button,
+.stat > .button {
+  align-self: flex-start;
+}
+
+.intro {
+  padding: var(--space-6);
+}
+.intro p {
+  max-width: 68ch;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-10) var(--space-5);
+  text-align: center;
+  color: var(--color-ink-muted);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  margin: 0;
+}
+
+/* ══════════════════ 按钮 ══════════════════ */
+
+button,
+.button {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-xl);
+  /* 与输入控件同一个理由：比所在表面亮一档，否则在对话框里会消失 */
+  background: var(--color-bg-3);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color var(--duration-micro) var(--ease-state),
+    border-color var(--duration-micro) var(--ease-state),
+    filter var(--duration-micro) var(--ease-state),
+    transform var(--duration-micro) var(--ease-state);
+}
+button:hover,
+.button:hover {
+  background: var(--color-bg-4);
+}
+button:active,
+.button:active {
+  transform: scale(0.98);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* 主按钮是整个界面里唯一「发光」的元素，靠渐变 + 顶部内高光实现。
+   不用外发光：暗色下的外发光会糊成一团脏色。 */
+.primary,
+button.primary,
+.button.primary {
+  background: linear-gradient(
+    125deg,
+    var(--color-accent-bright),
+    var(--color-brand-to)
+  );
+  border-color: transparent;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    0 1px 2px rgb(0 0 0 / 0.4);
+  color: var(--color-on-accent);
+}
+.primary:hover,
+button.primary:hover,
+.button.primary:hover {
+  background: linear-gradient(
+    125deg,
+    var(--color-accent-bright),
+    var(--color-brand-to)
+  );
+  filter: brightness(1.1);
+}
+button.primary:active,
+.button.primary:active {
+  filter: brightness(0.95);
+}
+
+button.danger {
+  background: var(--color-danger);
+  border-color: transparent;
+  color: #fff;
+}
+button.danger:hover {
+  filter: brightness(1.1);
+}
+
+/**
+ * 提交中的按钮转一个圈，而不是换掉文字。
+ *
+ * 换文字会让按钮宽度跳一下，而按钮正好在光标底下 —— 这是最容易被察觉到的一种
+ * 廉价感。这里把标签藏起来但**保留它的宽度**（color: transparent 不改布局），
+ * 再叠一个自己画的转圈。
+ *
+ * 用属性而不是组件：调用处只需加一个 data-busy，原来的 aria-* 与 disabled
+ * 都不用动。
+ */
+button[data-busy="true"] {
+  position: relative;
+  color: transparent;
+  pointer-events: none;
+}
+button[data-busy="true"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border: 2px solid var(--color-ink-muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+/* 主按钮上是白字，转圈也得跟着白，否则在品牌渐变上是一团灰 */
+button.primary[data-busy="true"]::after,
+button.danger[data-busy="true"]::after {
+  border-color: var(--color-on-accent);
+  border-top-color: transparent;
+}
+button.danger[data-busy="true"]::after {
+  border-color: #fff;
+  border-top-color: transparent;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 表格行内的危险操作退成「幽灵 + 危险色文字」，实心红只留给对话框里的
+   确认按钮。一行一个实心红块会把整张表的注意力全吸走 —— 危险色是信号，
+   不是背景。姊妹面板的行内删除也是这个写法。 */
+td button.danger,
+td .button.danger {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--color-danger);
+}
+td button.danger:hover,
+td .button.danger:hover {
+  background: var(--color-danger-soft);
+  filter: none;
+}
+
+/* ══════════════════ 表单 ══════════════════ */
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  color: var(--color-ink-muted);
+}
+
+/* 扁平：不画边框，靠底色分层，状态用中性叠加表达 —— 与侧栏导航项同一套
+   语言（默认一层底色 / hover 提亮 / 选中再提亮），而不是靠描边勾出形状。 */
+input,
+select,
+textarea {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 36px;
+  padding: var(--space-2) 10px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  /* 底色必须比「控件所在的表面」再亮一档 —— 卡片是 bg-1、对话框玻璃大约是
+     bg-2，用 bg-2 当控件底色的话，去掉边框后在对话框里就完全看不见了。 */
+  background: var(--color-bg-3);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  transition: background-color var(--duration-micro) var(--ease-state);
+}
+input:hover,
+select:hover,
+textarea:hover {
+  background: var(--color-bg-4);
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-ink-faint);
+}
+
+/**
+ * 下拉框自己画箭头。
+ *
+ * 系统绘制的那个箭头在暗色下是一块白色图形，与这套界面里其它任何东西都不是
+ * 一个来源：图标统一走本地 sprite、线宽 1.7–2，控件一律由令牌着色。这里用
+ * appearance: none 去掉它，再补一张同风格的内联 SVG。
+ *
+ * 保留原生 <select> 而不换成自定义弹层：控制面板里的下拉需要键盘、输入法、
+ * 移动端原生选择器与长列表滚动，自己实现一遍只会把这些做差。
+ */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  /* 右侧留出箭头的宽度，长选项不会跑到箭头底下 */
+  padding-right: 30px;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 15px 15px;
+  cursor: pointer;
+}
+
+/* 弹层由系统渲染，只能给它颜色 —— 圆角、阴影、内边距都改不了。
+   显式写出来是因为部分平台不会从 color-scheme 推导这两个值。 */
+select option {
+  background-color: var(--color-bg-2);
+  color: var(--color-ink);
+}
+select option:disabled {
+  color: var(--color-ink-faint);
+}
+input,
+textarea {
+  width: 100%;
+}
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  /* 浏览器默认给 checkbox 留了 3px/4px 的外边距，会把它在行里顶偏 ——
+     这类 UA 默认值在这套界面里没有位置。 */
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+/**
+ * 分组。
+ *
+ * 参考面板不用 <fieldset>，它用一个两边对齐的细分隔线加一行小标题来分段，
+ * 字段本身不装进盒子里。这里把 fieldset 渲染成同一种东西。
+ *
+ * 浏览器默认的「legend 骑在边框上、把线切出缺口」是这套界面里唯一一处系统
+ * 自绘的框，必须接管；而给它换一层底色同样不行 —— 输入框的底色也是
+ * --color-bg-2，分组框跟里面的控件会撞成一片，控件就读不出来了。
+ */
+fieldset {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  margin: 0 0 var(--space-5);
+}
+
+/* legend 在 fieldset 里是特殊布局元素，默认会被摆到边框位置上。fieldset 没有
+   边框之后它还需要显式宽度，才会像普通块级元素那样占满整行；分隔线因此挂在
+   legend 自己身上，而不是 fieldset 的 border-top 上。 */
+fieldset > legend {
+  display: block;
+  width: 100%;
+  border-top: 1px solid var(--color-line-faint);
+  padding: var(--space-5) 0 0;
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-ink);
+}
+
+/* 分组里的最后一项不再留底部外边距 —— 那会和分组自己的下边距叠成两倍。 */
+fieldset > :last-child {
+  margin-bottom: 0;
+}
+
+.check {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+.check span,
+.toggle-row span {
+  color: var(--color-ink);
+}
+
+/* inline-flex 会让它在表单列里跟在上一个控件后面（下拉框右边冒出一个勾选框）；
+   用块级 + fit-content：另起一行，但只占内容宽度。
+   flex-direction 必须显式写成 row —— 基础 label 规则里是 column，而
+   .toggle-row 只是没覆盖它，于是勾选框和文字会竖着排。 */
+.toggle-row {
+  display: flex;
+  flex-direction: row;
+  width: fit-content;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
   cursor: pointer;
 }
 .toggle-row input {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  accent-color: var(--color-accent);
 }
-.intro {
-  margin-top: 16px;
-  min-height: 190px;
-  padding: 32px;
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 var(--space-4);
 }
-.intro p {
-  max-width: 650px;
-}
-.empty {
-  padding: 40px 20px;
-  text-align: center;
-  color: var(--muted);
-}
-.login {
-  max-width: 440px;
-  margin: 8vh auto;
-  padding: 36px;
-}
-.login button {
-  width: 100%;
-  margin-top: 14px;
-}
-.searchbar {
+/* 动作区。参考面板的模态底部是一条分隔线加一组右对齐的按钮，这里照做 ——
+   提交按钮紧贴着最后一个字段、没有任何分隔，是这一轮修掉的主要观感问题。 */
+.form-actions {
   display: flex;
-  gap: 10px;
-  margin-bottom: 20px;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-line-faint);
 }
-.searchbar input {
-  max-width: 350px;
-}
+
+/* ══════════════════ 表格 ══════════════════ */
+
 .table-wrap {
   overflow-x: auto;
   padding: 0;
 }
+
 table {
   border-collapse: collapse;
   width: 100%;
   text-align: left;
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
 }
+
 th {
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--text-xs--line-height);
   font-weight: 500;
-  background: var(--hover);
+  color: var(--color-ink-subtle);
+  background: transparent;
 }
+
 td,
 th {
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--line);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-line-faint);
 }
 td {
-  max-width: 300px;
+  max-width: 320px;
   overflow-wrap: anywhere;
 }
 tr:last-child td {
-  border: 0;
+  border-bottom: 0;
 }
-tr:hover td {
-  background: var(--hover);
+tbody tr {
+  transition: background-color var(--duration-micro) var(--ease-state);
 }
+tbody tr:hover td {
+  background: var(--color-hover);
+}
+
+.searchbar {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.searchbar input {
+  max-width: 320px;
+}
+
 .pagination {
   display: flex;
   align-items: center;
-  gap: 10px;
   justify-content: flex-end;
-  color: var(--muted);
-  font-size: 12px;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+  line-height: var(--text-xs--line-height);
 }
 .pagination span {
   margin-right: auto;
 }
-.probe-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
+.pagination button {
+  height: 32px;
+  padding: 0 10px;
+  font-size: var(--text-xs);
+  border-radius: var(--radius-lg);
 }
-.section-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
+
+/* ══════════════════ 徽章 ══════════════════ */
+
 .badge {
-  font-size: 10px;
-  border: 1px solid var(--line);
-  border-radius: 30px;
-  padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 0;
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+  background: var(--color-active);
+  color: var(--color-ink-muted);
+  font-size: var(--text-2xs);
+  line-height: var(--text-2xs--line-height);
+  font-weight: 500;
   white-space: nowrap;
-  color: var(--muted);
 }
+
+/* ══════════════════ 指标与图表 ══════════════════ */
+
 .metrics {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
-  margin: 24px 0;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-4);
+  margin: var(--space-5) 0;
 }
 .metrics dt {
-  font-size: 11px;
+  font-size: var(--text-2xs);
+  line-height: var(--text-2xs--line-height);
+  color: var(--color-ink-subtle);
 }
 .metrics dd {
-  margin: 4px 0;
-  font-size: 15px;
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-base);
+  line-height: var(--text-base--line-height);
 }
+
 .chart {
+  display: block;
   width: 100%;
   height: 80px;
-  color: var(--accent);
+  color: var(--color-accent);
 }
+
+.probe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-5);
+}
+
+.price {
+  font-size: var(--text-2xl);
+  line-height: var(--text-2xl--line-height);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+}
+
+/* ══════════════════ 对话框 ══════════════════ */
+
+/* 模态用最厚的一档玻璃。浮层上要读文字，所以比侧栏更不透明：
+   不能为了好看牺牲可读性。 */
 dialog {
-  padding: 24px;
-  width: min(540px, calc(100vw - 28px));
+  width: min(560px, calc(100vw - 28px));
   max-height: 85dvh;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  color: var(--ink);
-  background: var(--surface);
+  padding: var(--space-5);
+  border: 0;
+  border-radius: var(--radius-3xl);
+  background: color-mix(
+    in oklab,
+    var(--glass-deep-base) var(--glass-deep-alpha),
+    transparent
+  );
+  backdrop-filter: blur(32px) saturate(190%);
+  color: var(--color-ink);
+  box-shadow:
+    inset 0 1px 0 var(--color-highlight),
+    var(--shadow-raise);
   overflow: auto;
 }
+
+/**
+ * 对话框的进出场。
+ *
+ * 原生 <dialog> 只有「有」和「没有」两种状态，中间没有过渡 —— showModal()
+ * 会「啪」地出现，和这个界面里其它每一次状态变化都不一样。
+ *
+ * `transition-behavior: allow-discrete` 让 display / overlay 这类离散属性也能
+ * 参与过渡，`@starting-style` 给出「进场前的那一帧」。两者都不支持的引擎会
+ * 退回成瞬时出现，而不是坏掉 —— 少一段动画，功能不受影响。
+ *
+ * 退场还需要组件配合：父组件一收到 close 就把这个元素从 DOM 上摘掉，那样任何
+ * 过渡都来不及跑，所以 Modal.vue 会先 close() 再等一个时长才通知父组件。
+ */
+dialog {
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+  transition:
+    opacity var(--duration-state) var(--ease-expo),
+    transform var(--duration-state) var(--ease-expo),
+    overlay var(--duration-state) allow-discrete,
+    display var(--duration-state) allow-discrete;
+}
+dialog[open] {
+  opacity: 1;
+  transform: none;
+}
+@starting-style {
+  dialog[open] {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
 dialog::backdrop {
-  background: #0007;
+  background: rgb(0 0 0 / 0);
+  backdrop-filter: blur(0);
+  transition:
+    background var(--duration-state) var(--ease-state),
+    backdrop-filter var(--duration-state) var(--ease-state),
+    overlay var(--duration-state) allow-discrete,
+    display var(--duration-state) allow-discrete;
+}
+dialog[open]::backdrop {
+  background: rgb(0 0 0 / 0.55);
   backdrop-filter: blur(4px);
 }
+@starting-style {
+  dialog[open]::backdrop {
+    background: rgb(0 0 0 / 0);
+    backdrop-filter: blur(0);
+  }
+}
+
 .dialog-head {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 14px;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
 }
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
+.dialog-head h2 {
+  margin: 0;
 }
-.form-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 20px;
+.dialog-head button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink-muted);
+  font-size: var(--text-lg);
+  border-radius: var(--radius-lg);
 }
+.dialog-head button:hover {
+  background: var(--color-hover);
+  color: var(--color-ink);
+}
+
+/* ══════════════════ Toast ══════════════════ */
+
 .toast {
   position: fixed;
-  right: 20px;
-  bottom: 20px;
-  max-width: min(480px, calc(100vw - 40px));
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
+  right: var(--space-5);
+  bottom: var(--space-5);
+  z-index: 10;
   display: flex;
   align-items: center;
-  gap: 16px;
-  z-index: 10;
+  gap: var(--space-4);
+  max-width: min(480px, calc(100vw - 40px));
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-raise);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
 }
-.price {
-  font-size: 30px;
-  font-weight: 600;
+.toast button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink-muted);
+  font-size: var(--text-lg);
+  line-height: 1;
 }
+.toast button:hover {
+  background: var(--color-hover);
+  color: var(--color-ink);
+}
+
+/* ══════════════════ 登录 ══════════════════ */
+
+.login {
+  max-width: 400px;
+  margin: 10vh auto var(--space-10);
+  padding: var(--space-8);
+}
+.login h1 {
+  font-size: var(--text-2xl);
+  line-height: var(--text-2xl--line-height);
+}
+.login p.muted {
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  margin-bottom: var(--space-5);
+}
+.login button {
+  width: 100%;
+  margin-top: var(--space-3);
+}
+.login img {
+  border: 1px solid var(--color-line-faint);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-3);
+}
+
+.site-announcement {
+  color: var(--color-ink-muted);
+  background: var(--color-accent-soft);
+  border: 0;
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  margin: 0 0 var(--space-4);
+}
+p.card.site-announcement {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+/* ══════════════════ 运维面板 ══════════════════ */
+
+/* 与 .terminal-output 同一套口径。不写这些的话 <pre> 会拿到浏览器默认的
+   等宽字体和 1em 上下外边距 —— 那两样都不在这套系统里。 */
+.operation-result {
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-0);
+  margin: var(--space-3) 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+.task-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-block: var(--space-2);
+}
+.operation-item {
+  margin-block: var(--space-4);
+}
+.terminal-output {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-0);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  margin: 0;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* 折叠区的标题要看起来可点 —— 浏览器默认给的是普通文本光标 */
 summary {
   cursor: pointer;
 }
+
+/* ══════════════════ 页面与提示的进出场 ══════════════════ */
+
+/**
+ * 换页：旧页先淡出、新页再淡入（mode="out-in"），读起来是一次连续的替换，
+ * 而不是两次独立的重画。时长刻意压短 —— 导航要跟手，动画只负责把「换页了」
+ * 这件事说清楚，不该让人等。
+ */
+.view-enter-active {
+  transition:
+    opacity var(--duration-state) var(--ease-expo),
+    transform var(--duration-state) var(--ease-expo);
+}
+.view-leave-active {
+  /* 正在退场的页面不该还能被点到。它还在 DOM 里（过渡需要），但已经不属于
+     当前页面了 —— 让它继续接收点击，快速操作时就会点到上一页的按钮上，
+     而在自动化里那是一个稳定的竞态。 */
+  pointer-events: none;
+  transition:
+    opacity var(--duration-micro) var(--ease-state),
+    transform var(--duration-micro) var(--ease-state);
+}
+.view-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.view-leave-to {
+  opacity: 0;
+}
+
+/* toast 从下方滑进来，走的时候只淡出 —— 出现比消失更值得被注意到，
+   两个方向用同样的幅度会让它在视野里「弹」一下。 */
+.toast-enter-active {
+  transition:
+    opacity var(--duration-state) var(--ease-expo),
+    transform var(--duration-state) var(--ease-expo);
+}
+.toast-leave-active {
+  transition:
+    opacity var(--duration-micro) var(--ease-state),
+    transform var(--duration-micro) var(--ease-state);
+}
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+/* ══════════════════ 动效 ══════════════════ */
+
+/* 骨架屏的微光；比整块闪烁克制得多 */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-2) 25%,
+    var(--color-bg-3) 50%,
+    var(--color-bg-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  border-radius: var(--radius-lg);
+}
+
+/* 启动骨架屏。形状照着真实首页摆 —— 标题、说明、三张统计卡、一块内容卡 ——
+   尺寸也对齐（统计卡就是 152px），数据到达时是「填上」而不是「重排」。 */
+.boot-head {
+  width: 220px;
+  height: var(--text-xl--line-height);
+  margin-bottom: var(--space-2);
+}
+.boot-sub {
+  width: min(320px, 60%);
+  height: var(--text-sm--line-height);
+  margin-bottom: var(--space-6);
+}
+.skeleton-stat {
+  height: 152px;
+  border-radius: var(--radius-2xl);
+}
+.skeleton-block {
+  height: 160px;
+  border-radius: var(--radius-2xl);
+}
+
+/**
+ * 实时状态点。连接正常时是绿的，并持续扩散一圈涟漪 —— 「数据正在流动」
+ * 需要有东西一直在动来表达，静态的绿点读起来只是一个状态。
+ */
+.live-dot {
+  position: relative;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  flex: none;
+  margin-right: var(--space-2);
+  border-radius: 50%;
+  background: var(--color-ink-faint);
+  vertical-align: middle;
+}
+.live-dot[data-live="true"] {
+  background: var(--color-success);
+}
+.live-dot[data-live="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--color-success);
+  animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* 新条目的高亮扫过：从品牌色淡出到透明 */
+@keyframes sweep {
+  0% {
+    background-color: var(--color-accent-soft);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.sweep-in {
+  animation: sweep var(--duration-page) var(--ease-expo);
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.7;
+  }
+  70%,
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+.pulse-ring {
+  animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ══════════════════ 响应式 ══════════════════ */
+
 @media (min-width: 1700px) {
   #view {
-    padding: 48px;
+    padding: var(--space-10) var(--space-10) 56px;
   }
   .sidebar {
-    width: 264px;
+    width: 240px;
   }
 }
+
 @media (max-width: 1200px) {
-  .stats {
-    gap: 12px;
-  }
-  .card {
-    padding: 20px;
-  }
-  .table-wrap {
-    padding: 0;
-  }
   #view {
-    padding: 24px;
+    padding: var(--space-6) var(--space-6) var(--space-8);
   }
   .sidebar {
-    width: 215px;
+    width: 204px;
+  }
+  .stats {
+    gap: var(--space-4);
   }
 }
+
+/* 侧栏在窄屏转成横向导航条 —— 内容区因此拿回整行宽度。
+   固定成纵向列会让手机上的正文只剩一小条，不能读。 */
 @media (max-width: 900px) {
   .layout {
     flex-direction: column;
   }
   .sidebar {
     width: 100%;
-    padding: 12px 18px;
     border-right: 0;
-    border-bottom: 1px solid var(--line);
-    gap: 12px;
-  }
-  .brand {
-    font-size: 15px;
-  }
-  .brand-mark {
-    width: 30px;
-    height: 32px;
+    border-bottom: 1px solid var(--color-line-faint);
   }
   .sidebar nav {
     flex-direction: row;
+    gap: var(--space-1);
     overflow-x: auto;
-    flex-wrap: nowrap;
+    overflow-y: hidden;
+    padding: 0 var(--space-3) var(--space-2);
   }
   .sidebar nav a {
     white-space: nowrap;
-    padding: 8px 12px;
-    font-size: 12px;
+    padding: 0 10px;
   }
+  .nav-indicator,
   .nav-caption,
   .sidebar-foot {
     display: none;
   }
+  .brand {
+    height: 48px;
+    padding: 0 var(--space-3);
+  }
   .topbar {
-    min-height: 58px;
-    padding: 10px 20px;
+    padding: 0 var(--space-3);
   }
-  .probe-grid {
-    gap: 12px;
-  }
-  .username {
-    display: none;
+  #view {
+    padding: var(--space-5) var(--space-3) var(--space-8);
   }
 }
+
 @media (max-width: 640px) {
-  #view {
-    padding: 20px 14px;
-  }
   .page-heading {
-    align-items: flex-start;
     flex-direction: column;
-    gap: 12px;
-    margin-bottom: 20px;
-  }
-  h1 {
-    font-size: 25px;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
   }
   .stats,
   .probe-grid {
     grid-template-columns: 1fr;
-    gap: 0;
-  }
-  .stat {
-    gap: 8px;
-  }
-  .stat strong {
-    font-size: 32px;
+    gap: var(--space-3);
   }
   .card {
-    padding: 18px;
+    padding: var(--space-3) var(--space-4);
   }
+  .intro {
+    padding: var(--space-5);
+  }
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  /* 输入框 16px 以避免 iOS 自动缩放 */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+  .searchbar {
+    flex-wrap: wrap;
+  }
+  .searchbar input {
+    flex: 1;
+    min-width: 140px;
+  }
+  .toolbar .username {
+    display: none;
+  }
+  .login {
+    margin: var(--space-5) auto;
+    padding: var(--space-5);
+  }
+
+  /* 表格转为带标题的记录卡 */
   .table-wrap {
-    padding: 0;
+    overflow-x: visible;
   }
   table,
   tbody,
@@ -459,78 +1571,33 @@ summary {
     display: none;
   }
   tr {
-    padding: 12px;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--color-line-faint);
+    padding: var(--space-3) 0;
+  }
+  tr:last-child {
+    border-bottom: 0;
   }
   td {
     max-width: none;
-    padding: 7px 0;
+    padding: var(--space-1) 0;
     border: 0;
     display: grid;
-    grid-template-columns: 90px minmax(0, 1fr);
-    gap: 8px;
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: var(--space-2);
   }
   td::before {
     content: attr(data-label);
-    color: var(--muted);
-    font-size: 12px;
+    color: var(--color-ink-subtle);
+    font-size: var(--text-xs);
+    line-height: var(--text-xs--line-height);
   }
-  .topbar {
-    padding: 10px 14px;
-  }
-  .topbar > span {
-    font-size: 12px;
-  }
-  .toolbar {
-    gap: 5px;
-  }
-  .toolbar button,
-  .toolbar select {
-    min-height: 34px;
-    font-size: 12px;
-    padding: 6px 8px;
-  }
-  .sidebar nav a {
-    flex-direction: column;
-    gap: 4px;
-    padding: 7px 10px;
-  }
-  .sidebar {
-    padding: 10px 12px;
-  }
-  .searchbar {
-    flex-wrap: wrap;
-  }
-  .searchbar input {
-    flex: 1;
-    min-width: 140px;
-  }
-  .pagination {
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-  .pagination button {
-    padding: 7px 10px;
-  }
-  input,
-  textarea,
-  select {
-    font-size: 16px;
-  }
-  .login {
-    margin: 20px auto;
-    padding: 24px;
-  }
-  .form-grid {
-    grid-template-columns: 1fr;
-    gap: 0;
-  }
-  .intro {
-    min-height: 0;
+  tbody tr:hover td {
+    background: transparent;
   }
 }
+
 @media (max-width: 360px) {
-  .topbar > span {
+  .topbar > span:first-child {
     display: none;
   }
   .topbar {
@@ -540,46 +1607,112 @@ summary {
     grid-template-columns: 1fr;
   }
 }
+
+/* ══════════════════ 无障碍降级 ══════════════════ */
+
+/**
+ * 降级为极短的过渡而不是彻底关闭 —— 完全不动会让「操作有没有生效」
+ * 失去反馈，那是另一种无障碍问题。
+ * 环境光晕是唯一例外：它纯粹是装饰，直接停掉。
+ */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    animation: none !important;
-    transition: none !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  .ambient-orb {
+    animation: none !important;
+  }
 }
+
 @media (prefers-reduced-transparency: reduce),
   (prefers-contrast: more),
   (forced-colors: active) {
+  .glass,
+  .glass-deep,
   .sidebar,
   .topbar,
   dialog,
   .toast {
-    backdrop-filter: none;
-    background: var(--surface);
+    backdrop-filter: none !important;
+    background: var(--color-bg-1);
   }
   .ambient {
     display: none;
   }
   .card,
+  .surface,
   button,
   input,
-  select {
+  select,
+  textarea {
     border-width: 2px;
+  }
+  .brand-gradient,
+  .primary,
+  button.primary,
+  .button.primary {
+    background: var(--color-accent);
+  }
+  .nav-indicator {
+    background: CanvasText;
   }
 }
 
-.operation-result { max-height: 24rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-.task-row { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; padding-block: .5rem; }
- .terminal-output {
-  max-height: 320px;
-  overflow: auto;
-  white-space: pre-wrap;
+/* ══════════════════ 位置图标与探针范围 ══════════════════ */
+
+.location-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  color: var(--color-ink-subtle);
+}
+.location-flag svg {
+  display: block;
+  border-radius: 3px;
+}
+.location-flag.unknown {
+  color: var(--color-ink-muted);
+}
+.location-code {
+  font-size: var(--text-2xs);
+  line-height: var(--text-2xs--line-height);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.probe-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.probe-scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-4);
+  margin-block-end: var(--space-5);
+}
+.probe-scope label {
+  min-width: 220px;
+}
+.probe-scope p {
+  flex: 1 1 320px;
+  margin: 0;
+}
+
+.probe-api {
+  margin-block-start: var(--space-6);
+}
+.probe-api code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
   overflow-wrap: anywhere;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font: 13px/1.6 ui-monospace, monospace;
- }
- .operation-item { margin-block: 16px; }
+}
