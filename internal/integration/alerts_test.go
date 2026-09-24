@@ -42,7 +42,7 @@ func TestNodeAlertDebounceRestartRevocationAndRollback(t *testing.T) {
 		}
 		return n
 	}
-	outsider := decode[contract.User](t, f.request("POST", "/users", map[string]string{"username": "outsider", "password": "integration-long-password", "role": "user"}, f.admin, 201))
+	outsider := decode[contract.User](t, f.request("POST", "/users", map[string]string{"username": "outsider", "role": "user"}, f.admin, 201))
 	if _, _, err := f.app.Commerce.CreateWebhook(ctx, f.owner.ID, "https://hooks.example.test/events", []string{"node.offline", "node.recovered"}); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestNodeAlertDebounceRestartRevocationAndRollback(t *testing.T) {
 	if count(f.owner.ID, "node.recovered") != 1 {
 		t.Fatal("recovery not deduplicated")
 	}
-	f.group.UserIDs = nil
+	f.group.IdentityGroupIDs = nil
 	f.group = decode[contract.Group](t, f.request("PUT", "/groups/"+f.group.ID, f.group, f.admin, 200))
 	visible, err := f.app.Commerce.Events(ctx, f.owner.ID, 100)
 	if err != nil {

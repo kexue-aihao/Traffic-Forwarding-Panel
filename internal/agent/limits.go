@@ -126,9 +126,8 @@ func (p *resourcePool) wait(ctx context.Context, n int) error {
 	}
 }
 
-func (b *binding) charge(ctx context.Context, pool *resourcePool, v contract.Rule, until time.Time, up bool, n int) error {
-	deadline := minTime(until, v.Lease.ExpiresAt, time.Now().Add(2*time.Minute))
-	waitCtx, cancel := context.WithDeadline(ctx, deadline)
+func (b *binding) charge(ctx context.Context, pool *resourcePool, v contract.Rule, up bool, n int) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if v.Network == "udp" {
 		if waitCtx.Err() != nil {
@@ -140,7 +139,7 @@ func (b *binding) charge(ctx context.Context, pool *resourcePool, v contract.Rul
 	} else if err := pool.wait(waitCtx, n); err != nil {
 		return err
 	}
-	return b.runtime.Store.Charge(v, until, up, n)
+	return b.chargeCurrent(waitCtx, v.ID, v.Network, up, n)
 }
 
 var errRateDrop = errors.New("UDP rate limit")

@@ -1,11 +1,22 @@
 package main
 
 import (
+	"crypto/tls"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestTrustConfigSharesSessionCacheAcrossClones(t *testing.T) {
+	config, err := trustConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ClientSessionCache == nil || config.Clone().ClientSessionCache != config.ClientSessionCache || config.InsecureSkipVerify || config.MinVersion != tls.VersionTLS13 {
+		t.Fatal("TLS trust configuration lost verification or shared session cache")
+	}
+}
 
 func TestLoadPrivateNextHops(t *testing.T) {
 	valid := `[{"transport":"tls","endpoint":"exit.example:9443","server_name":"exit.example","token":"test-private-hop-token"}]`

@@ -19,21 +19,22 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 		return err
 	}
 	return s.Store.Write(ctx, storage.Critical, func(tx *sql.Tx) error {
-		rows, e := tx.QueryContext(ctx, s.q(`SELECT r.payload,g.payload,u.disabled,u.role FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
+		rows, e := tx.QueryContext(ctx, s.q(`SELECT r.payload,g.payload,u.disabled,u.role,CASE WHEN EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id) THEN 1 ELSE 0 END FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
 		if e != nil {
 			return e
 		}
 		type item struct {
-			rule     contract.Rule
-			group    contract.Group
-			disabled int
-			role     string
+			rule       contract.Rule
+			group      contract.Group
+			disabled   int
+			role       string
+			authorized int
 		}
 		items := []item{}
 		for rows.Next() {
 			var it item
 			var rp, gp string
-			if e = rows.Scan(&rp, &gp, &it.disabled, &it.role); e != nil {
+			if e = rows.Scan(&rp, &gp, &it.disabled, &it.role, &it.authorized); e != nil {
 				rows.Close()
 				return e
 			}
@@ -57,7 +58,7 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 		for _, it := range items {
 			rule := it.rule
 			g := it.group
-			if rule.ExitUnavailable || !rule.Enabled || it.disabled != 0 || entryPolicyDenied(g, rule) || (it.role != "admin" && !contains(g.UserIDs, rule.UserID)) {
+			if rule.ExitUnavailable || !rule.Enabled || it.disabled != 0 || entryPolicyDenied(g, rule) || (it.role != "admin" && it.authorized == 0) {
 				continue
 			}
 			limits, cached := policies[rule.UserID]

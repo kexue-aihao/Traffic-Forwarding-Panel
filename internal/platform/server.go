@@ -78,6 +78,37 @@ func token() string {
 	}
 	return hex.EncodeToString(b)
 }
+
+func generateUserPassword() (string, error) {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	const segmentLength = 8
+	const segmentCount = 4
+	const unbiasedLimit = 256 - 256%len(alphabet)
+
+	password := make([]byte, segmentCount*segmentLength+segmentCount-1)
+	random := make([]byte, 1)
+	position := 0
+	for segment := 0; segment < segmentCount; segment++ {
+		if segment > 0 {
+			password[position] = '-'
+			position++
+		}
+		for i := 0; i < segmentLength; i++ {
+			for {
+				if _, err := rand.Read(random); err != nil {
+					return "", err
+				}
+				if int(random[0]) < unbiasedLimit {
+					password[position] = alphabet[int(random[0])%len(alphabet)]
+					position++
+					break
+				}
+			}
+		}
+	}
+	return string(password), nil
+}
+
 func digest(s string) string        { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 func id() string                    { return token()[:32] }
 func (s *Server) q(q string) string { return s.Store.Rebind(q) }
@@ -136,7 +167,7 @@ func (s *Server) Authenticate(r *http.Request) (contract.User, error) {
 		return u, errors.New("authentication required")
 	}
 	var disabled int
-	e = s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT u.id,u.username,u.role,u.disabled FROM cp_users u JOIN cp_sessions a ON a.user_id=u.id WHERE a.token_hash=? AND a.expires_at>?`), digest(c.Value), time.Now().Unix()).Scan(&u.ID, &u.Username, &u.Role, &disabled)
+	e = s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT u.id,u.username,u.role,u.identity_group_id,u.disabled FROM cp_users u JOIN cp_sessions a ON a.user_id=u.id WHERE a.token_hash=? AND a.expires_at>?`), digest(c.Value), time.Now().Unix()).Scan(&u.ID, &u.Username, &u.Role, &u.IdentityGroupID, &disabled)
 	u.Disabled = disabled != 0
 	if e != nil || u.Disabled {
 		return contract.User{}, errors.New("authentication required")
@@ -179,6 +210,7 @@ func (s *Server) Bootstrap(ctx context.Context, username, password string) error
 	if e != nil {
 		return e
 	}
+	username = strings.ToLower(strings.TrimSpace(username))
 	return s.Store.Write(ctx, storage.Critical, func(tx *sql.Tx) error {
 		var n int
 		if e := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_users").Scan(&n); e != nil {
@@ -187,7 +219,11 @@ func (s *Server) Bootstrap(ctx context.Context, username, password string) error
 		if n != 0 {
 			return errors.New("already initialized")
 		}
-		_, e := tx.ExecContext(ctx, s.q(`INSERT INTO cp_users(id,username,password_hash,role,disabled) VALUES(?,?,?,?,0)`), "bootstrap-admin", strings.ToLower(strings.TrimSpace(username)), string(h), "admin")
+		identityGroupID := id()
+		if _, e := tx.ExecContext(ctx, s.q(`INSERT INTO cp_identity_groups(id,name) VALUES(?,?)`), identityGroupID, username+" 默认组"); e != nil {
+			return e
+		}
+		_, e := tx.ExecContext(ctx, s.q(`INSERT INTO cp_users(id,username,password_hash,role,identity_group_id,disabled) VALUES(?,?,?,?,?,0)`), "bootstrap-admin", username, string(h), "admin", identityGroupID)
 		return e
 	})
 }
@@ -248,7 +284,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var u contract.User
 	var hash string
 	var disabled int
-	e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT id,username,role,disabled,password_hash FROM cp_users WHERE username=?`), strings.ToLower(strings.TrimSpace(in.Username))).Scan(&u.ID, &u.Username, &u.Role, &disabled, &hash)
+	e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT id,username,role,identity_group_id,disabled,password_hash FROM cp_users WHERE username=?`), strings.ToLower(strings.TrimSpace(in.Username))).Scan(&u.ID, &u.Username, &u.Role, &u.IdentityGroupID, &disabled, &hash)
 	if e != nil || disabled != 0 || bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password)) != nil {
 		fail(w, 401, "invalid credentials")
 		return
@@ -313,6 +349,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /online/device/ip", s.RequireUser(s.deviceIP))
 	mux.HandleFunc("GET /online/device/ip/list", s.RequireUser(s.deviceIPList))
 	mux.HandleFunc("POST /api/v1/auth/password", s.RequireUser(s.changePassword))
+	mux.HandleFunc("POST /api/v1/users/{id}/reset-password", s.admin(s.resetUserPassword))
 	mux.HandleFunc("PUT /api/v1/users/{id}/status", s.admin(s.disableUser))
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 	mux.HandleFunc("GET /api/v1/auth/session", s.RequireUser(func(w http.ResponseWriter, r *http.Request) {
@@ -331,6 +368,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /api/v1/users", s.admin(s.users))
 	mux.HandleFunc("POST /api/v1/users", s.admin(s.createUser))
+	mux.HandleFunc("PUT /api/v1/users/{id}/identity-group", s.admin(s.setUserIdentityGroup))
+	mux.HandleFunc("GET /api/v1/identity-groups", s.admin(s.identityGroups))
+	mux.HandleFunc("POST /api/v1/identity-groups", s.admin(s.createIdentityGroup))
+	mux.HandleFunc("PUT /api/v1/identity-groups/{id}", s.admin(s.updateIdentityGroup))
+	mux.HandleFunc("DELETE /api/v1/identity-groups/{id}", s.admin(s.deleteIdentityGroup))
 	mux.HandleFunc("GET /api/v1/groups", s.RequireUser(s.groups))
 	mux.HandleFunc("POST /api/v1/groups", s.admin(s.saveGroup))
 	mux.HandleFunc("PUT /api/v1/groups/{id}", s.admin(s.saveGroup))
@@ -389,7 +431,7 @@ func pages(r *http.Request) (int, int) {
 }
 func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 	n, o := pages(r)
-	rows, e := s.Store.DB.QueryContext(r.Context(), s.q(`SELECT id,username,role,disabled FROM cp_users ORDER BY id LIMIT ? OFFSET ?`), n, o)
+	rows, e := s.Store.DB.QueryContext(r.Context(), s.q(`SELECT u.id,u.username,u.role,u.identity_group_id,COALESCE(ig.name,''),u.disabled FROM cp_users u LEFT JOIN cp_identity_groups ig ON ig.id=u.identity_group_id ORDER BY u.id LIMIT ? OFFSET ?`), n, o)
 	if e != nil {
 		fail(w, 500, "query failed")
 		return
@@ -399,7 +441,7 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var u contract.User
 		var d int
-		if rows.Scan(&u.ID, &u.Username, &u.Role, &d) != nil {
+		if rows.Scan(&u.ID, &u.Username, &u.Role, &u.IdentityGroupID, &u.IdentityGroupName, &d) != nil {
 			fail(w, 500, "query failed")
 			return
 		}
@@ -412,27 +454,47 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Role     string `json:"role"`
+		Username        string `json:"username"`
+		Role            string `json:"role"`
+		IdentityGroupID string `json:"identity_group_id"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
 	in.Username = strings.ToLower(strings.TrimSpace(in.Username))
-	if len(in.Username) < 1 || len(in.Username) > 100 || len(in.Password) < 12 || len(in.Password) > 72 || (in.Role != "user" && in.Role != "admin") {
-		fail(w, 400, "invalid username, role or password (12-72 bytes)")
+	if len(in.Username) < 1 || len(in.Username) > 100 || (in.Role != "user" && in.Role != "admin") {
+		fail(w, 400, "invalid username or role")
 		return
 	}
-	h, e := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
+	password, e := generateUserPassword()
+	if e != nil {
+		fail(w, 500, "password generation failed")
+		return
+	}
+	h, e := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if e != nil {
 		fail(w, 400, "invalid password")
 		return
 	}
-	u := contract.User{ID: id(), Username: in.Username, Role: in.Role}
+	u := contract.User{ID: id(), Username: in.Username, Role: in.Role, IdentityGroupID: strings.TrimSpace(in.IdentityGroupID)}
+	if u.IdentityGroupID == "" {
+		u.IdentityGroupID = id()
+		u.IdentityGroupName = u.Username + " 默认组"
+	}
 	actor, _ := UserFromContext(r.Context())
 	e = s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_users(id,username,password_hash,role,disabled) VALUES(?,?,?,?,0)`), u.ID, u.Username, string(h), u.Role)
+		if u.IdentityGroupName != "" {
+			if _, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_identity_groups(id,name) VALUES(?,?)`), u.IdentityGroupID, u.IdentityGroupName); e != nil {
+				return e
+			}
+		} else {
+			identity, err := s.identityGroupForUpdate(r.Context(), tx, u.IdentityGroupID)
+			if err != nil {
+				return err
+			}
+			u.IdentityGroupID, u.IdentityGroupName = identity.ID, identity.Name
+		}
+		_, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_users(id,username,password_hash,role,identity_group_id,disabled) VALUES(?,?,?,?,?,0)`), u.ID, u.Username, string(h), u.Role, u.IdentityGroupID)
 		if e != nil {
 			return e
 		}
@@ -442,7 +504,15 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "user creation conflict")
 		return
 	}
-	reply(w, 201, u)
+	reply(w, 201, contract.UserCreated{
+		ID:                u.ID,
+		Username:          u.Username,
+		Role:              u.Role,
+		IdentityGroupID:   u.IdentityGroupID,
+		IdentityGroupName: u.IdentityGroupName,
+		Disabled:          u.Disabled,
+		InitialPassword:   password,
+	})
 }
 func (s *Server) audit(w http.ResponseWriter, r *http.Request) {
 	n, o := pages(r)

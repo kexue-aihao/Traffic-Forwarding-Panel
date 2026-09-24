@@ -167,7 +167,7 @@ func run() error {
 	return e
 }
 func trustConfig(ca string) (*tls.Config, error) {
-	tc := &tls.Config{MinVersion: tls.VersionTLS13}
+	tc := &tls.Config{MinVersion: tls.VersionTLS13, ClientSessionCache: tls.NewLRUClientSessionCache(256)}
 	if ca != "" {
 		pem, e := os.ReadFile(ca)
 		if e != nil {

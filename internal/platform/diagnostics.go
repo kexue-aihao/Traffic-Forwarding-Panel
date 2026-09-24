@@ -37,7 +37,7 @@ func (s *Server) createDiagnostic(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		var access int
-		if err := tx.QueryRowContext(r.Context(), s.q("SELECT COUNT(*) FROM cp_group_users WHERE group_id=? AND user_id=?"), rule.GroupID, actor.ID).Scan(&access); err != nil {
+		if err := tx.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?`), rule.GroupID, actor.ID).Scan(&access); err != nil {
 			return err
 		}
 		if actor.Role != "admin" && access == 0 {
@@ -98,7 +98,7 @@ func (s *Server) diagnostic(w http.ResponseWriter, r *http.Request) {
 	}
 	if actor.Role != "admin" {
 		var n int
-		if s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT COUNT(*) FROM cp_group_users WHERE group_id=? AND user_id=?"), group, actor.ID).Scan(&n) != nil || n == 0 {
+		if s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?`), group, actor.ID).Scan(&n) != nil || n == 0 {
 			fail(w, 404, "diagnostic not found")
 			return
 		}
@@ -129,7 +129,7 @@ func (s *Server) claimDiagnostic(w http.ResponseWriter, r *http.Request) {
 	var out *contract.Diagnostic
 	err = s.Store.Write(r.Context(), storage.Normal, func(tx *sql.Tx) error {
 		// Recheck owner and current group access at dispatch. Requests expire in 2 minutes.
-		q := `SELECT d.id,d.payload FROM cp_diagnostics d JOIN cp_rules r ON r.id=d.rule_id JOIN cp_users u ON u.id=d.user_id WHERE d.node_id=? AND d.created_at>? AND (d.status='pending' OR (d.status='running' AND d.claimed_at<?)) AND r.deleted=0 AND u.disabled=0 AND (u.role='admin' OR EXISTS(SELECT 1 FROM cp_group_users gu WHERE gu.group_id=r.group_id AND gu.user_id=u.id)) ORDER BY d.created_at,d.id LIMIT 1`
+		q := `SELECT d.id,d.payload FROM cp_diagnostics d JOIN cp_rules r ON r.id=d.rule_id JOIN cp_users u ON u.id=d.user_id WHERE d.node_id=? AND d.created_at>? AND (d.status='pending' OR (d.status='running' AND d.claimed_at<?)) AND r.deleted=0 AND u.disabled=0 AND (u.role='admin' OR EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id)) ORDER BY d.created_at,d.id LIMIT 1`
 		var id, raw string
 		e := tx.QueryRowContext(r.Context(), s.q(q), node, time.Now().Add(-2*time.Minute).Unix(), time.Now().Add(-30*time.Second).Unix()).Scan(&id, &raw)
 		if errors.Is(e, sql.ErrNoRows) {

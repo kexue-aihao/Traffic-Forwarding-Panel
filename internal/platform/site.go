@@ -249,6 +249,7 @@ func (s *Server) registerUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := contract.User{ID: id(), Username: in.Username, Role: "user"}
+	u.IdentityGroupID = id()
 	e = s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
 		// Recheck policy after password hashing, including concurrent closure.
 		q := "SELECT payload FROM cp_site_settings WHERE id=1"
@@ -276,7 +277,10 @@ func (s *Server) registerUser(w http.ResponseWriter, r *http.Request) {
 				return errors.New("invalid invitation")
 			}
 		}
-		if _, err := tx.ExecContext(r.Context(), s.q("INSERT INTO cp_users(id,username,password_hash,role,disabled) VALUES(?,?,?,'user',0)"), u.ID, u.Username, string(hash)); err != nil {
+		if _, err := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_identity_groups(id,name) VALUES(?,?)`), u.IdentityGroupID, u.Username+" 默认组"); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(r.Context(), s.q("INSERT INTO cp_users(id,username,password_hash,role,identity_group_id,disabled) VALUES(?,?,?,'user',?,0)"), u.ID, u.Username, string(hash), u.IdentityGroupID); err != nil {
 			return err
 		}
 		return s.AuditTx(r.Context(), tx, u.ID, "user.register", u.ID)

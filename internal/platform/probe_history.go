@@ -294,7 +294,7 @@ func (s *Server) probeHistoryList(w http.ResponseWriter, r *http.Request) {
 	q := `SELECT COUNT(*) FROM cp_nodes n WHERE n.id=?`
 	args := []any{node}
 	if u.Role != "admin" {
-		q += ` AND EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_users gu ON gu.group_id=ng.group_id WHERE ng.node_id=n.id AND gu.user_id=?)`
+		q += ` AND EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE ng.node_id=n.id AND iu.id=?)`
 		args = append(args, u.ID)
 	}
 	var visible int

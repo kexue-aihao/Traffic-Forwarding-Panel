@@ -1,6 +1,37 @@
 export const displayTimeZone = "Asia/Shanghai";
 export const displayTimeZoneLabel = "上海时间 UTC+8";
 
+const byteUnits = ["B", "KB", "MB", "GB", "TB", "PB", "EB"] as const;
+
+export function formatBytes(
+  value: string | number | null | undefined,
+  suffix: "" | "/s" = "",
+) {
+  let unit = 0;
+  let amount: number;
+  if (typeof value === "string") {
+    if (!/^\d+$/.test(value)) return "未知";
+    const bytes = BigInt(value);
+    let divisor = 1n;
+    while (bytes >= divisor * 1024n && unit < byteUnits.length - 1) {
+      divisor *= 1024n;
+      unit++;
+    }
+    // Truncate for display so a value below 1 TB never rounds up to 1024 GB.
+    amount = Number((bytes * 100n) / divisor) / 100;
+  } else {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
+      return "未知";
+    amount = value;
+    while (amount >= 1024 && unit < byteUnits.length - 1) {
+      amount /= 1024;
+      unit++;
+    }
+    amount = Math.floor(amount * 100) / 100;
+  }
+  return `${amount} ${byteUnits[unit]}${suffix}`;
+}
+
 const dateTime = new Intl.DateTimeFormat("zh-CN", {
   timeZone: displayTimeZone,
   year: "numeric",

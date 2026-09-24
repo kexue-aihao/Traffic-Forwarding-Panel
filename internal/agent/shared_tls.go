@@ -8,7 +8,6 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"io"
 	"net"
-	"reflect"
 	"strings"
 	"time"
 )
@@ -25,7 +24,7 @@ func sameRoutes(a, b map[string]route) bool {
 	}
 	for k, v := range a {
 		other, ok := b[k]
-		if !ok || !reflect.DeepEqual(v.rule, other.rule) || !v.until.Equal(other.until) {
+		if !ok || !sameForwardingRule(v.rule, other.rule) {
 			return false
 		}
 	}

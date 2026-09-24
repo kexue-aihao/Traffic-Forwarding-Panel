@@ -95,9 +95,9 @@ func decode[T any](t *testing.T, b []byte) T {
 	}
 	return v
 }
-func (f *fixture) login(name string) *http.Cookie {
+func (f *fixture) login(name, password string) *http.Cookie {
 	f.t.Helper()
-	b, _ := json.Marshal(map[string]string{"username": name, "password": "integration-long-password"})
+	b, _ := json.Marshal(map[string]string{"username": name, "password": password})
 	req, _ := http.NewRequest("POST", f.http.URL+"/api/v1/auth/login", bytes.NewReader(b))
 	req.Header.Set("X-Requested-With", "fetch")
 	req.Header.Set("Origin", f.http.URL)
@@ -141,10 +141,11 @@ func newFixture(t *testing.T, tc tunnel.Client) *fixture {
 	}))
 	t.Cleanup(server.Close)
 	f := &fixture{t: t, app: a, db: db, http: server, client: tc}
-	f.admin = f.login("admin")
-	f.owner = decode[contract.User](t, f.request("POST", "/users", map[string]string{"username": "alice", "password": "integration-long-password", "role": "user"}, f.admin, 201))
-	f.user = f.login("alice")
-	f.group = decode[contract.Group](t, f.request("POST", "/groups", map[string]any{"name": "integration", "user_ids": []string{f.owner.ID}, "multiplier": "1", "port_min": 1024, "port_max": 65535}, f.admin, 201))
+	f.admin = f.login("admin", "integration-long-password")
+	createdOwner := decode[contract.UserCreated](t, f.request("POST", "/users", map[string]string{"username": "alice", "role": "user"}, f.admin, 201))
+	f.owner = contract.User{ID: createdOwner.ID, Username: createdOwner.Username, Role: createdOwner.Role, IdentityGroupID: createdOwner.IdentityGroupID, Disabled: createdOwner.Disabled}
+	f.user = f.login("alice", createdOwner.InitialPassword)
+	f.group = decode[contract.Group](t, f.request("POST", "/groups", map[string]any{"name": "integration", "identity_group_ids": []string{f.owner.IdentityGroupID}, "multiplier": "1", "port_min": 1024, "port_max": 65535}, f.admin, 201))
 	enrollment := decode[map[string]string](t, f.request("POST", "/nodes/enrollment", map[string]any{"name": "integration-node", "group_ids": []string{f.group.ID}}, f.admin, 201))
 	f.statePath = filepath.Join(t.TempDir(), "agent.json")
 	f.store, e = agent.OpenStore(f.statePath)
@@ -349,7 +350,7 @@ func TestRealControlPlaneDirectRenewalRetirementAndRevocation(t *testing.T) {
 		t.Fatal("new-cycle count incorrect")
 	}
 	// Group membership removal closes both listeners and excludes probe visibility.
-	f.group.UserIDs = nil
+	f.group.IdentityGroupIDs = nil
 	f.group = decode[contract.Group](t, f.request("PUT", "/groups/"+f.group.ID, f.group, f.admin, 200))
 	f.sync()
 	if len(f.store.Config().Rules) != 0 {

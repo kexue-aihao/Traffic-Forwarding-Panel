@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-func testCertificate(t *testing.T) (tls.Certificate, *x509.CertPool) {
+func testCertificate(t testing.TB) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
 	key, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if e != nil {
@@ -41,7 +41,7 @@ func testCertificate(t *testing.T) (tls.Certificate, *x509.CertPool) {
 	roots.AppendCertsFromPEM(cp)
 	return pair, roots
 }
-func echoServers(t *testing.T) (string, string) {
+func echoServers(t testing.TB) (string, string) {
 	t.Helper()
 	tcp, e := net.Listen("tcp", "127.0.0.1:0")
 	if e != nil {

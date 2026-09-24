@@ -171,7 +171,7 @@ func (s *Server) groups(w http.ResponseWriter, r *http.Request) {
 	where := ""
 	args := []any{}
 	if u.Role != "admin" {
-		where = " WHERE EXISTS(SELECT 1 FROM cp_group_users gu WHERE gu.group_id=g.id AND gu.user_id=?)"
+		where = " WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=g.id AND iu.id=?)"
 		args = append(args, u.ID)
 	}
 	n, o := pages(r)
@@ -186,20 +186,58 @@ func (s *Server) groups(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "query failed")
 		return
 	}
-	defer rows.Close()
 	items := []contract.Group{}
 	for rows.Next() {
 		var p string
 		var g contract.Group
 		if rows.Scan(&p) != nil || json.Unmarshal([]byte(p), &g) != nil {
+			rows.Close()
 			fail(w, 500, "query failed")
 			return
 		}
 		g = splitGroupPolicy(g)
+		g.UserIDs = nil
 		if u.Role != "admin" {
-			g.UserIDs = nil
+			g.IdentityGroupIDs = nil
 		}
 		items = append(items, g)
+	}
+	if e = rows.Err(); e != nil {
+		rows.Close()
+		fail(w, 500, "query failed")
+		return
+	}
+	rows.Close()
+	if u.Role == "admin" && len(items) > 0 {
+		groupArgs := make([]any, len(items))
+		for i, group := range items {
+			groupArgs[i] = group.ID
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(items)), ",")
+		links, err := s.Store.DB.QueryContext(r.Context(), s.q(`SELECT group_id,identity_group_id FROM cp_group_identity_groups WHERE group_id IN (`+placeholders+`) ORDER BY group_id,identity_group_id`), groupArgs...)
+		if err != nil {
+			fail(w, 500, "query failed")
+			return
+		}
+		grants := map[string][]string{}
+		for links.Next() {
+			var groupID, identityGroupID string
+			if err = links.Scan(&groupID, &identityGroupID); err != nil {
+				links.Close()
+				fail(w, 500, "query failed")
+				return
+			}
+			grants[groupID] = append(grants[groupID], identityGroupID)
+		}
+		if err = links.Err(); err != nil {
+			links.Close()
+			fail(w, 500, "query failed")
+			return
+		}
+		links.Close()
+		for index := range items {
+			items[index].IdentityGroupIDs = grants[items[index].ID]
+		}
 	}
 	reply(w, 200, map[string]any{"items": items, "total": total})
 }
@@ -264,6 +302,20 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &g) {
 		return
 	}
+	// Older clients submitted individual users. Resolve them to their current
+	// identity groups, then persist only the identity-group authorization.
+	for _, userID := range g.UserIDs {
+		var identityGroupID string
+		if err := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT identity_group_id FROM cp_users WHERE id=?`), userID).Scan(&identityGroupID); err != nil || identityGroupID == "" {
+			fail(w, 400, "授权用户尚未分配身份用户组")
+			return
+		}
+		if !contains(g.IdentityGroupIDs, identityGroupID) {
+			g.IdentityGroupIDs = append(g.IdentityGroupIDs, identityGroupID)
+		}
+	}
+	g.UserIDs = nil
+	g.IdentityGroupIDs = cleanGroupList(g.IdentityGroupIDs)
 	if !contains([]string{"", contract.GroupMonitor, contract.GroupEntry, contract.GroupExit, contract.GroupChainExit}, g.Type) {
 		fail(w, 400, "不支持的设备类型")
 		return
@@ -325,6 +377,11 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		g.Version++
 	}
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		for _, identityGroupID := range g.IdentityGroupIDs {
+			if _, err := s.identityGroupForUpdate(r.Context(), tx, identityGroupID); err != nil {
+				return errors.New("身份用户组不存在")
+			}
+		}
 		if err := s.validateGroupTypeTx(r.Context(), tx, g, create); err != nil {
 			return err
 		}
@@ -348,12 +405,12 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 			if n != 1 {
 				return errConflict
 			}
-			if _, e = tx.ExecContext(r.Context(), s.q(`DELETE FROM cp_group_users WHERE group_id=?`), g.ID); e != nil {
+			if _, e = tx.ExecContext(r.Context(), s.q(`DELETE FROM cp_group_identity_groups WHERE group_id=?`), g.ID); e != nil {
 				return e
 			}
 		}
-		for _, uid := range g.UserIDs {
-			if _, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_group_users(group_id,user_id) VALUES(?,?)`), g.ID, uid); e != nil {
+		for _, identityGroupID := range g.IdentityGroupIDs {
+			if _, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_group_identity_groups(group_id,identity_group_id) VALUES(?,?)`), g.ID, identityGroupID); e != nil {
 				return e
 			}
 		}
@@ -591,8 +648,11 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 	if e = json.Unmarshal([]byte(payload), &g); e != nil {
 		return e
 	}
-	if actor.Role != "admin" && !contains(g.UserIDs, actor.ID) {
-		return errors.New("group not authorized")
+	if actor.Role != "admin" {
+		authorized, err := s.groupAuthorized(ctx, tx, rule.GroupID, actor.ID)
+		if err != nil || !authorized {
+			return errors.New("group not authorized")
+		}
 	}
 	previousMultiplier := old.BillingMultiplier
 	rule.BillingMultiplier, e = effectiveMultiplier(g.Multiplier, exitMultiplier)
@@ -757,7 +817,7 @@ func (s *Server) diagnoseRule(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "diagnostic unavailable")
 		return
 	}
-	if err := s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT COUNT(*) FROM cp_group_users WHERE user_id=? AND group_id=?"), owner, rule.GroupID).Scan(&membership); err != nil {
+	if err := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users u ON u.identity_group_id=gig.identity_group_id WHERE u.id=? AND gig.group_id=?`), owner, rule.GroupID).Scan(&membership); err != nil {
 		fail(w, 500, "diagnostic unavailable")
 		return
 	}

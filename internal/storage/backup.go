@@ -52,7 +52,7 @@ func (s *Store) tables(ctx context.Context) ([]string, error) {
 		}
 	}
 	// Dependency order for foreign keys; remaining commerce tables use stable IDs.
-	rank := map[string]int{"cp_users": 0, "cp_groups": 1, "cp_nodes": 2, "cp_rules": 3, "cp_group_users": 4, "cp_node_groups": 5, "cp_ports": 6, "cp_sessions": 7, "cp_tokens": 8}
+	rank := map[string]int{"cp_identity_groups": 0, "cp_users": 1, "cp_groups": 2, "cp_nodes": 3, "cp_rules": 4, "cp_group_identity_groups": 5, "cp_group_users": 6, "cp_node_groups": 7, "cp_ports": 8, "cp_sessions": 9, "cp_tokens": 10}
 	sort.Slice(out, func(i, j int) bool {
 		a, ok := rank[out[i]]
 		if !ok {
@@ -188,6 +188,11 @@ func (s *Store) Import(ctx context.Context, src io.Reader) error {
 				}
 				if decoder.Decode(new(any)) != io.EOF {
 					return errors.New("trailing backup data")
+				}
+				// Pre-identity backups restore into an already migrated database.
+				// Convert their individual grants in the same restore transaction.
+				if !seen["cp_identity_groups"] {
+					return s.backfillIdentityGroups(ctx, tx)
 				}
 				return nil
 			}

@@ -10,6 +10,12 @@ import { readFile, mkdir } from "node:fs/promises";
 import { resolve, extname } from "node:path";
 import assert from "node:assert/strict";
 const assets = resolve(import.meta.dirname, "../internal/webui/assets");
+const apiDocument = JSON.parse(
+  await readFile(
+    resolve(import.meta.dirname, "../internal/openapi/openapi.json"),
+    "utf8",
+  ),
+);
 let authorized = false;
 let expire = false;
 let rules = [];
@@ -35,12 +41,13 @@ const user = {
   id: "u1",
   username: "fixture-admin",
   role: "admin",
+  identity_group_id: "ig1",
   disabled: false,
 };
 const group = {
   id: "g1",
   name: "Fixture group",
-  user_ids: ["u1"],
+  identity_group_ids: ["ig1"],
   blocked_protocols: [],
   multiplier: "1",
   port_min: 10000,
@@ -65,10 +72,10 @@ const fixtureProbe = {
   cpu_percent: null,
   memory_used: null,
   memory_total: null,
-  disk_used: null,
-  disk_total: null,
-  upload_bps: null,
-  download_bps: null,
+  disk_used: String(1023n * 1024n ** 3n),
+  disk_total: String(1024n ** 4n),
+  upload_bps: 1023 * 1024 ** 3,
+  download_bps: 1024 ** 4,
   load1: null,
   cpu_model: "Fixture CPU",
   swap_used: "0",
@@ -112,6 +119,8 @@ const server = createServer(async (req, res) => {
         diagnostics_per_minute: 6,
         geo_lookup_url: "https://ipwho.is/{ip}",
       });
+
+    if (path === "/openapi.json") return json(apiDocument);
 
     if (path === "/auth/login") {
       authorized = true;
@@ -201,7 +210,9 @@ const server = createServer(async (req, res) => {
         memory_percent: 50,
         disk_percent: 0,
         load1: null,
-        upload_bps: 1024 * index,
+        upload_bps: [0, 1024, 1024 ** 2, 1024 ** 3, 1024 ** 4 - 1, 1024 ** 4][
+          index
+        ],
         download_bps: 2048 * index,
       }));
       if (historyMode === "hold") {
@@ -210,12 +221,20 @@ const server = createServer(async (req, res) => {
       }
       return json({ items, total: items.length });
     }
-    if (path === "/auto-renew") return json({enabled:false});
+    if (path === "/auto-renew") return json({ enabled: false });
     const maps = {
       "/rules": rules,
       "/nodes": [node],
       "/groups": [group],
       "/users": [user],
+      "/identity-groups": [
+        {
+          id: "ig1",
+          name: "Fixture identity",
+          user_count: 1,
+          device_group_count: 1,
+        },
+      ],
       "/audit": [
         {
           id: "audit1",
@@ -358,13 +377,54 @@ try {
         if (m.type() === "error") errors.push(m.text());
       });
       await page.goto(base + "/admin");
-      await page.getByLabel("用户名", { exact: true }).waitFor({timeout:10000}).catch(async (e)=>{throw new Error(`${e.message}\n${await page.locator("body").innerText()}\n${errors.join("\n")}`)});
+      await page
+        .getByLabel("用户名", { exact: true })
+        .waitFor({ timeout: 10000 })
+        .catch(async (e) => {
+          throw new Error(
+            `${e.message}\n${await page.locator("body").innerText()}\n${errors.join("\n")}`,
+          );
+        });
       await page.getByLabel("用户名", { exact: true }).fill("fixture-admin");
       await page.getByLabel("密码", { exact: true }).fill("fixture-password");
       await page.getByRole("button", { name: "登录控制台" }).click();
       await page
         .getByRole("heading", { name: "你好，fixture-admin" })
         .waitFor();
+      await page.getByRole("link", { name: "API 列表", exact: true }).click();
+      await page.getByRole("heading", { name: "全站 API 列表" }).waitFor();
+      await page.getByText(/共 \d+ 个接口/).waitFor();
+      const apiViewport = page.viewportSize();
+      for (const width of [apiViewport?.width || 1440, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        const overlaps = await page.locator(".api-entry").evaluateAll((items) =>
+          items.flatMap((item) => {
+            const name = item.querySelector(".api-operation-name");
+            const summary = item.querySelector(".api-summary");
+            if (!name?.textContent?.trim() || !summary?.textContent?.trim())
+              return [];
+            return name.getBoundingClientRect().bottom >
+              summary.getBoundingClientRect().top + 1
+              ? [item.getAttribute("data-operation")]
+              : [];
+          }),
+        );
+        assert.deepEqual(overlaps, [], `API labels overlap at ${width}px`);
+      }
+      if (apiViewport) await page.setViewportSize(apiViewport);
+      await page
+        .getByLabel("搜索接口", { exact: true })
+        .fill("identity-groups");
+      const identityCreate = page
+        .locator(".api-entry")
+        .filter({ hasText: "POST" })
+        .filter({ hasText: "/api/v1/identity-groups" })
+        .first();
+      await identityCreate.waitFor();
+      await identityCreate.locator(".api-operation").click();
+      await page.getByText("认证方式", { exact: true }).waitFor();
+      await page.getByRole("heading", { name: /请求体/ }).waitFor();
+      await page.getByRole("button", { name: "清除筛选", exact: true }).click();
       assert.equal(
         await page.evaluate(
           () => new Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -476,6 +536,18 @@ try {
         .getByText("fixture · 2026-07-15 00:20:30", { exact: true })
         .waitFor();
       assert.ok((await page.getByText("未知", { exact: true }).count()) > 0);
+      await page
+        .locator(".probe .metrics")
+        .getByText("1023 GB/s", { exact: true })
+        .waitFor();
+      await page
+        .locator(".probe .metrics")
+        .getByText("1 TB/s", { exact: true })
+        .waitFor();
+      await page
+        .locator(".probe .metrics")
+        .getByText("1023 GB / 1 TB", { exact: true })
+        .waitFor();
       const history = page.getByRole("region", { name: "历史趋势" });
       await history.getByText("6 个采样桶 · 5 个CPU有效值").waitFor();
       assert.match(
@@ -519,13 +591,49 @@ try {
       await slider.press("Home");
       await history
         .locator(".history-selection")
-        .getByText("0 bytes/s", { exact: true })
+        .getByText("0 B/s", { exact: true })
         .waitFor();
       await slider.press("ArrowRight");
       await history
         .locator(".history-selection")
-        .getByText("1,024 bytes/s", { exact: true })
+        .getByText("1 KB/s", { exact: true })
         .waitFor();
+      for (const expected of ["1 MB/s", "1 GB/s", "1023.99 GB/s", "1 TB/s"]) {
+        await slider.press("ArrowRight");
+        await history
+          .locator(".history-selection")
+          .getByText(expected, { exact: true })
+          .waitFor();
+      }
+      assert.equal(
+        await history.locator(".history-y span").first().innerText(),
+        "1 TB/s",
+      );
+      if (name === "chromium") {
+        await mkdir(resolve(import.meta.dirname, "../.gocache/screens"), {
+          recursive: true,
+        });
+        for (const [size, width] of [
+          ["desktop", 1440],
+          ["mobile", 320],
+        ]) {
+          await page.setViewportSize({ width, height: 1000 });
+          await page.screenshot({
+            path: resolve(
+              import.meta.dirname,
+              `../.gocache/screens/probe-units-${size}.png`,
+            ),
+            fullPage: true,
+          });
+          assert.ok(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+            `probe unit labels overflow at ${width}px`,
+          );
+        }
+        await page.setViewportSize({ width: 1440, height: 1000 });
+      }
       await page.getByLabel("历史时间范围").selectOption("180d");
       await page.waitForURL(/range=180d/);
       await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();

@@ -8,6 +8,7 @@ import {
   formatDateTime,
   formatDate,
   formatTime,
+  formatBytes,
 } from "../core/format";
 
 interface HistorySample {
@@ -36,8 +37,8 @@ const metrics = [
   { key: "memory_percent", label: "内存", unit: "%" },
   { key: "disk_percent", label: "磁盘", unit: "%" },
   { key: "load1", label: "1 分钟负载", unit: "" },
-  { key: "upload_bps", label: "上行", unit: "bytes/s" },
-  { key: "download_bps", label: "下行", unit: "bytes/s" },
+  { key: "upload_bps", label: "上行", unit: "B/s" },
+  { key: "download_bps", label: "下行", unit: "B/s" },
 ] as const;
 const selectedNode = computed(
   () =>
@@ -49,6 +50,7 @@ const range = computed(
 const metric = computed(
   () => metrics.find((item) => item.key === route.query.metric) || metrics[0],
 );
+const rateMetric = computed(() => metric.value.unit === "B/s");
 const items = ref<HistorySample[]>([]);
 const loading = ref(false);
 const error = ref("");
@@ -106,8 +108,9 @@ const compact = new Intl.NumberFormat(undefined, {
 });
 function value(item: HistorySample | undefined) {
   const amount = item?.[metric.value.key];
-  return amount === undefined || amount === null
-    ? "未知"
+  if (amount === undefined || amount === null) return "未知";
+  return rateMetric.value
+    ? formatBytes(amount, "/s")
     : `${number.format(amount)}${metric.value.unit ? " " + metric.value.unit : ""}`;
 }
 function axisTime(timestamp: number) {
@@ -230,7 +233,9 @@ onUnmounted(() => {
         </p>
         <div v-if="valid.length" class="history-plot">
           <div class="history-y" aria-hidden="true">
-            <span>{{ compact.format(ceiling) }}</span
+            <span>{{
+              rateMetric ? formatBytes(ceiling, "/s") : compact.format(ceiling)
+            }}</span
             ><span>0</span>
           </div>
           <svg
@@ -315,7 +320,7 @@ onUnmounted(() => {
 }
 .history-plot {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-columns: max-content minmax(0, 1fr);
 }
 .history-y,
 .history-x {
@@ -325,6 +330,7 @@ onUnmounted(() => {
   font-size: 12px;
 }
 .history-y {
+  min-width: 48px;
   flex-direction: column;
   text-align: right;
   padding: 5px 6px 0 0;

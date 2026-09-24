@@ -24,7 +24,7 @@ func (s *Server) exits(w http.ResponseWriter, r *http.Request) {
 	where := ""
 	args := []any{}
 	if actor.Role != "admin" {
-		where = " WHERE EXISTS(SELECT 1 FROM cp_group_users gu WHERE gu.group_id=e.group_id AND gu.user_id=?)"
+		where = " WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=e.group_id AND iu.id=?)"
 		args = append(args, actor.ID)
 	}
 	var total int
@@ -176,8 +176,11 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 	if err := tx.QueryRowContext(ctx, s.q("SELECT role FROM cp_users WHERE id=?"), rule.UserID).Scan(&role); err != nil {
 		return "", err
 	}
-	if role != "admin" && !contains(g.UserIDs, rule.UserID) {
-		return "", errors.New("exit group not authorized")
+	if role != "admin" {
+		authorized, err := s.groupAuthorized(ctx, tx, rule.ExitGroupID, rule.UserID)
+		if err != nil || !authorized {
+			return "", errors.New("exit group not authorized")
+		}
 	}
 	var entry contract.Group
 	if err := tx.QueryRowContext(ctx, s.q("SELECT payload FROM cp_groups WHERE id=?"), rule.GroupID).Scan(&raw); err != nil {

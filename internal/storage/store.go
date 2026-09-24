@@ -423,10 +423,120 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=8").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		if err = EnsureColumn(ctx, conn, s.Dialect, "cp_users", "identity_group_id", "VARCHAR(64) NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		for _, statement := range []string{
+			`CREATE TABLE IF NOT EXISTS cp_identity_groups(id VARCHAR(64) PRIMARY KEY,name VARCHAR(190) NOT NULL UNIQUE)`,
+			`CREATE TABLE IF NOT EXISTS cp_group_identity_groups(group_id VARCHAR(64) NOT NULL,identity_group_id VARCHAR(64) NOT NULL,PRIMARY KEY(group_id,identity_group_id),FOREIGN KEY(group_id) REFERENCES cp_groups(id),FOREIGN KEY(identity_group_id) REFERENCES cp_identity_groups(id))`,
+		} {
+			if _, err = conn.ExecContext(ctx, statement); err != nil {
+				return err
+			}
+		}
+		if err = s.backfillIdentityGroups(ctx, conn); err != nil {
+			return err
+		}
+		if err = EnsureIndex(ctx, conn, s.Dialect, "cp_users", "cp_users_identity_group", "identity_group_id,id", false); err != nil {
+			return err
+		}
+		if err = EnsureIndex(ctx, conn, s.Dialect, "cp_group_identity_groups", "cp_gig_identity", "identity_group_id,group_id", false); err != nil {
+			return err
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(8)"); err != nil {
+			return err
+		}
+	}
 	if s.Dialect == "sqlite" {
 		_, err = conn.ExecContext(ctx, "COMMIT")
 	}
 	return err
+}
+
+// backfillIdentityGroups preserves the old per-user grants by assigning each
+// existing user a deterministic identity group and copying every grant to it.
+func (s *Store) backfillIdentityGroups(ctx context.Context, conn interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}) error {
+	rows, err := conn.QueryContext(ctx, "SELECT id,username,identity_group_id FROM cp_users")
+	if err != nil {
+		return err
+	}
+	type legacyUser struct{ id, username, group string }
+	users := []legacyUser{}
+	byUser := map[string]string{}
+	for rows.Next() {
+		var user legacyUser
+		if err = rows.Scan(&user.id, &user.username, &user.group); err != nil {
+			rows.Close()
+			return err
+		}
+		if user.group == "" {
+			user.group = "legacy-" + user.id
+		}
+		users = append(users, user)
+		byUser[user.id] = user.group
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, user := range users {
+		var exists int
+		if err = conn.QueryRowContext(ctx, s.Rebind("SELECT COUNT(*) FROM cp_identity_groups WHERE id=?"), user.group).Scan(&exists); err != nil {
+			return err
+		}
+		if exists == 0 {
+			if _, err = conn.ExecContext(ctx, s.Rebind("INSERT INTO cp_identity_groups(id,name) VALUES(?,?)"), user.group, user.username); err != nil {
+				return err
+			}
+		}
+		if _, err = conn.ExecContext(ctx, s.Rebind("UPDATE cp_users SET identity_group_id=? WHERE id=?"), user.group, user.id); err != nil {
+			return err
+		}
+	}
+	rows, err = conn.QueryContext(ctx, "SELECT group_id,user_id FROM cp_group_users")
+	if err != nil {
+		return err
+	}
+	type legacyGrant struct{ deviceGroup, user string }
+	grants := []legacyGrant{}
+	for rows.Next() {
+		var grant legacyGrant
+		if err = rows.Scan(&grant.deviceGroup, &grant.user); err != nil {
+			rows.Close()
+			return err
+		}
+		grants = append(grants, grant)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, grant := range grants {
+		identity := byUser[grant.user]
+		if identity == "" {
+			continue
+		}
+		var exists int
+		if err = conn.QueryRowContext(ctx, s.Rebind("SELECT COUNT(*) FROM cp_group_identity_groups WHERE group_id=? AND identity_group_id=?"), grant.deviceGroup, identity).Scan(&exists); err != nil {
+			return err
+		}
+		if exists == 0 {
+			if _, err = conn.ExecContext(ctx, s.Rebind("INSERT INTO cp_group_identity_groups(group_id,identity_group_id) VALUES(?,?)"), grant.deviceGroup, identity); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // backfillGroupJoinKeys 给升级前就存在的设备组各补一把接入密钥。少了这一步，
@@ -470,11 +580,13 @@ var schema = []string{
 	`CREATE TABLE IF NOT EXISTS cp_registration_invites(token_hash VARCHAR(64) PRIMARY KEY,expires_at BIGINT NOT NULL,used_by VARCHAR(64) NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS cp_exits(id VARCHAR(64) PRIMARY KEY,group_id VARCHAR(64) NOT NULL,node_id VARCHAR(64) NOT NULL,payload TEXT NOT NULL,version BIGINT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS cp_schema(version INTEGER PRIMARY KEY)`,
-	`CREATE TABLE IF NOT EXISTS cp_users(id VARCHAR(64) PRIMARY KEY, username VARCHAR(190) NOT NULL UNIQUE, password_hash VARCHAR(190) NOT NULL, role VARCHAR(32) NOT NULL, disabled INTEGER NOT NULL DEFAULT 0)`,
+	`CREATE TABLE IF NOT EXISTS cp_identity_groups(id VARCHAR(64) PRIMARY KEY,name VARCHAR(190) NOT NULL UNIQUE)`,
+	`CREATE TABLE IF NOT EXISTS cp_users(id VARCHAR(64) PRIMARY KEY, username VARCHAR(190) NOT NULL UNIQUE, password_hash VARCHAR(190) NOT NULL, role VARCHAR(32) NOT NULL, identity_group_id VARCHAR(64) NOT NULL DEFAULT '', disabled INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS cp_sessions(token_hash VARCHAR(64) PRIMARY KEY, user_id VARCHAR(64) NOT NULL, expires_at BIGINT NOT NULL, FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
 	`CREATE TABLE IF NOT EXISTS cp_tokens(id VARCHAR(64) PRIMARY KEY,token_hash VARCHAR(64) NOT NULL UNIQUE,user_id VARCHAR(64) NOT NULL,name VARCHAR(190) NOT NULL,expires_at BIGINT NOT NULL,prefix VARCHAR(16) NOT NULL DEFAULT '',created_at BIGINT NOT NULL DEFAULT 0,last_used_at BIGINT NOT NULL DEFAULT 0,FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
 	`CREATE TABLE IF NOT EXISTS cp_groups(id VARCHAR(64) PRIMARY KEY, name VARCHAR(190) NOT NULL, payload TEXT NOT NULL, version BIGINT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS cp_group_users(group_id VARCHAR(64) NOT NULL, user_id VARCHAR(64) NOT NULL, PRIMARY KEY(group_id,user_id), FOREIGN KEY(group_id) REFERENCES cp_groups(id), FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
+	`CREATE TABLE IF NOT EXISTS cp_group_identity_groups(group_id VARCHAR(64) NOT NULL,identity_group_id VARCHAR(64) NOT NULL,PRIMARY KEY(group_id,identity_group_id),FOREIGN KEY(group_id) REFERENCES cp_groups(id),FOREIGN KEY(identity_group_id) REFERENCES cp_identity_groups(id))`,
 	`CREATE TABLE IF NOT EXISTS cp_nodes(id VARCHAR(64) PRIMARY KEY, name VARCHAR(190) NOT NULL, token_hash VARCHAR(64) NOT NULL UNIQUE, payload TEXT NOT NULL, desired_version BIGINT NOT NULL, applied_version BIGINT NOT NULL, apply_error TEXT NOT NULL, last_seen BIGINT NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS cp_node_groups(node_id VARCHAR(64) NOT NULL, group_id VARCHAR(64) NOT NULL, PRIMARY KEY(node_id,group_id), FOREIGN KEY(node_id) REFERENCES cp_nodes(id), FOREIGN KEY(group_id) REFERENCES cp_groups(id))`,
 	`CREATE TABLE IF NOT EXISTS cp_enrollments(token_hash VARCHAR(64) PRIMARY KEY, payload TEXT NOT NULL, expires_at BIGINT NOT NULL)`,
@@ -494,6 +606,7 @@ var indexes = []struct{ name, table, columns string }{
 	{"cp_sessions_user", "cp_sessions", "user_id,expires_at"},
 	{"cp_sessions_expiry", "cp_sessions", "expires_at"},
 	{"cp_gu_user", "cp_group_users", "user_id,group_id"},
+	{"cp_gig_identity", "cp_group_identity_groups", "identity_group_id,group_id"},
 	{"cp_ng_group", "cp_node_groups", "group_id,node_id"},
 	{"cp_ports_rule", "cp_ports", "rule_id"},
 	{"cp_usage_rule", "cp_usage", "rule_id,received_at"},

@@ -4,7 +4,11 @@ import { api, errorText, ApiError } from "../core/api";
 import ProbeHistory from "../components/ProbeHistory.vue";
 import LocationFlag from "../components/LocationFlag.vue";
 import Select from "../components/Select.vue";
-import { displayTimeZoneLabel, formatDateTime } from "../core/format";
+import {
+  displayTimeZoneLabel,
+  formatDateTime,
+  formatBytes,
+} from "../core/format";
 interface Probe {
   node_id: string;
   sampled_at: string;
@@ -72,18 +76,6 @@ function accept(items: Probe[]) {
       histories.value[p.node_id] = [...h, p.upload_bps].slice(-30);
     }
   }
-}
-function bytes(value: string | null | undefined) {
-  // 缺失（undefined）与未知（null）都要当成「没有这个数」：老版本 Agent 不
-  // 上报交换分区，字段就是缺的，不该让整张卡片渲染不出来。
-  if (value === null || value === undefined) return "未知";
-  const n = BigInt(value);
-  return n >= 1073741824n
-    ? `${Number(n / 1048576n) / 1024} GiB`
-    : `${Number(n / 1024n)} KiB`;
-}
-function rate(value: number | null) {
-  return value === null ? "未知" : `${(value / 1024).toFixed(1)} KiB/s`;
 }
 function points(id: string) {
   const h = histories.value[id] || [];
@@ -256,11 +248,11 @@ onUnmounted(() => {
         <dl class="metrics">
           <div>
             <dt>上行</dt>
-            <dd>{{ rate(p.upload_bps) }}</dd>
+            <dd>{{ formatBytes(p.upload_bps, "/s") }}</dd>
           </div>
           <div>
             <dt>下行</dt>
-            <dd>{{ rate(p.download_bps) }}</dd>
+            <dd>{{ formatBytes(p.download_bps, "/s") }}</dd>
           </div>
           <div>
             <dt>CPU 型号</dt>
@@ -280,15 +272,22 @@ onUnmounted(() => {
           </div>
           <div>
             <dt>内存 已用 / 总量</dt>
-            <dd>{{ bytes(p.memory_used) }} / {{ bytes(p.memory_total) }}</dd>
+            <dd>
+              {{ formatBytes(p.memory_used) }} /
+              {{ formatBytes(p.memory_total) }}
+            </dd>
           </div>
           <div>
             <dt>磁盘 已用 / 总量</dt>
-            <dd>{{ bytes(p.disk_used) }} / {{ bytes(p.disk_total) }}</dd>
+            <dd>
+              {{ formatBytes(p.disk_used) }} / {{ formatBytes(p.disk_total) }}
+            </dd>
           </div>
           <div>
             <dt>虚拟交换 已用 / 总量</dt>
-            <dd>{{ bytes(p.swap_used) }} / {{ bytes(p.swap_total) }}</dd>
+            <dd>
+              {{ formatBytes(p.swap_used) }} / {{ formatBytes(p.swap_total) }}
+            </dd>
           </div>
         </dl>
         <svg

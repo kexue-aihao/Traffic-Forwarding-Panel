@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -17,6 +18,9 @@ import (
 const MaxPendingRecords = 4096
 const maxStoreQueue = 256
 const maxCommitBatch = 128
+
+var errLeaseUnavailable = errors.New("configuration or lease unavailable")
+var errSpoolFull = errors.New("usage spool full")
 
 type diskState struct {
 	Identity contract.Registered       `json:"identity"`
@@ -36,6 +40,7 @@ type stateEvent struct {
 	LeaseID  string                `json:"lease_id,omitempty"`
 }
 type stateRequest struct {
+	ctx    context.Context
 	event  stateEvent
 	rule   contract.Rule
 	until  time.Time
@@ -44,20 +49,23 @@ type stateRequest struct {
 	done   chan error
 }
 type Store struct {
-	mu        sync.Mutex
-	path      string
-	state     diskState
-	failed    bool
-	lock      *flock.Flock
-	wal       *os.File
-	seq       uint64
-	walBytes  int64
-	queue     chan *stateRequest
-	done      chan struct{}
-	submitMu  sync.RWMutex
-	closing   bool
-	closeOnce sync.Once
-	closeErr  error
+	mu         sync.Mutex
+	path       string
+	state      diskState
+	failed     bool
+	lock       *flock.Flock
+	wal        *os.File
+	seq        uint64
+	walBytes   int64
+	queue      chan *stateRequest
+	done       chan struct{}
+	submitMu   sync.RWMutex
+	closing    bool
+	closeOnce  sync.Once
+	closeErr   error
+	changed    chan struct{}
+	usageWake  chan struct{}
+	configWake chan struct{}
 	// Test hooks run under mu, and are nil in production.
 	fault    func(string) error
 	writeWAL func([]byte) (int, error)
@@ -68,7 +76,7 @@ func OpenStore(path string) (*Store, error) {
 	if e != nil {
 		return nil, e
 	}
-	s := &Store{path: absolute, queue: make(chan *stateRequest, maxStoreQueue), done: make(chan struct{})}
+	s := &Store{path: absolute, queue: make(chan *stateRequest, maxStoreQueue), done: make(chan struct{}), changed: make(chan struct{}), usageWake: make(chan struct{}, 1), configWake: make(chan struct{}, 1)}
 	if e = os.MkdirAll(filepath.Dir(s.path), 0700); e != nil {
 		return nil, e
 	}
@@ -105,6 +113,7 @@ func (s *Store) Close() error {
 		<-s.done
 		s.mu.Lock()
 		s.failed = true
+		s.notifyChangedLocked()
 		if s.wal != nil {
 			s.closeErr = s.wal.Close()
 		}
@@ -121,6 +130,17 @@ func (s *Store) submit(r *stateRequest) error {
 	if s.closing {
 		s.submitMu.RUnlock()
 		return errors.New("state closed")
+	}
+	if r.ctx != nil {
+		select {
+		case s.queue <- r:
+			s.submitMu.RUnlock()
+			// Once queued, wait for the durable outcome, even on cancellation.
+			return <-r.done
+		case <-r.ctx.Done():
+			s.submitMu.RUnlock()
+			return r.ctx.Err()
+		}
 	}
 	select {
 	case s.queue <- r:
@@ -148,7 +168,8 @@ func (s *Store) writer() {
 		}
 		batch := []*stateRequest{r}
 		if r.event.Kind == "charge" {
-			timer := time.NewTimer(time.Millisecond)
+			// Drain requests already queued, including arrivals during the last
+			// fsync. Do not add a fixed timer delay to every single-flow chunk.
 		gather:
 			for len(batch) < maxCommitBatch {
 				select {
@@ -161,11 +182,10 @@ func (s *Store) writer() {
 						break gather
 					}
 					batch = append(batch, next)
-				case <-timer.C:
+				default:
 					break gather
 				}
 			}
-			timer.Stop()
 		}
 		s.process(batch)
 	}
@@ -183,6 +203,7 @@ func (s *Store) process(batch []*stateRequest) {
 		e := s.checkpointLocked()
 		if e != nil {
 			s.failed = true
+			s.notifyChangedLocked()
 		}
 		batch[0].done <- e
 		return
@@ -194,6 +215,10 @@ func (s *Store) process(batch []*stateRequest) {
 	known := map[string]bool{}
 	pending := len(s.state.Pending)
 	for i, r := range batch {
+		if r.ctx != nil && r.ctx.Err() != nil {
+			results[i] = r.ctx.Err()
+			continue
+		}
 		if r.event.Kind != "charge" {
 			results[i] = s.validateEvent(r.event)
 			if results[i] == nil {
@@ -208,9 +233,13 @@ func (s *Store) process(batch []*stateRequest) {
 		e := s.availableLocked(r.rule, r.until, 0)
 		if e == nil && r.rule.Lease != nil {
 			lease := r.rule.Lease
+			if int64(r.n) > lease.Bytes {
+				results[i] = errors.New("payload exceeds lease capacity")
+				continue
+			}
 			remaining := lease.Bytes - s.state.Used[lease.ID] - reserved[lease.ID]
 			if retiring[lease.ID] || int64(r.n) > remaining {
-				e = errors.New("lease budget exhausted")
+				e = errLeaseUnavailable
 				if !retiring[lease.ID] {
 					events = append(events, stateEvent{Kind: "retire", LeaseID: lease.ID})
 					retiring[lease.ID] = true
@@ -218,7 +247,7 @@ func (s *Store) process(batch []*stateRequest) {
 			}
 		}
 		if e == nil && pending >= MaxPendingRecords {
-			e = errors.New("usage spool full")
+			e = errSpoolFull
 		}
 		if e != nil {
 			results[i] = e
@@ -263,11 +292,18 @@ func (s *Store) process(batch []*stateRequest) {
 		}
 		if e != nil {
 			s.failed = true
+			s.notifyChangedLocked()
 			for _, r := range batch {
 				r.done <- e
 			}
 			return
 		}
+	}
+	if batch[0].event.Kind != "charge" || len(retiring) > 0 {
+		s.notifyChangedLocked()
+	}
+	if len(s.state.Pending) >= 100 || len(retiring) > 0 {
+		s.requestUsage()
 	}
 	for i, r := range batch {
 		r.done <- results[i]
@@ -414,19 +450,19 @@ func (s *Store) availableLocked(r contract.Rule, until time.Time, n int64) error
 		return errors.New("durable storage unavailable")
 	}
 	if !now.Before(until) || r.Lease == nil || !now.Before(r.Lease.ExpiresAt) {
-		return errors.New("configuration or lease expired")
+		return errLeaseUnavailable
 	}
 	if _, retired := s.state.Retired[r.Lease.ID]; retired {
-		return errors.New("lease retired")
+		return errLeaseUnavailable
 	}
 	if old, ok := s.state.Leases[r.Lease.ID]; ok && !sameLease(old, *r.Lease) {
 		return errors.New("lease changed")
 	}
 	if r.Lease.Bytes <= 0 || n > r.Lease.Bytes-s.state.Used[r.Lease.ID] || s.state.Used[r.Lease.ID] >= r.Lease.Bytes {
-		return errors.New("lease budget exhausted")
+		return errLeaseUnavailable
 	}
 	if len(s.state.Pending) >= MaxPendingRecords {
-		return errors.New("usage spool full")
+		return errSpoolFull
 	}
 	return nil
 }
@@ -435,6 +471,54 @@ func (s *Store) availableLocked(r contract.Rule, until time.Time, n int64) error
 // reservations or unflushed usage become visible to readers or the sender.
 func (s *Store) Charge(r contract.Rule, until time.Time, upload bool, n int) error {
 	return s.submit(&stateRequest{event: stateEvent{Kind: "charge"}, rule: r, until: until, upload: upload, n: n})
+}
+
+func (s *Store) chargeContext(ctx context.Context, r contract.Rule, until time.Time, upload bool, n int) error {
+	return s.submit(&stateRequest{ctx: ctx, event: stateEvent{Kind: "charge"}, rule: r, until: until, upload: upload, n: n})
+}
+
+func wake(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Store) requestUsage() { wake(s.usageWake) }
+
+func (s *Store) notifyChangedLocked() {
+	close(s.changed)
+	s.changed = make(chan struct{})
+}
+
+func (s *Store) changes() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.changed
+}
+
+// Renewal only stops spending the old allocation; live sockets stay open.
+// Pending-record pressure is not a reason to retire an otherwise valid lease.
+func (s *Store) renewals() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	var ids []string
+	for _, r := range s.state.Config.Rules {
+		l := r.Lease
+		if !r.Enabled || l == nil {
+			continue
+		}
+		if _, retired := s.state.Retired[l.ID]; retired {
+			continue
+		}
+		used := s.state.Used[l.ID]
+		low := used > 0 && l.Bytes-used <= min(l.Bytes/8, 64<<10)
+		if low || !now.Add(15*time.Second).Before(minTime(s.state.Config.ValidUntil, l.ExpiresAt)) {
+			ids = append(ids, l.ID)
+		}
+	}
+	return ids
 }
 func randomID() (string, error) {
 	b := make([]byte, 16)

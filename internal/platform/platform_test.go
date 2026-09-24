@@ -9,6 +9,7 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/testdb"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -170,9 +171,12 @@ func TestAuthorizationCSRFAndTokenRevocation(t *testing.T) {
 	f := setup(t)
 	g, n := f.node()
 	read[contract.Rule](t, f.req("POST", "/rules", ruleFor(g, n), ""), 201)
-	u := read[contract.User](t, f.req("POST", "/users", map[string]any{"username": "alice", "password": "test-password-long", "role": "user"}, ""), 201)
+	u := read[contract.UserCreated](t, f.req("POST", "/users", map[string]any{"username": "alice", "role": "user"}, ""), 201)
+	if !regexp.MustCompile(`^[A-Za-z0-9]{8}(?:-[A-Za-z0-9]{8}){3}$`).MatchString(u.InitialPassword) {
+		t.Fatalf("unexpected generated password format: %q", u.InitialPassword)
+	}
 	adminCookie := f.cookie
-	rr := f.req("POST", "/auth/login", map[string]any{"username": "alice", "password": "test-password-long"}, "")
+	rr := f.req("POST", "/auth/login", map[string]any{"username": "alice", "password": u.InitialPassword}, "")
 	read[map[string]any](t, rr, 200)
 	f.cookie = rr.Result().Cookies()[0]
 	if r := f.req("GET", "/users", nil, ""); r.Code != 403 {
@@ -205,6 +209,40 @@ func TestAuthorizationCSRFAndTokenRevocation(t *testing.T) {
 	if rr := f.req("GET", "/auth/session", nil, tok["token"].(string)); rr.Code != 401 {
 		t.Fatal("disabled token remained valid")
 	}
+}
+
+func TestAdminResetUserPasswordRevokesCredentials(t *testing.T) {
+	f := setup(t)
+	adminCookie := f.cookie
+	created := read[contract.UserCreated](t, f.req("POST", "/users", map[string]any{"username": "reset-user", "role": "user"}, ""), 201)
+
+	login := f.req("POST", "/auth/login", map[string]any{"username": created.Username, "password": created.InitialPassword}, "")
+	read[map[string]any](t, login, 200)
+	userCookie := login.Result().Cookies()[0]
+	f.cookie = userCookie
+	apiToken := read[map[string]any](t, f.req("POST", "/auth/tokens", map[string]any{"name": "before-reset", "permanent": true}, ""), 201)
+
+	f.cookie = adminCookie
+	reset := read[contract.UserPasswordReset](t, f.req("POST", "/users/"+created.ID+"/reset-password", map[string]any{}, ""), 200)
+	if reset.UserID != created.ID || !regexp.MustCompile(`^[A-Za-z0-9]{8}(?:-[A-Za-z0-9]{8}){3}$`).MatchString(reset.Password) {
+		t.Fatalf("unexpected password reset response: %+v", reset)
+	}
+	if reset.Password == created.InitialPassword {
+		t.Fatal("password reset reused the initial password")
+	}
+
+	f.cookie = userCookie
+	if rr := f.req("GET", "/auth/session", nil, ""); rr.Code != 401 {
+		t.Fatal("old session survived password reset", rr.Code)
+	}
+	if rr := f.req("GET", "/auth/session", nil, apiToken["token"].(string)); rr.Code != 401 {
+		t.Fatal("old API token survived password reset", rr.Code)
+	}
+	f.cookie = nil
+	if rr := f.req("POST", "/auth/login", map[string]any{"username": created.Username, "password": created.InitialPassword}, ""); rr.Code != 401 {
+		t.Fatal("old password survived reset", rr.Code)
+	}
+	read[map[string]any](t, f.req("POST", "/auth/login", map[string]any{"username": created.Username, "password": reset.Password}, ""), 200)
 }
 
 func TestRetirementRequiresSettledUsageAndNeverReplaysGrant(t *testing.T) {
@@ -254,8 +292,8 @@ func TestTokenListOwnerIsolationAndNoSecrets(t *testing.T) {
 	f := setup(t)
 	admin := f.cookie
 	token := read[map[string]any](t, f.req("POST", "/auth/tokens", map[string]any{"name": "private-admin-token", "expires_at": time.Now().Add(time.Hour)}, ""), 201)
-	read[contract.User](t, f.req("POST", "/users", map[string]any{"username": "other", "password": "test-password-long", "role": "user"}, ""), 201)
-	res := f.req("POST", "/auth/login", map[string]any{"username": "other", "password": "test-password-long"}, "")
+	created := read[contract.UserCreated](t, f.req("POST", "/users", map[string]any{"username": "other", "role": "user"}, ""), 201)
+	res := f.req("POST", "/auth/login", map[string]any{"username": "other", "password": created.InitialPassword}, "")
 	f.cookie = res.Result().Cookies()[0]
 	other := read[struct {
 		Total int `json:"total"`

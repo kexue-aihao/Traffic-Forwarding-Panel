@@ -119,7 +119,7 @@ func main() {
 			panic(err)
 		}
 	}
-	for _, v := range []any{contract.SiteSettings{}, contract.Exit{}, contract.Diagnostic{}, platform.ImportPreviewItem{}, commerce.PurchaseRefund{}, contract.User{}, contract.Group{}, contract.Node{}, contract.Rule{}, contract.Config{}, contract.Registration{}, contract.Registered{}, contract.Ack{}, contract.Probe{}, contract.UsageBatch{}, contract.APIError{}, commerce.Plan{}, commerce.Wallet{}, commerce.Order{}, commerce.Ledger{}, commerce.Entitlement{}, commerce.AutoRenew{}, commerce.RedeemCode{}, commerce.ReferralCode{}, commerce.Commission{}, commerce.Refund{}, commerce.WebhookSubscription{}, commerce.WebhookSettings{}, alerts.Policy{}, commerce.Event{}, platform.Task{}, platform.ProbeHistoryPoint{}, contract.APIToken{}, contract.DeviceIP{}} {
+	for _, v := range []any{contract.SiteSettings{}, contract.Exit{}, contract.Diagnostic{}, platform.ImportPreviewItem{}, commerce.PurchaseRefund{}, contract.User{}, contract.UserCreated{}, contract.UserPasswordReset{}, contract.IdentityGroup{}, contract.Group{}, contract.Node{}, contract.Rule{}, contract.Config{}, contract.Registration{}, contract.Registered{}, contract.Ack{}, contract.Probe{}, contract.UsageBatch{}, contract.APIError{}, commerce.Plan{}, commerce.Wallet{}, commerce.Order{}, commerce.Ledger{}, commerce.Entitlement{}, commerce.AutoRenew{}, commerce.RedeemCode{}, commerce.ReferralCode{}, commerce.Commission{}, commerce.Refund{}, commerce.WebhookSubscription{}, commerce.WebhookSettings{}, alerts.Policy{}, commerce.Event{}, platform.Task{}, platform.ProbeHistoryPoint{}, contract.APIToken{}, contract.DeviceIP{}} {
 		wire(reflect.TypeOf(v))
 	}
 	str, num, flag := scalar("string"), scalar("integer"), scalar("boolean")
@@ -142,7 +142,24 @@ func main() {
 	model("TokenPage", schema{"items": nullable(array(ref("APIToken"))), "total": num}, "items", "total")
 	model("DeviceIPView", schema{"device": ref("DeviceIP")}, "device")
 	model("DeviceIPPage", schema{"items": nullable(array(ref("DeviceIP"))), "total": num}, "items", "total")
-	model("UserCreate", schema{"username": str, "password": str, "role": schema{"type": "string", "enum": []string{"user", "admin"}}}, "username", "password", "role")
+	model("UserCreate", schema{"username": str, "role": schema{"type": "string", "enum": []string{"user", "admin"}}, "identity_group_id": str}, "username", "role")
+	model("UserIdentityGroup", schema{"identity_group_id": str}, "identity_group_id")
+	identityGroupID := schema{"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "Administrator-specified identity group ID; editable with references updated atomically."}
+	model("IdentityGroupCreate", schema{"id": identityGroupID, "name": schema{"type": "string", "minLength": 1, "maxLength": 190}}, "id", "name")
+	userCreatedFields := schemas["UserCreated"].(schema)["properties"].(schema)
+	userCreatedFields["initial_password"] = schema{
+		"type":        "string",
+		"pattern":     "^[A-Za-z0-9]{8}(?:-[A-Za-z0-9]{8}){3}$",
+		"readOnly":    true,
+		"description": "System-generated initial password returned exactly once.",
+	}
+	passwordResetFields := schemas["UserPasswordReset"].(schema)["properties"].(schema)
+	passwordResetFields["password"] = schema{
+		"type":        "string",
+		"pattern":     "^[A-Za-z0-9]{8}(?:-[A-Za-z0-9]{8}){3}$",
+		"readOnly":    true,
+		"description": "System-generated replacement password returned exactly once.",
+	}
 	model("UserStatus", schema{"disabled": flag}, "disabled")
 	model("Enrollment", schema{"name": str, "group_ids": schema{"type": "array", "items": str, "minItems": 1, "maxItems": 100}}, "group_ids")
 	model("EnrollmentSecret", schema{"token": str, "expires_at": date}, "token", "expires_at")
@@ -171,8 +188,8 @@ func main() {
 	groupFields["blocked_protocols"].(schema)["description"] = "Application traffic blocks: app:http, app:socks. Independent of forwarding methods. Legacy network:/transport: entries and bare carrier values are accepted on write and split into disabled_networks/disabled_transports; bare http historically means the HTTP tunnel."
 	groupFields["disabled_networks"].(schema)["description"] = "Disabled forwarding networks: tcp, udp. Empty means all networks are allowed."
 	groupFields["disabled_transports"].(schema)["description"] = "Disabled forwarding methods: direct, direct-tls, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
-	requestFrom("GroupCreate", "Group", "name type? direct_policy? chain_group_ids? advanced? user_ids? blocked_protocols? disabled_networks? disabled_transports? multiplier? port_min port_max max_rules?")
-	requestFrom("GroupUpdate", "Group", "name type? direct_policy? chain_group_ids? advanced? user_ids? blocked_protocols? disabled_networks? disabled_transports? multiplier? port_min port_max max_rules? version")
+	requestFrom("GroupCreate", "Group", "name type? direct_policy? chain_group_ids? advanced? identity_group_ids? blocked_protocols? disabled_networks? disabled_transports? multiplier? port_min port_max max_rules?")
+	requestFrom("GroupUpdate", "Group", "name type? direct_policy? chain_group_ids? advanced? identity_group_ids? blocked_protocols? disabled_networks? disabled_transports? multiplier? port_min port_max max_rules? version")
 	requestFrom("RuleCreate", "Rule", "user_id? name node_id group_id network transport listen target enabled blocked_protocols? tunnel? backends? shared_tls? proxy_protocol? exit_group_id? exit_id?")
 	requestFrom("RuleUpdate", "Rule", "user_id? name node_id group_id network transport listen target enabled blocked_protocols? tunnel? backends? shared_tls? proxy_protocol? exit_group_id? exit_id? version")
 	requestFrom("PlanCreate", "Plan", "name price_cents quota_bytes months kind? limits?")
@@ -200,7 +217,7 @@ func main() {
 	model("ExportTask", schema{"rule_ids": schema{"type": "array", "items": str, "maxItems": 500}, "idempotency_key": schema{"type": "string", "minLength": 1, "maxLength": 128}}, "idempotency_key")
 	model("ImportTask", schema{"mode": schema{"type": "string", "enum": []string{"create", "update_by_port"}}, "rules": schema{"type": "array", "items": ref("Rule"), "minItems": 1, "maxItems": 1000}, "idempotency_key": schema{"type": "string", "minLength": 1, "maxLength": 128}}, "rules", "idempotency_key")
 	model("TaskCancel", schema{"status": schema{"const": "cancel_requested"}}, "status")
-	for _, name := range []string{"User", "Group", "Node", "Rule", "Audit", "Plan", "Order", "Ledger", "ProbeHistoryPoint", "PaymentChannel"} {
+	for _, name := range []string{"User", "IdentityGroup", "Group", "Node", "Rule", "Audit", "Plan", "Order", "Ledger", "ProbeHistoryPoint", "PaymentChannel"} {
 		page(name+"Page", name, true)
 	}
 	for _, name := range []string{"Probe", "Task", "Refund", "RedeemCode", "Commission", "WebhookSubscription", "WebhookDelivery", "Event", "PurchaseSnapshot"} {
@@ -269,9 +286,15 @@ func main() {
 		{"GET", "/online/device/ip/list", "", "DeviceIPPage", "200", "user", "Latest addresses of every device visible to this API token, grouped and ordered", false},
 		{"GET", "/health", "", "Health", "200", "public", "Health and database kind", false},
 		{"GET", "/users", "", "UserPage", "200", "admin", "List users", true},
-		{"POST", "/users", "UserCreate", "User", "201", "admin", "Create user", false},
+		{"POST", "/users", "UserCreate", "UserCreated", "201", "admin", "Create user and return the system-generated initial password exactly once", false},
+		{"PUT", "/users/{id}/identity-group", "UserIdentityGroup", "", "204", "admin", "Assign a user to an identity group", false},
+		{"POST", "/users/{id}/reset-password", "Empty", "UserPasswordReset", "200", "admin", "Reset a user password, revoke sessions and tokens, and return the replacement exactly once", false},
 		{"PUT", "/users/{id}/status", "UserStatus", "", "204", "admin", "Disable/enable non-administrator; revoke sessions", false},
-		{"GET", "/groups", "", "GroupPage", "200", "user", "Authorized groups; user_ids hidden for ordinary users", true},
+		{"GET", "/identity-groups", "", "IdentityGroupPage", "200", "admin", "List identity groups and reference counts", true},
+		{"POST", "/identity-groups", "IdentityGroupCreate", "IdentityGroup", "201", "admin", "Create an identity group", false},
+		{"PUT", "/identity-groups/{id}", "IdentityGroupCreate", "IdentityGroup", "200", "admin", "Edit identity group ID and name while preserving user and device-group references", false},
+		{"DELETE", "/identity-groups/{id}", "", "", "204", "admin", "Delete an unreferenced identity group", false},
+		{"GET", "/groups", "", "GroupPage", "200", "user", "Device groups authorized through the current user's identity group", true},
 		{"POST", "/groups", "GroupCreate", "Group", "201", "admin", "Create device group", false},
 		{"PUT", "/groups/{id}", "GroupUpdate", "Group", "200", "admin", "Update group with version check", false},
 		{"GET", "/groups/{id}/join-key", "", "GroupJoinKey", "200", "admin", "Fixed per-group access key behind the device onboarding command; readable again at any time", false},
@@ -374,7 +397,7 @@ func main() {
 			operation["security"] = []any{}
 		case "admin":
 			operation["security"] = []any{schema{"cookieSession": []string{}}}
-		case "node":
+		case "node", "agent":
 			operation["security"] = []any{schema{"nodeBearer": []string{}}}
 		default:
 			operation["security"] = []any{schema{"cookieSession": []string{}}, schema{"ownerBearer": []string{}}}
@@ -390,7 +413,7 @@ func main() {
 				params = append(params, schema{"name": name, "in": "query", "schema": schema{"type": "integer", "minimum": 1}, "description": "page starts at 1; page_size defaults to 20, capped at 100"})
 			}
 		}
-		if r.method != "GET" && r.auth != "public" && r.auth != "provider" && r.auth != "node" {
+		if r.method != "GET" && r.auth != "public" && r.auth != "provider" && r.auth != "node" && r.auth != "agent" {
 			params = append(params, schema{"name": "X-Requested-With", "in": "header", "schema": schema{"const": "fetch"}, "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt"})
 		}
 		if r.path == "/probes/{node_id}/history" {
@@ -400,6 +423,9 @@ func main() {
 		}
 		if r.path == "/events" {
 			params = append(params, schema{"name": "limit", "in": "query", "schema": schema{"type": "integer", "minimum": 1, "maximum": 100, "default": 50}})
+		}
+		if r.path == "/online/device/ip" || r.path == "/online/device/ip/list" {
+			operation["x-aliases"] = []string{r.path}
 		}
 		if r.method == "DELETE" && r.path == "/rules/{id}" {
 			params = append(params, schema{"name": "version", "in": "query", "required": true, "schema": num})

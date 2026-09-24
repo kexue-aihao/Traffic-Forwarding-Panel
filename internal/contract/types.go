@@ -6,28 +6,59 @@ import "time"
 const Version = 1
 
 type User struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
-	Disabled bool   `json:"disabled"`
+	ID                string `json:"id"`
+	Username          string `json:"username"`
+	Role              string `json:"role"`
+	IdentityGroupID   string `json:"identity_group_id"`
+	IdentityGroupName string `json:"identity_group_name,omitempty"`
+	Disabled          bool   `json:"disabled"`
+}
+
+// UserCreated includes the initial password exactly once in the create response.
+// The stored user record contains only its bcrypt hash.
+type UserCreated struct {
+	ID                string `json:"id"`
+	Username          string `json:"username"`
+	Role              string `json:"role"`
+	IdentityGroupID   string `json:"identity_group_id"`
+	IdentityGroupName string `json:"identity_group_name,omitempty"`
+	Disabled          bool   `json:"disabled"`
+	InitialPassword   string `json:"initial_password"`
+}
+
+// UserPasswordReset is returned once after an administrator resets an account.
+type UserPasswordReset struct {
+	UserID   string `json:"user_id"`
+	Password string `json:"password"`
+}
+
+// IdentityGroup is the authorization identity shared by one or more users.
+// Device groups grant access to these identities instead of individual users.
+type IdentityGroup struct {
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	UserCount        int    `json:"user_count"`
+	DeviceGroupCount int    `json:"device_group_count"`
 }
 
 type Group struct {
-	ID                 string         `json:"id"`
-	Name               string         `json:"name"`
-	Type               string         `json:"type"`
-	DirectPolicy       string         `json:"direct_policy,omitempty"`
-	ChainGroupIDs      []string       `json:"chain_group_ids,omitempty"`
-	Advanced           *GroupAdvanced `json:"advanced,omitempty"`
-	UserIDs            []string       `json:"user_ids"`
-	BlockedProtocols   []string       `json:"blocked_protocols"`
-	DisabledNetworks   []string       `json:"disabled_networks"`
-	DisabledTransports []string       `json:"disabled_transports"`
-	Multiplier         string         `json:"multiplier"`
-	PortMin            int            `json:"port_min"`
-	PortMax            int            `json:"port_max"`
-	MaxRules           int            `json:"max_rules"`
-	Version            int64          `json:"version"`
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	Type             string         `json:"type"`
+	DirectPolicy     string         `json:"direct_policy,omitempty"`
+	ChainGroupIDs    []string       `json:"chain_group_ids,omitempty"`
+	Advanced         *GroupAdvanced `json:"advanced,omitempty"`
+	IdentityGroupIDs []string       `json:"identity_group_ids"`
+	// UserIDs is accepted only to migrate older API clients to identity groups.
+	UserIDs            []string `json:"user_ids,omitempty"`
+	BlockedProtocols   []string `json:"blocked_protocols"`
+	DisabledNetworks   []string `json:"disabled_networks"`
+	DisabledTransports []string `json:"disabled_transports"`
+	Multiplier         string   `json:"multiplier"`
+	PortMin            int      `json:"port_min"`
+	PortMax            int      `json:"port_max"`
+	MaxRules           int      `json:"max_rules"`
+	Version            int64    `json:"version"`
 }
 
 // GroupAdvanced mirrors the optional device-group settings exposed by the

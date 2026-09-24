@@ -18,13 +18,13 @@ func TestProbesRequireActiveEntitlement(t *testing.T) {
 	// fixture 的所有者已经买过套餐，能看到。
 	f.request("GET", "/probes", nil, f.user, 200)
 
-	fresh := decode[contract.User](t, f.request("POST", "/users", map[string]string{
-		"username": "no-plan", "password": "integration-long-password", "role": "user",
+	fresh := decode[contract.UserCreated](t, f.request("POST", "/users", map[string]string{
+		"username": "no-plan", "role": "user",
 	}, f.admin, 201))
-	freshCookie := f.login("no-plan")
+	freshCookie := f.login("no-plan", fresh.InitialPassword)
 
 	g := f.group
-	g.UserIDs = append(append([]string(nil), g.UserIDs...), fresh.ID)
+	g.IdentityGroupIDs = append(append([]string(nil), g.IdentityGroupIDs...), fresh.IdentityGroupID)
 	f.group = decode[contract.Group](t, f.request("PUT", "/groups/"+g.ID, g, f.admin, 200))
 
 	// 在组里、但没有有效权益 —— 列表与历史两个出口都要拒。

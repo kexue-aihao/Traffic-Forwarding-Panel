@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
@@ -29,6 +31,8 @@ type Agent struct {
 	PollInterval    time.Duration
 	EnableTerminal  bool
 	Upgrader        *Upgrader
+	usageMu         sync.Mutex
+	configMu        sync.Mutex
 }
 
 func (a *Agent) request(ctx context.Context, method, path string, body, out any) error {
@@ -113,12 +117,32 @@ func (a *Agent) Run(ctx context.Context) error {
 	if interval == 0 {
 		interval = 5 * time.Second
 	}
+	// Registration's first configuration attempt precedes probe publication.
+	if e = a.syncConfig(ctx); e != nil {
+		log.Printf("agent config: %v", e)
+	}
+	workersCtx, stopWorkers := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	var usageHealthy, probeHealthy atomic.Bool
+	workers.Go(func() {
+		a.runSync(workersCtx, "usage", time.Second, a.Store.usageWake, func(ctx context.Context) error {
+			err := a.syncUsage(ctx)
+			usageHealthy.Store(err == nil)
+			return err
+		})
+	})
+	workers.Go(func() {
+		a.runSync(workersCtx, "probe", interval, nil, func(ctx context.Context) error {
+			err := a.syncProbe(ctx)
+			probeHealthy.Store(err == nil)
+			return err
+		})
+	})
+	defer func() { stopWorkers(); workers.Wait() }()
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
-		if e = a.Step(ctx); e != nil {
-			log.Printf("agent sync: %v", e)
-		} else if a.Upgrader != nil {
+		if e == nil && usageHealthy.Load() && probeHealthy.Load() && a.Upgrader != nil {
 			if e = a.Upgrader.Healthy(); e != nil {
 				return e
 			}
@@ -127,26 +151,35 @@ func (a *Agent) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-tick.C:
+		case <-a.Store.configWake:
+		}
+		if e = a.syncConfig(ctx); e != nil {
+			log.Printf("agent config: %v", e)
+			// Do not let a failing endpoint spin on repeated wakeups.
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(time.Second):
+			}
 		}
 	}
 }
 func (a *Agent) Step(ctx context.Context) error {
-	// Set a durable no-more-use marker before flushing and returning allocation.
-	old := a.Store.Config()
-	for _, r := range old.Rules {
-		if r.Lease != nil && a.Store.Available(r, old.ValidUntil) != nil {
-			if e := a.Store.Retire(r.Lease.ID); e != nil {
-				return e
-			}
-			a.Runtime.StopLease(r.Lease.ID)
-		}
+	// Deterministic single-cycle entry point used by tests and embedders.
+	// Production runs the three channels independently below.
+	usageErr := a.syncUsage(ctx)
+	configErr := a.syncConfig(ctx)
+	var afterErr error
+	if usageErr == nil {
+		afterErr = a.syncUsage(ctx)
 	}
-	if e := a.flush(ctx); e != nil {
-		return e
-	}
-	if e := a.retire(ctx); e != nil {
-		return e
-	}
+	probeErr := a.syncProbe(ctx)
+	return errors.Join(usageErr, configErr, afterErr, probeErr)
+}
+
+func (a *Agent) syncConfig(ctx context.Context) error {
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
 	var c contract.Config
 	if e := a.request(ctx, "GET", "/agent/config", nil, &c); e != nil {
 		return e
@@ -156,28 +189,60 @@ func (a *Agent) Step(ctx context.Context) error {
 	if applyErr != nil {
 		ack.Error = applyErr.Error()
 	}
-	if e := a.request(ctx, "POST", "/agent/ack", ack, nil); e != nil {
-		return e
+	ackErr := a.request(ctx, "POST", "/agent/ack", ack, nil)
+	if applyErr == nil {
+		a.Store.requestUsage()
 	}
-	if applyErr != nil {
-		return applyErr
+	return errors.Join(applyErr, ackErr)
+}
+
+func (a *Agent) syncUsage(ctx context.Context) error {
+	a.usageMu.Lock()
+	defer a.usageMu.Unlock()
+	var errs []error
+	for _, id := range a.Store.renewals() {
+		if err := a.Store.Retire(id); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	if e := a.flush(ctx); e != nil {
-		return e
-	}
-	if e := a.retire(ctx); e != nil {
-		return e
-	}
+	errs = append(errs, a.flush(ctx))
+	errs = append(errs, a.retire(ctx))
+	return errors.Join(errs...)
+}
+
+func (a *Agent) syncProbe(ctx context.Context) error {
 	p := a.Probe.Sample(ctx, a.Store.Identity().NodeID)
 	return a.request(ctx, "POST", "/agent/probe", p, nil)
+}
+
+func (a *Agent) runSync(ctx context.Context, name string, interval time.Duration, wake <-chan struct{}, syncOnce func(context.Context) error) {
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for ctx.Err() == nil {
+		if err := syncOnce(ctx); err != nil {
+			log.Printf("agent %s: %v", name, err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		case <-wake:
+		}
+	}
 }
 
 func (a *Agent) flush(ctx context.Context) error {
 	records := a.Store.Pending()
 	for len(records) > 0 {
 		n := len(records)
-		if n > 100 {
-			n = 100
+		if n > 500 {
+			n = 500
 		}
 		var result struct {
 			Accepted []string `json:"accepted"`
@@ -205,6 +270,7 @@ func (a *Agent) flush(ctx context.Context) error {
 	return nil
 }
 func (a *Agent) retire(ctx context.Context) error {
+	var errs []error
 	pending := map[string]bool{}
 	for _, record := range a.Store.Pending() {
 		pending[record.LeaseID] = true
@@ -218,13 +284,16 @@ func (a *Agent) retire(ctx context.Context) error {
 			Used    int64  `json:"used_bytes,string"`
 		}{id, used}
 		if e := a.request(ctx, "POST", "/agent/leases/retire", req, nil); e != nil {
-			return e
+			errs = append(errs, e)
+			continue
 		}
 		if e := a.Store.ConfirmRetired(id); e != nil {
-			return e
+			errs = append(errs, e)
+			continue
 		}
+		wake(a.Store.configWake)
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func capabilities() []string {

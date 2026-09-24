@@ -27,8 +27,19 @@ func muxConfig() *yamux.Config {
 
 type MuxPool struct {
 	mu       sync.Mutex
-	sessions map[string]*yamux.Session
+	sessions map[string]*muxEntry
+	done     chan struct{}
 	closed   bool
+}
+
+// One in-flight carrier dial per key. Entries and opening reservations are
+// protected by the pool mutex; ready publishes the completed session/error.
+type muxEntry struct {
+	ready   chan struct{}
+	cancel  context.CancelFunc
+	session *yamux.Session
+	err     error
+	opening int
 }
 
 func (p *MuxPool) Close() {
@@ -36,12 +47,29 @@ func (p *MuxPool) Close() {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.closed = true
-	for _, s := range p.sessions {
-		s.Close()
+	if p.closed {
+		p.mu.Unlock()
+		return
 	}
+	p.closed = true
+	if p.done != nil {
+		close(p.done)
+	}
+	entries := p.sessions
 	p.sessions = nil
+	// Cancel pending dials before releasing the lock. Their completion cannot
+	// repopulate a closed pool. Closing live carriers may wait for I/O.
+	var sessions []*yamux.Session
+	for _, entry := range entries {
+		entry.cancel()
+		if entry.session != nil {
+			sessions = append(sessions, entry.session)
+		}
+	}
+	p.mu.Unlock()
+	for _, session := range sessions {
+		session.Close()
+	}
 }
 
 func (c Client) DialRoute(ctx context.Context, transport, network, target string, t contract.Tunnel) (*Session, error) {
@@ -82,51 +110,26 @@ func (c Client) dialMux(ctx context.Context, transport, endpoint, serverName, to
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	p := c.Pool
 	// A structured key prevents credentials or endpoint boundaries from colliding.
 	raw, _ := json.Marshal([]string{transport, endpoint, serverName, token})
 	key := string(raw)
+	entry, e := c.muxCarrier(ctx, timeout, key, transport, endpoint, serverName, token)
+	if e != nil {
+		return nil, e
+	}
+	p := c.Pool
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
 		return nil, net.ErrClosed
 	}
-	if p.sessions == nil {
-		p.sessions = map[string]*yamux.Session{}
-	}
-	for k, s := range p.sessions {
-		if s.IsClosed() {
-			delete(p.sessions, k)
-		}
-	}
-	session := p.sessions[key]
-	if session == nil {
-		if len(p.sessions) >= 64 {
-			p.mu.Unlock()
-			return nil, errors.New("Mux carrier capacity reached")
-		}
-		plain := c
-		plain.useMux = false
-		plain.reverse = ""
-		conn, e := plain.dial(ctx, transport, endpoint, serverName, token, "mux", "", nil, nil)
-		if e != nil {
-			p.mu.Unlock()
-			return nil, e
-		}
-		session, e = yamux.Client(conn.Conn, muxConfig())
-		if e != nil {
-			conn.Close()
-			p.mu.Unlock()
-			return nil, e
-		}
-		p.sessions[key] = session
-	}
-	if session.NumStreams() >= 256 {
+	if entry.session.NumStreams()+entry.opening >= 256 {
 		p.mu.Unlock()
 		return nil, errors.New("Mux stream capacity reached")
 	}
-	stream, e := session.OpenStream()
+	entry.opening++
 	p.mu.Unlock()
+	stream, e := p.openStream(ctx, entry)
 	if e != nil {
 		return nil, e
 	}
@@ -144,6 +147,109 @@ func (c Client) dialMux(ctx context.Context, transport, endpoint, serverName, to
 	}
 	stream.SetDeadline(time.Time{})
 	return &Session{Conn: stream}, nil
+}
+
+func (c Client) muxCarrier(ctx context.Context, timeout time.Duration, key, transport, endpoint, serverName, token string) (*muxEntry, error) {
+	p := c.Pool
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	if p.sessions == nil {
+		p.sessions = map[string]*muxEntry{}
+		p.done = make(chan struct{})
+	}
+	for k, entry := range p.sessions {
+		if entry.session != nil && entry.session.IsClosed() {
+			delete(p.sessions, k)
+		}
+	}
+	entry := p.sessions[key]
+	if entry == nil {
+		// Pending dials count toward the carrier limit as well.
+		if len(p.sessions) >= 64 {
+			p.mu.Unlock()
+			return nil, errors.New("Mux carrier capacity reached")
+		}
+		// Each waiter has its own deadline. Cancelling one must not abort a
+		// carrier needed by the other waiters. Pool.Close cancels the dial.
+		dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		entry = &muxEntry{ready: make(chan struct{}), cancel: cancel}
+		p.sessions[key] = entry
+		go c.connectMux(dialCtx, key, entry, transport, endpoint, serverName, token)
+	}
+	done := p.done
+	p.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-done:
+		return nil, net.ErrClosed
+	case <-entry.ready:
+		return entry, entry.err
+	}
+}
+
+func (c Client) connectMux(ctx context.Context, key string, entry *muxEntry, transport, endpoint, serverName, token string) {
+	defer entry.cancel()
+	plain := c
+	plain.useMux = false
+	plain.reverse = ""
+	conn, err := plain.dial(ctx, transport, endpoint, serverName, token, "mux", "", nil, nil)
+	var session *yamux.Session
+	if err == nil {
+		session, err = yamux.Client(conn.Conn, muxConfig())
+		if err != nil {
+			conn.Close()
+		}
+	}
+	p := c.Pool
+	p.mu.Lock()
+	if p.closed {
+		err = net.ErrClosed
+	}
+	entry.err = err
+	if err == nil {
+		entry.session = session
+	} else if p.sessions[key] == entry {
+		delete(p.sessions, key)
+	}
+	close(entry.ready)
+	p.mu.Unlock()
+	if err != nil && session != nil {
+		session.Close()
+	}
+}
+
+// yamux.OpenStream has no context API. Bound outstanding opens with opening,
+// let the caller cancel promptly, and close any stream delivered too late.
+// yamux's connection write/open timeouts bound the worker's lifetime.
+func (p *MuxPool) openStream(ctx context.Context, entry *muxEntry) (*yamux.Stream, error) {
+	type result struct {
+		stream *yamux.Stream
+		err    error
+	}
+	ready := make(chan result)
+	go func() {
+		stream, err := entry.session.OpenStream()
+		p.mu.Lock()
+		entry.opening--
+		p.mu.Unlock()
+		select {
+		case ready <- result{stream, err}:
+		case <-ctx.Done():
+			if stream != nil {
+				stream.Close()
+			}
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-ready:
+		return result.stream, result.err
+	}
 }
 
 func (s *Server) serveMultiplex(conn net.Conn, req openRequest) {

@@ -98,15 +98,15 @@ func TestProbeHistoryAggregationRetryRestartAndPermissions(t *testing.T) {
 		t.Fatal("history did not survive server replacement")
 	}
 	adminCookie := f.cookie
-	user := read[contract.User](t, f.req("POST", "/users", map[string]any{"username": "history-user", "password": "test-password-long", "role": "user"}, ""), 201)
-	login := f.req("POST", "/auth/login", map[string]any{"username": "history-user", "password": "test-password-long"}, "")
+	user := read[contract.UserCreated](t, f.req("POST", "/users", map[string]any{"username": "history-user", "role": "user"}, ""), 201)
+	login := f.req("POST", "/auth/login", map[string]any{"username": "history-user", "password": user.InitialPassword}, "")
 	f.cookie = login.Result().Cookies()[0]
 	path := historyPath(n.NodeID, "minute", base, base.Add(time.Hour))
 	if r := f.req("GET", path, nil, ""); r.Code != 404 {
 		t.Fatal("unauthorized history disclosed", r.Code)
 	}
 	f.cookie = adminCookie
-	g.UserIDs = []string{user.ID}
+	g.IdentityGroupIDs = []string{user.IdentityGroupID}
 	g = read[contract.Group](t, f.req("PUT", "/groups/"+g.ID, g, ""), 200)
 	f.cookie = login.Result().Cookies()[0]
 	r := f.req("GET", path, nil, "")
@@ -114,7 +114,7 @@ func TestProbeHistoryAggregationRetryRestartAndPermissions(t *testing.T) {
 		t.Fatal("history permission or IP filtering failed", r.Code, r.Body.String())
 	}
 	f.cookie = adminCookie
-	g.UserIDs = nil
+	g.IdentityGroupIDs = nil
 	read[contract.Group](t, f.req("PUT", "/groups/"+g.ID, g, ""), 200)
 	f.cookie = login.Result().Cookies()[0]
 	if r := f.req("GET", path, nil, ""); r.Code != 404 {

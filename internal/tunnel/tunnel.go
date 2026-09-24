@@ -35,22 +35,28 @@ const (
 // Session preserves TCP half close and UDP packet boundaries over every carrier.
 type Session struct {
 	net.Conn
-	writeMu sync.Mutex
-	pending []byte
-	ended   bool
+	writeMu   sync.Mutex
+	readMu    sync.Mutex
+	header    [5]byte
+	remaining int
+	readErr   error
 }
+
+var frameBuffers = sync.Pool{New: func() any { return new([5 + maxFrame]byte) }}
+var relayBuffers = sync.Pool{New: func() any { return new([32 * 1024]byte) }}
 
 func writeFrame(w io.Writer, kind byte, p []byte) error {
 	if len(p) > maxFrame {
 		return errors.New("frame too large")
 	}
-	h := make([]byte, 5)
-	h[0] = kind
-	binary.BigEndian.PutUint32(h[1:], uint32(len(p)))
-	if err := writeAll(w, h); err != nil {
-		return err
-	}
-	return writeAll(w, p)
+	// One carrier write avoids a separate TLS record / WebSocket message for
+	// the header. Borrow only during the write, not for the session lifetime.
+	buf := frameBuffers.Get().(*[5 + maxFrame]byte)
+	defer frameBuffers.Put(buf)
+	buf[0] = kind
+	binary.BigEndian.PutUint32(buf[1:5], uint32(len(p)))
+	copy(buf[5:], p)
+	return writeAll(w, buf[:5+len(p)])
 }
 func writeAll(w io.Writer, p []byte) error {
 	for len(p) > 0 {
@@ -58,7 +64,7 @@ func writeAll(w io.Writer, p []byte) error {
 		if e != nil {
 			return e
 		}
-		if n == 0 {
+		if n <= 0 || n > len(p) {
 			return io.ErrShortWrite
 		}
 		p = p[n:]
@@ -66,45 +72,67 @@ func writeAll(w io.Writer, p []byte) error {
 	return nil
 }
 func readFrame(r io.Reader) (byte, []byte, error) {
-	h := make([]byte, 5)
-	if _, e := io.ReadFull(r, h); e != nil {
+	var h [5]byte
+	k, n, e := readFrameHeader(r, h[:])
+	if e != nil {
 		return 0, nil, e
+	}
+	p := make([]byte, n)
+	_, e = io.ReadFull(r, p)
+	return k, p, e
+}
+func readFrameHeader(r io.Reader, h []byte) (byte, int, error) {
+	if _, e := io.ReadFull(r, h); e != nil {
+		return 0, 0, e
 	}
 	n := binary.BigEndian.Uint32(h[1:])
 	if n > maxFrame {
-		return 0, nil, errors.New("frame too large")
+		return 0, 0, errors.New("frame too large")
 	}
-	p := make([]byte, n)
-	_, e := io.ReadFull(r, p)
-	return h[0], p, e
+	return h[0], int(n), nil
 }
 func (s *Session) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	for len(s.pending) == 0 {
-		if s.ended {
-			return 0, io.EOF
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+	for s.remaining == 0 {
+		if s.readErr != nil {
+			return 0, s.readErr
 		}
-		k, b, e := readFrame(s.Conn)
+		k, n, e := readFrameHeader(s.Conn, s.header[:])
 		if e != nil {
+			s.readErr = e
 			return 0, e
 		}
 		if k == endFrame {
-			if len(b) != 0 {
-				return 0, errors.New("invalid close frame")
+			s.readErr = io.EOF
+			if n != 0 {
+				s.readErr = errors.New("invalid close frame")
 			}
-			s.ended = true
-			return 0, io.EOF
+			return 0, s.readErr
 		}
 		if k != dataFrame {
-			return 0, errors.New("invalid data frame")
+			s.readErr = errors.New("invalid data frame")
+			return 0, s.readErr
 		}
-		s.pending = b
+		s.remaining = n
 	}
-	n := copy(p, s.pending)
-	s.pending = s.pending[n:]
-	return n, nil
+	if s.readErr != nil {
+		return 0, s.readErr
+	}
+	// Read into the caller's buffer instead of allocating and copying a whole
+	// frame. Remember its boundary when the caller supplies a smaller buffer.
+	n, e := io.ReadFull(s.Conn, p[:min(len(p), s.remaining)])
+	s.remaining -= n
+	if e == io.EOF {
+		e = io.ErrUnexpectedEOF
+	}
+	if e != nil {
+		s.readErr = e
+	}
+	return n, e
 }
 func (s *Session) Write(p []byte) (int, error) {
 	s.writeMu.Lock()
@@ -134,15 +162,29 @@ func (s *Session) WritePacket(p []byte) error {
 	return writeFrame(s.Conn, dataFrame, p)
 }
 func (s *Session) ReadPacket() ([]byte, error) {
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	if s.remaining != 0 {
+		return nil, errors.New("cannot read a packet during a partial stream frame")
+	}
 	k, p, e := readFrame(s.Conn)
 	if e != nil {
+		s.readErr = e
 		return nil, e
 	}
 	if k == endFrame {
-		return nil, io.EOF
+		s.readErr = io.EOF
+		if len(p) != 0 {
+			s.readErr = errors.New("invalid close frame")
+		}
+		return nil, s.readErr
 	}
 	if k != dataFrame {
-		return nil, errors.New("invalid packet frame")
+		s.readErr = errors.New("invalid packet frame")
+		return nil, s.readErr
 	}
 	return p, nil
 }
@@ -353,6 +395,7 @@ type Server struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	reverse     map[string]*yamux.Session
+	tlsConfig   *tls.Config
 }
 
 func (s *Server) Serve(l net.Listener, transport string) error {
@@ -380,6 +423,10 @@ func (s *Server) Serve(l net.Listener, transport string) error {
 		return net.ErrClosed
 	}
 	s.listener = l
+	// Share this configuration across accepted connections so Go can retain
+	// and automatically rotate TLS session ticket keys.
+	s.tlsConfig = s.TLS.Clone()
+	s.tlsConfig.MinVersion = tls.VersionTLS13
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.conns = make(map[net.Conn]struct{})
 	s.slots = make(chan struct{}, 256)
@@ -387,9 +434,7 @@ func (s *Server) Serve(l net.Listener, transport string) error {
 	defer s.Close()
 	if transport == "ws" || transport == "wss" {
 		if transport == "wss" {
-			tc := s.TLS.Clone()
-			tc.MinVersion = tls.VersionTLS13
-			l = tls.NewListener(l, tc)
+			l = tls.NewListener(l, s.tlsConfig)
 		}
 		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/tunnel" {
@@ -486,9 +531,7 @@ func (s *Server) handle(raw net.Conn, transport string) {
 		conn = &bufferedConn{Conn: raw, r: br}
 	}
 	if transport != "wss" {
-		tc := s.TLS.Clone()
-		tc.MinVersion = tls.VersionTLS13
-		t := tls.Server(conn, tc)
+		t := tls.Server(conn, s.tlsConfig)
 		if e := t.Handshake(); e != nil {
 			return
 		}
@@ -600,7 +643,9 @@ func Relay(client, target net.Conn, idle time.Duration, charge func(upload bool,
 	wg.Add(2)
 	copyOne := func(dst, src net.Conn, up bool) {
 		defer wg.Done()
-		buf := make([]byte, 32*1024)
+		storage := relayBuffers.Get().(*[32 * 1024]byte)
+		defer relayBuffers.Put(storage)
+		buf := storage[:]
 		for {
 			src.SetReadDeadline(time.Now().Add(idle))
 			n, e := src.Read(buf)

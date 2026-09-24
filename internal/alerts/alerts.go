@@ -188,7 +188,7 @@ func (m *Manager) monitorNode(ctx context.Context, node string, p Policy) error 
 		if event == "" {
 			return nil
 		}
-		rows, err := tx.QueryContext(ctx, m.q(`SELECT u.id FROM cp_users u WHERE u.disabled=0 AND (u.role='admin' OR EXISTS(SELECT 1 FROM cp_group_users gu JOIN cp_node_groups ng ON ng.group_id=gu.group_id WHERE gu.user_id=u.id AND ng.node_id=?))`), node)
+		rows, err := tx.QueryContext(ctx, m.q(`SELECT u.id FROM cp_users u WHERE u.disabled=0 AND (u.role='admin' OR EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_node_groups ng ON ng.group_id=gig.group_id WHERE gig.identity_group_id=u.identity_group_id AND ng.node_id=?))`), node)
 		if err != nil {
 			return err
 		}
@@ -408,6 +408,6 @@ func (m *Manager) Visible(ctx context.Context, tx *sql.Tx, user, kind, payload s
 	if adminScope {
 		scope = 1
 	}
-	err := tx.QueryRowContext(ctx, m.q(`SELECT COUNT(*) FROM cp_users u WHERE u.id=? AND u.disabled=0 AND ((u.role='admin' AND ?=1) OR EXISTS(SELECT 1 FROM cp_group_users gu JOIN cp_node_groups ng ON ng.group_id=gu.group_id WHERE gu.user_id=u.id AND ng.node_id=?))`), user, scope, event.Data.NodeID).Scan(&n)
+	err := tx.QueryRowContext(ctx, m.q(`SELECT COUNT(*) FROM cp_users u WHERE u.id=? AND u.disabled=0 AND ((u.role='admin' AND ?=1) OR EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_node_groups ng ON ng.group_id=gig.group_id WHERE gig.identity_group_id=u.identity_group_id AND ng.node_id=?))`), user, scope, event.Data.NodeID).Scan(&n)
 	return n > 0, err
 }

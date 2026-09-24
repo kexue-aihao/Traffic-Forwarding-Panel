@@ -272,6 +272,42 @@ func (s *Server) disableUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+func (s *Server) resetUserPassword(w http.ResponseWriter, r *http.Request) {
+	actor, _ := UserFromContext(r.Context())
+	target := r.PathValue("id")
+	password, err := generateUserPassword()
+	if err != nil {
+		fail(w, 500, "password generation failed")
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		fail(w, 500, "password reset failed")
+		return
+	}
+	err = s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(r.Context(), s.q(`UPDATE cp_users SET password_hash=? WHERE id=?`), string(hash), target)
+		if err != nil {
+			return err
+		}
+		updated, err := result.RowsAffected()
+		if err != nil || updated != 1 {
+			return errConflict
+		}
+		for _, table := range []string{"cp_sessions", "cp_tokens"} {
+			if _, err = tx.ExecContext(r.Context(), s.q(`DELETE FROM `+table+` WHERE user_id=?`), target); err != nil {
+				return err
+			}
+		}
+		return s.AuditTx(r.Context(), tx, actor.ID, "user.password.reset", target)
+	})
+	if err != nil {
+		fail(w, 409, "password reset conflict")
+		return
+	}
+	reply(w, 200, contract.UserPasswordReset{UserID: target, Password: password})
+}
+
 // bearerUser deliberately constrains machine API keys to ordinary owner access;
 // full administrator financial/operational keys need explicit future scopes.
 //
@@ -282,7 +318,7 @@ func (s *Server) bearerUser(r *http.Request) (contract.User, error) {
 	var disabled int
 	var tokenID string
 	raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT u.id,u.username,u.role,u.disabled,t.id FROM cp_tokens t JOIN cp_users u ON u.id=t.user_id WHERE t.token_hash=? AND (t.expires_at=? OR t.expires_at>?)`), digest(raw), permanentExpiry, time.Now().Unix()).Scan(&u.ID, &u.Username, &u.Role, &disabled, &tokenID)
+	e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT u.id,u.username,u.role,u.identity_group_id,u.disabled,t.id FROM cp_tokens t JOIN cp_users u ON u.id=t.user_id WHERE t.token_hash=? AND (t.expires_at=? OR t.expires_at>?)`), digest(raw), permanentExpiry, time.Now().Unix()).Scan(&u.ID, &u.Username, &u.Role, &u.IdentityGroupID, &disabled, &tokenID)
 	if e != nil || disabled != 0 {
 		return u, errors.New("authentication required")
 	}

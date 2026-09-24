@@ -154,7 +154,7 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 	group := r.URL.Query().Get("group_id")
 	if group != "" && u.Role != "admin" {
 		var member int
-		if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_users WHERE group_id=? AND user_id=?`), group, u.ID).Scan(&member); e != nil {
+		if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?`), group, u.ID).Scan(&member); e != nil {
 			fail(w, 500, "query failed")
 			return
 		}
@@ -166,7 +166,7 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 	where := ""
 	args := []any{}
 	if u.Role != "admin" {
-		where = ` WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_users gu ON gu.group_id=ng.group_id WHERE ng.node_id=n.id AND gu.user_id=?)`
+		where = ` WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE ng.node_id=n.id AND iu.id=?)`
 		args = append(args, u.ID)
 	}
 	if group != "" {
@@ -244,15 +244,15 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "config unavailable")
 		return
 	}
-	rows, e := tx.QueryContext(r.Context(), s.q(`SELECT r.payload,g.payload,u.disabled,u.role FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
+	rows, e := tx.QueryContext(r.Context(), s.q(`SELECT r.payload,g.payload,u.disabled,u.role,CASE WHEN EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id) THEN 1 ELSE 0 END FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
 	if e != nil {
 		fail(w, 500, "config unavailable")
 		return
 	}
 	for rows.Next() {
 		var rp, gp, role string
-		var disabled int
-		if rows.Scan(&rp, &gp, &disabled, &role) != nil {
+		var disabled, authorized int
+		if rows.Scan(&rp, &gp, &disabled, &role, &authorized) != nil {
 			rows.Close()
 			fail(w, 500, "config unavailable")
 			return
@@ -264,7 +264,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			fail(w, 500, "config unavailable")
 			return
 		}
-		if rule.ExitUnavailable || disabled != 0 || !rule.Enabled || rule.Lease == nil || !rule.Lease.ExpiresAt.After(time.Now()) || entryPolicyDenied(g, rule) || (role != "admin" && !contains(g.UserIDs, rule.UserID)) {
+		if rule.ExitUnavailable || disabled != 0 || !rule.Enabled || rule.Lease == nil || !rule.Lease.ExpiresAt.After(time.Now()) || entryPolicyDenied(g, rule) || (role != "admin" && authorized == 0) {
 			continue
 		}
 		if rule.Lease.Limits != (contract.ResourceLimits{}) && !contains(nodeInfo.Capabilities, "resource-limits-v1") {
@@ -432,7 +432,7 @@ func (s *Server) visibleNodes(ctx context.Context, u contract.User, group string
 	query := "SELECT id,payload,last_seen FROM cp_nodes"
 	args := []any{}
 	if u.Role != "admin" {
-		query = "SELECT n.id,n.payload,n.last_seen FROM cp_nodes n WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_users gu ON gu.group_id=ng.group_id WHERE ng.node_id=n.id AND gu.user_id=?)"
+		query = "SELECT n.id,n.payload,n.last_seen FROM cp_nodes n WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE ng.node_id=n.id AND iu.id=?)"
 		args = append(args, u.ID)
 	}
 	rows, e := s.Store.DB.QueryContext(ctx, s.q(query), args...)
@@ -459,7 +459,7 @@ func (s *Server) visibleNodes(ctx context.Context, u contract.User, group string
 	args = []any{}
 	filters := []string{}
 	if u.Role != "admin" {
-		filters = append(filters, "EXISTS(SELECT 1 FROM cp_group_users gu WHERE gu.group_id=cp_node_groups.group_id AND gu.user_id=?)")
+		filters = append(filters, "EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=cp_node_groups.group_id AND iu.id=?)")
 		args = append(args, u.ID)
 	}
 	if group != "" {
@@ -515,7 +515,7 @@ func (s *Server) visibleProbes(ctx context.Context, u contract.User, group strin
 	}
 	if group != "" && u.Role != "admin" {
 		var member int
-		if e := s.Store.DB.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_group_users WHERE group_id=? AND user_id=?`), group, u.ID).Scan(&member); e != nil {
+		if e := s.Store.DB.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?`), group, u.ID).Scan(&member); e != nil {
 			return nil, e
 		}
 		if member != 1 {
@@ -625,7 +625,7 @@ func (s *Server) probeEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	if group != "" && u.Role != "admin" {
 		var member int
-		if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_users WHERE group_id=? AND user_id=?`), group, u.ID).Scan(&member); e != nil || member != 1 {
+		if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?`), group, u.ID).Scan(&member); e != nil || member != 1 {
 			fail(w, 403, "该设备组不在你的授权范围内")
 			return
 		}

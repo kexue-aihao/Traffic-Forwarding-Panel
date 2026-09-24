@@ -3,6 +3,7 @@ export interface User {
   id: string;
   username: string;
   role: string;
+  identity_group_id: string;
   disabled: boolean;
 }
 export const state = reactive({

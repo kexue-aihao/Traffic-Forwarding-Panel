@@ -21,11 +21,17 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 | POST /users/{id}/tokens | 同 `POST /auth/tokens` | 管理员为账号签发；明文只在这一条响应里出现，交由用户保存 |
 | POST /users/{id}/tokens/{token_id}/reset | `{}` | 管理员就地换取新明文（同一 id/名称/有效期），旧密钥立即失效；明文同样只出现一次 |
 | DELETE /users/{id}/tokens/{token_id} | 无 | 204；管理员撤销某账号的 Token |
-| GET /users | 分页 | 管理员 User 列表 |
-| POST /users | `{username,password,role}` | 管理员创建 |
+| GET /users | 分页 | 管理员 User 列表，含 `identity_group_id` 和 `identity_group_name` |
+| POST /users | `{username,role,identity_group_id}` | 管理员创建并指定身份用户组；响应仅此一次返回系统生成的 `initial_password`；旧客户端省略身份组时自动建立独立默认组 |
+| PUT /users/{id}/identity-group | `{identity_group_id}` | 管理员修改用户身份组，现有会话和 Token 的设备组权限随之更新 |
+| POST /users/{id}/reset-password | `{}` | 管理员重置密码，撤销该账号会话和 Token；响应仅此一次返回新 `password` |
+| GET /identity-groups | 分页、`q` 匹配名称或 ID | 管理员身份用户组列表，含 `id,name,user_count,device_group_count` |
+| POST /identity-groups | `{id,name}` | 管理员手动指定唯一 ID，新建身份用户组；ID 为 1–64 位字母、数字、下划线或短横线，名称不可重复 |
+| PUT /identity-groups/{id} | `{id,name}` | 管理员修改 ID 和名称；路径使用原 ID；在同一事务中更新用户、设备组授权及存储配置，保留原访问权限，重复 ID/名称返回 409 |
+| DELETE /identity-groups/{id} | 无 | 管理员删除未被引用的身份组；仍关联用户或设备组返回 409，不存在返回 404 |
 | PUT /users/{id}/status | `{disabled}` | 管理员停用/启用，保留最后一个管理员 |
 | GET /groups | 分页 | 授权 Group 列表 |
-| POST /groups | `{name,type,direct_policy,chain_group_ids,user_ids,blocked_protocols,disabled_networks,disabled_transports,advanced,multiplier,port_min,port_max}` | 管理员 Group；`type` 为 `monitor|entry|exit|chain_exit`，创建后不可修改；`direct_policy` 仅入口使用；链式出口引用 2–3 个出口组 |
+| POST /groups | `{name,type,direct_policy,chain_group_ids,identity_group_ids,blocked_protocols,disabled_networks,disabled_transports,advanced,multiplier,port_min,port_max}` | 管理员 Group；按身份用户组 ID 授权；`type` 为 `monitor|entry|exit|chain_exit`，创建后不可修改；`direct_policy` 仅入口使用；链式出口引用 2–3 个出口组 |
 | PUT /groups/{id} | 同上加 version | 管理员乐观锁 |
 | GET /groups/{id}/join-key | —— | 管理员 `{group_id,join_key}`，设备组的固定接入密钥；可随时再次读取 |
 | POST /groups/{id}/join-key | `{}` | 管理员 `{group_id,join_key}`，轮换后已分发出去的接入命令立即失效 |
@@ -65,6 +71,8 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 | GET /agent/control/{id}/terminal | WebSocket | Agent 侧终端通道；需 claim |
 
 共享 Go 类型见 `internal/contract/types.go`。探针实时接口先实现 SSE；WebSocket 作为后续相同权限语义传输适配，不能混称隧道 WSS。
+
+当前 Agent 的配置与探针默认各每5秒同步，用量每1秒或待报记录达到100条时主动上报，每批最多500条；三者独立运行，单通道失败不会阻止其他通道。租约退还成功后立即触发配置拉取。仅租约/配置有效期刷新保留现有连接，后续计量切换到当前租约；退租仍须先持久停止旧租约并确认全部用量。TCP 遇到临时额度/待报队列不足最多等待30秒，UDP 丢弃当前未计费报文并保留会话，不使用过期或未签发额度。详细时序及边界见 [流量连续性修复](traffic-continuity.md)。这些改动保持现有 API 与 WAL 格式兼容。
 
 `DeviceIP`：`{node_id,node_name,group_id,group_name,address,family,source,observed_at,online,last_seen?,location?}`。`address` 取该节点最近一次观测到的对外地址，**优先 IPv4**（客户拿它去连服务）；`online` 按最近心跳判断；`location` 是 `{country_code,country_name?,region?,city?,source}`，来自站点设置里的地区查询服务，查不到就没有这个字段 —— 客户端要能接受缺失。接口带 `Authorization: Bearer <API Token>`，也接受同源 Cookie 会话；`/online/device/ip` 与 `/online/device/ip/list` 两个不带 `/api/v1` 前缀的路径是为客户脚本保留的稳定入口，与带前缀的同名接口等价。
 

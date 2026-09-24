@@ -30,6 +30,7 @@ const titles: Record<string, string> = {
   rules: "转发规则",
   nodes: "服务器",
   groups: "设备组",
+  "identity-groups": "身份用户组",
   users: "用户管理",
   audit: "操作审计",
 };
@@ -41,7 +42,9 @@ const search = ref(String(route.query.q || ""));
 const page = computed(() => Math.max(1, Number(route.query.page) || 1));
 const canManage = computed(() => adminSite && state.user?.role === "admin");
 const allowed = computed(
-  () => !["users", "audit"].includes(resource) || canManage.value,
+  () =>
+    !["identity-groups", "users", "audit"].includes(resource) ||
+    canManage.value,
 );
 const editing = ref(false);
 const busy = ref(false);
@@ -49,6 +52,12 @@ const formError = ref("");
 const selected = ref<Row | null>(null);
 const operationNode = ref<Row | null>(null);
 const token = ref("");
+const generatedPassword = ref("");
+const generatedUsername = ref("");
+const passwordCopied = ref(false);
+const passwordResetTarget = ref<Row | null>(null);
+const resetPasswordSecret = ref("");
+const resetPasswordCopied = ref(false);
 const groupTransports = [
   { value: "direct", label: "直接转发" },
   { value: "direct-tls", label: "TLS 直连目标" },
@@ -270,11 +279,13 @@ const options = ref<{
   groups: Row[];
   users: Row[];
   exits: Row[];
+  identityGroups: Row[];
 }>({
   nodes: [],
   exits: [],
   groups: [],
   users: [],
+  identityGroups: [],
 });
 const form = ref({
   group_type: "",
@@ -287,8 +298,8 @@ const form = ref({
   trusted_cidrs: "",
   name: "",
   username: "",
-  password: "",
   role: "user",
+  identity_group_id: "",
   node_id: "",
   group_id: "",
   network: "tcp",
@@ -306,7 +317,7 @@ const form = ref({
   shared: false,
   shared_parent: "",
   shared_name: "",
-  user_ids: [] as string[],
+  identity_group_ids: [] as string[],
   group_ids: [] as string[],
   multiplier: "1",
   port_min: 10000,
@@ -387,6 +398,9 @@ async function open(row: Row | null = null) {
   selected.value = row;
   formError.value = "";
   token.value = "";
+  generatedPassword.value = "";
+  generatedUsername.value = "";
+  passwordCopied.value = false;
   tokenExpiry.value = "";
   tokenName.value = "";
   form.value = {
@@ -401,9 +415,11 @@ async function open(row: Row | null = null) {
       ((row?.proxy_protocol as Row)?.trusted_cidrs as string[]) || []
     ).join(","),
     name: String(row?.name || ""),
-    username: "",
-    password: "",
-    role: "user",
+    username: String(row?.username || ""),
+    role: String(row?.role || "user"),
+    identity_group_id: String(
+      (resource === "identity-groups" ? row?.id : row?.identity_group_id) || "",
+    ),
     node_id: String(row?.node_id || ""),
     group_id: String(row?.group_id || ""),
     network: String(row?.network || "tcp"),
@@ -438,7 +454,7 @@ async function open(row: Row | null = null) {
         token: "",
       }),
     ),
-    user_ids: (row?.user_ids as string[]) || [],
+    identity_group_ids: (row?.identity_group_ids as string[]) || [],
     group_ids: [],
     multiplier: String(row?.multiplier || "1"),
     port_min: Number(row?.port_min || 10000),
@@ -461,11 +477,13 @@ async function open(row: Row | null = null) {
         (g) => g.type !== "chain_exit",
       );
     if (resource === "groups") {
-      [options.value.users, options.value.groups] = await Promise.all([
-        choices("/users"),
+      [options.value.identityGroups, options.value.groups] = await Promise.all([
+        choices("/identity-groups"),
         choices("/groups"),
       ]);
     }
+    if (resource === "users")
+      options.value.identityGroups = await choices("/identity-groups");
   } catch (e) {
     formError.value = errorText(e);
   }
@@ -473,7 +491,15 @@ async function open(row: Row | null = null) {
 function payload(): Row {
   const f = form.value;
   if (resource === "users")
-    return { username: f.username, password: f.password, role: f.role };
+    return selected.value
+      ? { identity_group_id: f.identity_group_id }
+      : {
+          username: f.username,
+          role: f.role,
+          identity_group_id: f.identity_group_id,
+        };
+  if (resource === "identity-groups")
+    return { id: f.identity_group_id, name: f.name };
   if (resource === "groups")
     return {
       name: f.name,
@@ -483,7 +509,7 @@ function payload(): Row {
       ...(selected.value?.advanced
         ? { advanced: selected.value.advanced }
         : {}),
-      user_ids: f.user_ids,
+      identity_group_ids: f.identity_group_ids,
       blocked_protocols: selected.value?.blocked_protocols || [],
       disabled_networks: selected.value?.disabled_networks || [],
       disabled_transports: selected.value?.disabled_transports || [],
@@ -561,20 +587,42 @@ async function save() {
     const path =
       resource === "nodes"
         ? "/nodes/enrollment"
-        : `/${resource}${selected.value ? "/" + encodeURIComponent(String(selected.value.id)) : ""}`;
+        : resource === "users" && selected.value
+          ? `/users/${encodeURIComponent(String(selected.value.id))}/identity-group`
+          : `/${resource}${selected.value ? "/" + encodeURIComponent(String(selected.value.id)) : ""}`;
     const result = await api<{
       id?: string;
       token?: string;
       expires_at?: string;
+      username?: string;
+      initial_password?: string;
     }>(path, selected.value ? "PUT" : "POST", data);
     if (resource === "nodes") {
       token.value = String(result.token || "");
       tokenExpiry.value = String(result.expires_at || "");
       tokenName.value = String(form.value.name || "");
       initial.value = JSON.stringify(form.value);
+    } else if (resource === "users" && !selected.value) {
+      generatedPassword.value = String(result.initial_password || "");
+      generatedUsername.value = String(result.username || form.value.username);
+      passwordCopied.value = false;
+      initial.value = JSON.stringify(form.value);
+      await load();
+      highlight(result.id);
+    } else if (resource === "users") {
+      editing.value = false;
+      notice("用户的身份用户组已更新。");
+      await load();
+      highlight(selected.value?.id);
     } else {
       editing.value = false;
-      notice("已保存。转发规则需等待节点应用回执。");
+      notice(
+        resource === "identity-groups"
+          ? selected.value
+            ? "身份用户组已更新，用户和设备组关联已同步。"
+            : "身份用户组已创建，可在用户管理中分配。"
+          : "已保存。转发规则需等待节点应用回执。",
+      );
       await load();
       highlight(result.id);
     }
@@ -583,6 +631,22 @@ async function save() {
   } finally {
     busy.value = false;
   }
+}
+
+async function copyGeneratedPassword() {
+  try {
+    await navigator.clipboard.writeText(generatedPassword.value);
+    passwordCopied.value = true;
+  } catch {
+    notice("复制失败，请手动选中初始密码。");
+  }
+}
+
+function closeEditing() {
+  generatedPassword.value = "";
+  generatedUsername.value = "";
+  passwordCopied.value = false;
+  editing.value = false;
 }
 const deleting = ref<Row | null>(null);
 const statusTarget = ref<Row | null>(null);
@@ -605,17 +669,64 @@ async function changeStatus() {
     busy.value = false;
   }
 }
+
+function openPasswordReset(row: Row) {
+  passwordResetTarget.value = row;
+  resetPasswordSecret.value = "";
+  resetPasswordCopied.value = false;
+  formError.value = "";
+}
+
+async function resetUserPassword() {
+  if (!passwordResetTarget.value || busy.value) return;
+  busy.value = true;
+  formError.value = "";
+  try {
+    const result = await api<{ password: string }>(
+      `/users/${encodeURIComponent(String(passwordResetTarget.value.id))}/reset-password`,
+      "POST",
+      {},
+    );
+    resetPasswordSecret.value = result.password;
+  } catch (e) {
+    formError.value = errorText(e);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function copyResetPassword() {
+  try {
+    await navigator.clipboard.writeText(resetPasswordSecret.value);
+    resetPasswordCopied.value = true;
+  } catch {
+    notice("复制失败，请手动选中新密码。");
+  }
+}
+
+function closePasswordReset() {
+  passwordResetTarget.value = null;
+  resetPasswordSecret.value = "";
+  resetPasswordCopied.value = false;
+}
 async function remove() {
   if (!deleting.value || busy.value) return;
   busy.value = true;
   formError.value = "";
   try {
+    const deletingIdentityGroup = resource === "identity-groups";
     await api(
-      `/rules/${encodeURIComponent(String(deleting.value.id))}?version=${Number(deleting.value.version)}`,
+      deletingIdentityGroup
+        ? `/identity-groups/${encodeURIComponent(String(deleting.value.id))}`
+        : `/rules/${encodeURIComponent(String(deleting.value.id))}?version=${Number(deleting.value.version)}`,
       "DELETE",
     );
     deleting.value = null;
-    notice("删除请求已提交，端口释放以节点确认解绑为准。");
+    notice(
+      deletingIdentityGroup
+        ? "身份用户组已删除。"
+        : "删除请求已提交，端口释放以节点确认解绑为准。",
+    );
     await load();
   } catch (e) {
     formError.value = errorText(e);
@@ -727,14 +838,22 @@ const columns = computed(() =>
             "port_min",
             "port_max",
           ]
-        : resource === "users"
-          ? ["username", "role", "disabled"]
-          : // 审计的列过去是从首行的对象键里取的，而 Go 的 JSON 编码会把 map 的键
-            // 按字典序排 —— 于是表头冒出 action / id / user_id 这些原始英文键，
-            // 顺序也随字段增删而变。这里写死，和时间一样只是展示口径。
-            resource === "audit"
-            ? ["created_at", "action", "target", "user_id"]
-            : Object.keys(rows.value[0] || {}).slice(0, 6),
+        : resource === "identity-groups"
+          ? ["name", "id", "user_count", "device_group_count"]
+          : resource === "users"
+            ? [
+                "username",
+                "role",
+                "identity_group_name",
+                "identity_group_id",
+                "disabled",
+              ]
+            : // 审计的列过去是从首行的对象键里取的，而 Go 的 JSON 编码会把 map 的键
+              // 按字典序排 —— 于是表头冒出 action / id / user_id 这些原始英文键，
+              // 顺序也随字段增删而变。这里写死，和时间一样只是展示口径。
+              resource === "audit"
+              ? ["created_at", "action", "target", "user_id"]
+              : Object.keys(rows.value[0] || {}).slice(0, 6),
 );
 const labels: Record<string, string> = {
   name: "名称",
@@ -757,11 +876,15 @@ const labels: Record<string, string> = {
   port_max: "结束端口",
   username: "用户名",
   role: "角色",
+  identity_group_name: "身份用户组",
+  identity_group_id: "身份用户组 ID",
+  user_count: "用户数",
+  device_group_count: "授权设备组数",
   disabled: "停用",
   created_at: "时间",
   action: "操作",
   user_id: "操作者",
-  id: "ID",
+  id: resource === "identity-groups" ? "身份用户组 ID" : "ID",
 };
 </script>
 <template>
@@ -774,7 +897,13 @@ const labels: Record<string, string> = {
           {{
             resource === "nodes"
               ? "在线心跳与配置应用状态分别展示。"
-              : "配置与权限由服务端统一校验。"
+              : resource === "identity-groups"
+                ? "新建身份用户组后，在用户管理中分配。同组用户共享已授权的设备组。"
+                : resource === "users"
+                  ? "通过身份用户组 ID 分配设备组访问权限，角色决定后台管理权限。"
+                  : resource === "groups"
+                    ? "将设备组授权给身份用户组，该身份组内的用户即可访问。"
+                    : "配置与权限由服务端统一校验。"
           }}
           <span v-if="resource === 'nodes' || resource === 'audit'"
             >时间使用{{ displayTimeZoneLabel }}。</span
@@ -814,7 +943,10 @@ const labels: Record<string, string> = {
               <th
                 v-if="
                   resource === 'rules' ||
-                  (['groups', 'users', 'nodes'].includes(resource) && canManage)
+                  (['groups', 'identity-groups', 'users', 'nodes'].includes(
+                    resource,
+                  ) &&
+                    canManage)
                 "
               >
                 操作
@@ -837,7 +969,10 @@ const labels: Record<string, string> = {
               <td
                 v-if="
                   resource === 'rules' ||
-                  (['groups', 'users', 'nodes'].includes(resource) && canManage)
+                  (['groups', 'identity-groups', 'users', 'nodes'].includes(
+                    resource,
+                  ) &&
+                    canManage)
                 "
                 data-label="操作"
               >
@@ -857,6 +992,7 @@ const labels: Record<string, string> = {
                   <button v-if="resource === 'rules'" @click="diagnose(row)">
                     诊断</button
                   ><button
+                    v-if="resource === 'rules'"
                     :disabled="networkBusy"
                     @click="networkDiagnose(row)"
                   >
@@ -883,6 +1019,15 @@ const labels: Record<string, string> = {
                   >
                     删除
                   </button>
+                  <button v-if="resource === 'users'" @click="open(row)">
+                    身份组
+                  </button>
+                  <button
+                    v-if="resource === 'users'"
+                    @click="openPasswordReset(row)"
+                  >
+                    重置密码
+                  </button>
                   <button
                     v-if="resource === 'users'"
                     @click="openUserTokens(row)"
@@ -898,6 +1043,16 @@ const labels: Record<string, string> = {
                     "
                   >
                     {{ row.disabled ? "启用" : "停用" }}
+                  </button>
+                  <button
+                    v-if="resource === 'identity-groups'"
+                    class="danger"
+                    @click="
+                      deleting = row;
+                      formError = '';
+                    "
+                  >
+                    删除
                   </button>
                 </div>
               </td>
@@ -1063,11 +1218,13 @@ const labels: Record<string, string> = {
       :title="
         resource === 'nodes'
           ? '一次性节点接入凭据'
-          : (selected ? '编辑' : '新增') + titles[resource]
+          : resource === 'users' && selected
+            ? '修改身份用户组 · ' + selected.username
+            : (selected ? '编辑' : '新增') + titles[resource]
       "
       :busy="busy"
       :dirty="dirty"
-      @close="editing = false"
+      @close="closeEditing"
       ><form @submit.prevent="save">
         <p v-if="formError" class="error" role="alert">{{ formError }}</p>
         <template v-if="token"
@@ -1080,31 +1237,89 @@ const labels: Record<string, string> = {
             :expires-at="tokenExpiry"
           />
           <div class="form-actions">
-            <button type="button" @click="editing = false">关闭</button>
+            <button type="button" @click="closeEditing">关闭</button>
+          </div></template
+        ><template v-else-if="generatedPassword"
+          ><p class="warning">
+            {{ generatedUsername }} 的初始密码只展示这一次，关闭后无法再次查看。
+          </p>
+          <label
+            >初始密码<textarea
+              aria-label="初始密码"
+              :value="generatedPassword"
+              readonly
+              rows="2"
+            />
+          </label>
+          <div class="form-actions">
+            <button
+              type="button"
+              class="primary"
+              @click="copyGeneratedPassword"
+            >
+              {{ passwordCopied ? "已复制" : "复制初始密码" }}
+            </button>
+            <button type="button" @click="closeEditing">关闭</button>
           </div></template
         ><template v-else
           ><label v-if="resource !== 'users'"
-            >名称<input v-model="form.name" required maxlength="100" /></label
-          ><template v-if="resource === 'users'"
+            >名称<input v-model="form.name" required maxlength="100"
+          /></label>
+          <template v-if="resource === 'identity-groups'">
+            <label
+              >身份用户组 ID<input
+                v-model="form.identity_group_id"
+                aria-label="身份用户组 ID"
+                required
+                maxlength="64"
+                pattern="[A-Za-z0-9_\-]{1,64}"
+                placeholder="例如 1001 或 vip_users"
+                autocomplete="off"
+                spellcheck="false"
+            /></label>
+            <p class="muted small">
+              手动设置唯一 ID，支持 1–64 位字母、数字、下划线和短横线。
+            </p>
+            <p v-if="selected" class="muted small">
+              修改 ID 后，已关联的用户和设备组会同步更新，原有访问权限保留。
+            </p>
+          </template>
+          <template v-if="resource === 'users'"
             ><label
               >用户名<input
                 v-model="form.username"
                 autocomplete="off"
                 required
+                :disabled="!!selected"
                 maxlength="64" /></label
             ><label
-              >初始密码<input
-                v-model="form.password"
-                type="password"
-                autocomplete="new-password"
-                required
-                minlength="12" /></label
-            ><label
-              >角色<Select v-model="form.role">
+              >角色<Select
+                v-model="form.role"
+                aria-label="角色"
+                :disabled="!!selected"
+              >
                 <option value="user">普通用户</option>
                 <option value="admin">管理员</option>
               </Select></label
-            ></template
+            ><label
+              >身份用户组 ID<Select
+                v-model="form.identity_group_id"
+                aria-label="身份用户组 ID"
+                required
+              >
+                <option value="" disabled>选择身份用户组</option>
+                <option
+                  v-for="identity in options.identityGroups"
+                  :key="String(identity.id)"
+                  :value="identity.id"
+                >
+                  {{ identity.name }} · {{ identity.id }}
+                </option>
+              </Select></label
+            >
+            <p v-if="!options.identityGroups.length" class="muted small">
+              请先在侧栏“身份用户组”中新建身份组，再为用户分配。
+            </p></template
           ><template v-if="resource === 'rules'"
             ><label
               >入口服务器<Select
@@ -1526,17 +1741,23 @@ const labels: Record<string, string> = {
                   required
               /></label>
             </div>
-            <fieldset>
-              <legend>授权用户</legend>
+            <fieldset class="identity-grants">
+              <legend>授权身份用户组</legend>
+              <p class="muted small">
+                勾选身份用户组后，组内所有用户均获得此设备组的访问权限。
+              </p>
+              <p v-if="!options.identityGroups.length" class="muted small">
+                请先在侧栏“身份用户组”中新建身份组。
+              </p>
               <label
-                v-for="u in options.users"
-                :key="String(u.id)"
+                v-for="identity in options.identityGroups"
+                :key="String(identity.id)"
                 class="check"
                 ><input
-                  v-model="form.user_ids"
+                  v-model="form.identity_group_ids"
                   type="checkbox"
-                  :value="u.id"
-                />{{ u.username }}</label
+                  :value="identity.id"
+                /><span>{{ identity.name }} · {{ identity.id }}</span></label
               >
             </fieldset></template
           >
@@ -1569,10 +1790,18 @@ const labels: Record<string, string> = {
       @saved="advancedSaved"
     /><Modal
       v-if="deleting"
-      title="删除转发规则"
+      :title="
+        resource === 'identity-groups' ? '删除身份用户组' : '删除转发规则'
+      "
       :busy="busy"
       @close="deleting = null"
-      ><p>确认删除 {{ deleting.name }}？现有转发会在节点应用配置后停止。</p>
+      ><p v-if="resource === 'identity-groups'">
+        确认删除
+        {{ deleting.name }}？仅未关联用户且未授权给设备组的身份组可以删除。
+      </p>
+      <p v-else>
+        确认删除 {{ deleting.name }}？现有转发会在节点应用配置后停止。
+      </p>
       <p v-if="formError" class="error" role="alert">{{ formError }}</p>
       <div class="form-actions">
         <button class="danger" :disabled="busy" @click="remove">
@@ -1580,6 +1809,49 @@ const labels: Record<string, string> = {
         </button>
       </div></Modal
     >
+    <Modal
+      v-if="passwordResetTarget"
+      :title="`重置密码 · ${passwordResetTarget.username}`"
+      :busy="busy"
+      @close="closePasswordReset"
+    >
+      <p v-if="formError" class="error" role="alert">{{ formError }}</p>
+      <template v-if="resetPasswordSecret">
+        <p class="warning">
+          新密码只展示这一次。该账号原有会话和 API Token 已全部撤销。
+        </p>
+        <label
+          >新密码<textarea
+            aria-label="重置后的新密码"
+            :value="resetPasswordSecret"
+            readonly
+            rows="2"
+          />
+        </label>
+        <div class="form-actions">
+          <button type="button" class="primary" @click="copyResetPassword">
+            {{ resetPasswordCopied ? "已复制" : "复制新密码" }}
+          </button>
+          <button type="button" @click="closePasswordReset">关闭</button>
+        </div>
+      </template>
+      <template v-else>
+        <p>确认重置 {{ passwordResetTarget.username }} 的登录密码？</p>
+        <p class="muted small">
+          系统会生成新密码，并立即撤销该账号的所有会话和 API Token。
+        </p>
+        <div class="form-actions">
+          <button
+            type="button"
+            class="danger"
+            :disabled="busy"
+            @click="resetUserPassword"
+          >
+            确认重置
+          </button>
+        </div>
+      </template>
+    </Modal>
     <Modal
       v-if="statusTarget"
       :title="statusTarget.disabled ? '启用账号' : '停用账号'"

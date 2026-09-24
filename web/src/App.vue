@@ -54,10 +54,12 @@ const menus = computed(() => [
   { path: "/commerce", label: "套餐与钱包", icon: "wallet" },
   { path: "/operations", label: "运营与任务", icon: "layers" },
   { path: "/account", label: "账号与 API", icon: "shield" },
+  { path: "/api-docs", label: "API 列表", icon: "book-open" },
   ...(adminSite && state.user?.role === "admin"
     ? [
         { path: "/settings", label: "站点设置", icon: "settings" },
         { path: "/groups", label: "设备组", icon: "layers" },
+        { path: "/identity-groups", label: "身份用户组", icon: "shield" },
         { path: "/users", label: "用户管理", icon: "users" },
         { path: "/audit", label: "操作审计", icon: "shield" },
       ]

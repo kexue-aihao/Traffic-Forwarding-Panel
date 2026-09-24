@@ -136,21 +136,120 @@ try {
       const exceptions = [];
       admin.on("pageerror", (e) => exceptions.push(e.message));
       await login(admin, "ui-admin", password, "/admin");
+      await admin.getByRole("link", { name: "API 列表", exact: true }).click();
+      await admin.getByRole("heading", { name: "全站 API 列表" }).waitFor();
+      await admin.getByText(/共 \d+ 个接口/).waitFor();
+      await admin
+        .getByLabel("搜索接口", { exact: true })
+        .fill("identity-groups");
+      const identityAPI = admin
+        .locator(".api-entry")
+        .filter({ hasText: "POST" })
+        .filter({ hasText: "/api/v1/identity-groups" })
+        .first();
+      await identityAPI.waitFor();
+      await identityAPI.locator(".api-operation").click();
+      await admin.getByRole("heading", { name: /请求体/ }).waitFor();
+      await admin
+        .getByRole("button", { name: "清除筛选", exact: true })
+        .click();
       const username = `ui-${browserName}`;
-      const userPassword = randomUUID();
+      await admin
+        .getByRole("link", { name: "身份用户组", exact: true })
+        .click();
+      for (const name of [`identity-${browserName}`, `spare-${browserName}`]) {
+        await admin.getByRole("button", { name: "新增", exact: true }).click();
+        await admin.getByLabel("名称", { exact: true }).fill(name);
+        await admin
+          .getByLabel("身份用户组 ID", { exact: true })
+          .fill(`manual-${name}`);
+        await save(admin);
+        await admin.getByRole("cell", { name, exact: true }).waitFor();
+      }
+      const identities = await (
+        await admin.request.get(base + "/api/v1/identity-groups?page_size=100")
+      ).json();
+      const identity = identities.items.find(
+        (item) => item.name === `identity-${browserName}`,
+      );
+      const spareIdentity = identities.items.find(
+        (item) => item.name === `spare-${browserName}`,
+      );
+      assert.ok(
+        identity.id && spareIdentity.id && identity.id !== spareIdentity.id,
+      );
+      assert.equal(identity.id, `manual-identity-${browserName}`);
+      if (browserName === "chromium") {
+        const screenshots = resolve(root, ".gocache/screens");
+        await mkdir(screenshots, { recursive: true });
+        for (const [size, width] of [
+          ["desktop", 1440],
+          ["mobile", 320],
+        ]) {
+          await admin.setViewportSize({ width, height: 900 });
+          await admin.screenshot({
+            path: resolve(screenshots, `identity-groups-${size}.png`),
+          });
+        }
+        await admin.setViewportSize({ width: 1440, height: 1000 });
+      }
       await admin.getByRole("link", { name: "用户管理", exact: true }).click();
       await admin.getByRole("button", { name: "新增", exact: true }).click();
       await admin.getByLabel("用户名", { exact: true }).fill(username);
-      await admin.getByLabel("初始密码", { exact: true }).fill(userPassword);
-      await save(admin);
+      await admin
+        .getByLabel("身份用户组 ID", { exact: true })
+        .selectOption(identity.id);
+      await admin.getByRole("button", { name: "保存", exact: true }).click();
+      const initialPassword = admin.getByLabel("初始密码", { exact: true });
+      await initialPassword.waitFor();
+      let userPassword = await initialPassword.inputValue();
+      assert.match(userPassword, /^[A-Za-z0-9]{8}(?:-[A-Za-z0-9]{8}){3}$/);
+      await admin
+        .locator("dialog")
+        .getByRole("button", { name: "关闭", exact: true })
+        .click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      const createdUserRow = admin
+        .getByRole("row")
+        .filter({ hasText: username });
+      await createdUserRow
+        .getByRole("cell", { name: identity.id, exact: true })
+        .waitFor();
+      assert.equal(
+        await createdUserRow
+          .getByRole("button", { name: "网络诊断", exact: true })
+          .count(),
+        0,
+      );
+      await createdUserRow
+        .getByRole("button", { name: "重置密码", exact: true })
+        .click();
+      await admin
+        .getByRole("button", { name: "确认重置", exact: true })
+        .click();
+      const resetPassword = admin.getByLabel("重置后的新密码", { exact: true });
+      await resetPassword.waitFor();
+      const replacement = await resetPassword.inputValue();
+      assert.match(replacement, /^[A-Za-z0-9]{8}(?:-[A-Za-z0-9]{8}){3}$/);
+      assert.notEqual(replacement, userPassword);
+      userPassword = replacement;
+      await admin
+        .locator("dialog")
+        .getByRole("button", { name: "关闭", exact: true })
+        .click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
       await admin.getByRole("link", { name: "设备组", exact: true }).click();
       await admin.getByRole("button", { name: "新增", exact: true }).click();
       await admin
         .getByLabel("名称", { exact: true })
         .fill(`group-${browserName}`);
       await admin.getByLabel("设备类型", { exact: true }).selectOption("entry");
-      await admin.getByLabel("入口直出策略", { exact: true }).selectOption("allow");
-      await admin.getByLabel(username, { exact: true }).check();
+      await admin
+        .getByLabel("入口直出策略", { exact: true })
+        .selectOption("allow");
+      await admin
+        .getByLabel(`${identity.name} · ${identity.id}`, { exact: true })
+        .check();
       await save(admin);
       const savedGroups = await (
         await admin.request.get(base + "/api/v1/groups?page_size=100")
@@ -158,12 +257,18 @@ try {
       const savedGroup = savedGroups.items.find(
         (group) => group.name === `group-${browserName}`,
       );
+      assert.deepEqual(savedGroup.identity_group_ids, [identity.id]);
+      assert.equal(savedGroup.user_ids, undefined);
       assert.deepEqual(savedGroup.blocked_protocols, []);
       assert.equal(savedGroup.type, "entry");
       assert.deepEqual(savedGroup.disabled_transports, []);
       assert.deepEqual(savedGroup.disabled_networks, []);
-      const groupRow = admin.getByRole("row").filter({ hasText: `group-${browserName}` });
-      await groupRow.getByRole("button", { name: "高级设置", exact: true }).click();
+      const groupRow = admin
+        .getByRole("row")
+        .filter({ hasText: `group-${browserName}` });
+      await groupRow
+        .getByRole("button", { name: "高级设置", exact: true })
+        .click();
       const advanced = admin.getByLabel("设备组高级设置 JSON", { exact: true });
       assert.match(await advanced.inputValue(), /\/\/ 入站屏蔽选项/);
       assert.match(await advanced.inputValue(), /"max_fail": 3/);
@@ -172,67 +277,150 @@ try {
         const screenshotDir = resolve(root, ".gocache/screens");
         await mkdir(screenshotDir, { recursive: true });
         const viewport = admin.viewportSize();
-        for (const [size, width, height] of [["desktop", 1440, 1000], ["mobile", 320, 900]]) {
+        for (const [size, width, height] of [
+          ["desktop", 1440, 1000],
+          ["mobile", 320, 900],
+        ]) {
           await admin.setViewportSize({ width, height });
-          assert.ok(await admin.locator("dialog").evaluate((el) => el.scrollWidth <= el.clientWidth));
-          await admin.screenshot({ path: resolve(screenshotDir, `group-advanced-${size}.png`) });
+          assert.ok(
+            await admin
+              .locator("dialog")
+              .evaluate((el) => el.scrollWidth <= el.clientWidth),
+          );
+          await admin.screenshot({
+            path: resolve(screenshotDir, `group-advanced-${size}.png`),
+          });
           await admin.locator(".advanced-help summary").click();
-          await admin.getByRole("heading", { name: "反向隧道选项", exact: true }).scrollIntoViewIfNeeded();
-          assert.ok(await admin.locator("dialog").evaluate((el) => el.scrollWidth <= el.clientWidth));
-          await admin.screenshot({ path: resolve(screenshotDir, `group-advanced-help-${size}.png`) });
+          await admin
+            .getByRole("heading", { name: "反向隧道选项", exact: true })
+            .scrollIntoViewIfNeeded();
+          assert.ok(
+            await admin
+              .locator("dialog")
+              .evaluate((el) => el.scrollWidth <= el.clientWidth),
+          );
+          await admin.screenshot({
+            path: resolve(screenshotDir, `group-advanced-help-${size}.png`),
+          });
           await admin.locator(".advanced-help summary").click();
           await advanced.scrollIntoViewIfNeeded();
-          await admin.locator("dialog").evaluate((el) => { el.scrollTop = 0; });
+          await admin.locator("dialog").evaluate((el) => {
+            el.scrollTop = 0;
+          });
         }
         await admin.setViewportSize(viewport);
       }
       await advanced.fill("[]");
-      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
-      await admin.getByRole("alert").filter({ hasText: "必须是 JSON 对象" }).waitFor();
+      await admin
+        .getByRole("button", { name: "保存高级设置", exact: true })
+        .click();
+      await admin
+        .getByRole("alert")
+        .filter({ hasText: "必须是 JSON 对象" })
+        .waitFor();
       await advanced.fill("{} /* missing end");
-      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
-      await admin.getByRole("alert").filter({ hasText: "块注释未结束" }).waitFor();
-      await advanced.fill('{"allowed_host":["example.com"],"blocked_path":["/private"]}');
-      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
-      await admin.getByRole("alert").filter({ hasText: "allowed_host" }).waitFor();
+      await admin
+        .getByRole("button", { name: "保存高级设置", exact: true })
+        .click();
+      await admin
+        .getByRole("alert")
+        .filter({ hasText: "块注释未结束" })
+        .waitFor();
+      await advanced.fill(
+        '{"allowed_host":["example.com"],"blocked_path":["/private"]}',
+      );
+      await admin
+        .getByRole("button", { name: "保存高级设置", exact: true })
+        .click();
+      await admin
+        .getByRole("alert")
+        .filter({ hasText: "allowed_host" })
+        .waitFor();
       const extraSettings = {
-        blocked_protocol: ["socks"], disable_udp: true, max_fail: 0, fail_timout_sec: 0,
+        blocked_protocol: ["socks"],
+        disable_udp: true,
+        max_fail: 0,
+        fail_timout_sec: 0,
         blocked_path: ["/test//path", "/test/*literal*/"],
         tls: { server_name: "example.com", nested: { enabled: false } },
       };
-      await advanced.fill(`// extra settings\n${JSON.stringify(extraSettings, null, 2)}\n/* end */`);
+      await advanced.fill(
+        `// extra settings\n${JSON.stringify(extraSettings, null, 2)}\n/* end */`,
+      );
       await admin.getByRole("button", { name: "格式化", exact: true }).click();
-      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "保存高级设置", exact: true })
+        .click();
       await admin.locator("dialog").waitFor({ state: "detached" });
-      await admin.getByRole("row").filter({ hasText: `group-${browserName}` }).waitFor();
-      const updatedGroups = await (await admin.request.get(base + "/api/v1/groups?page_size=100")).json();
-      const updatedGroup = updatedGroups.items.find((group) => group.name === `group-${browserName}`);
+      await admin
+        .getByRole("row")
+        .filter({ hasText: `group-${browserName}` })
+        .waitFor();
+      const updatedGroups = await (
+        await admin.request.get(base + "/api/v1/groups?page_size=100")
+      ).json();
+      const updatedGroup = updatedGroups.items.find(
+        (group) => group.name === `group-${browserName}`,
+      );
       assert.deepEqual(updatedGroup.advanced, extraSettings);
-      await admin.getByRole("row").filter({ hasText: `group-${browserName}` }).getByRole("button", { name: "编辑", exact: true }).click();
+      await admin
+        .getByRole("row")
+        .filter({ hasText: `group-${browserName}` })
+        .getByRole("button", { name: "编辑", exact: true })
+        .click();
       const basicDialog = admin.locator("dialog");
-      assert.equal(await basicDialog.getByText("屏蔽协议", { exact: true }).count(), 0);
-      assert.equal(await basicDialog.getByText("允许的转发方式", { exact: true }).count(), 0);
+      assert.equal(
+        await basicDialog.getByText("屏蔽协议", { exact: true }).count(),
+        0,
+      );
+      assert.equal(
+        await basicDialog.getByText("允许的转发方式", { exact: true }).count(),
+        0,
+      );
       if (browserName === "chromium") {
         const screenshotDir = resolve(root, ".gocache/screens");
         await mkdir(screenshotDir, { recursive: true });
         const viewport = admin.viewportSize();
-        for (const [size, width, height] of [["desktop", 1440, 1000], ["mobile", 320, 900]]) {
+        for (const [size, width, height] of [
+          ["desktop", 1440, 1000],
+          ["mobile", 320, 900],
+        ]) {
           await admin.setViewportSize({ width, height });
-          assert.ok(await admin.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-          assert.ok(await admin.locator("dialog").evaluate((el) => el.scrollWidth <= el.clientWidth));
-          await admin.screenshot({ path: resolve(screenshotDir, `group-policies-${size}.png`) });
+          assert.ok(
+            await admin.evaluate(
+              () => document.documentElement.scrollWidth <= innerWidth,
+            ),
+          );
+          assert.ok(
+            await admin
+              .locator("dialog")
+              .evaluate((el) => el.scrollWidth <= el.clientWidth),
+          );
+          await admin.screenshot({
+            path: resolve(screenshotDir, `group-policies-${size}.png`),
+          });
         }
         await admin.setViewportSize(viewport);
       }
       await save(admin);
-      await groupRow.getByRole("button", { name: "高级设置", exact: true }).click();
+      await groupRow
+        .getByRole("button", { name: "高级设置", exact: true })
+        .click();
       assert.match(await advanced.inputValue(), /"max_fail": 0/);
       assert.match(await advanced.inputValue(), /"fail_timout_sec": 0/);
       assert.doesNotMatch(await advanced.inputValue(), /app:socks/);
-      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "保存高级设置", exact: true })
+        .click();
       await admin.locator("dialog").waitFor({ state: "detached" });
-      const reopenedGroups = await (await admin.request.get(base + "/api/v1/groups?page_size=100")).json();
-      assert.deepEqual(reopenedGroups.items.find((group) => group.id === savedGroup.id).advanced, extraSettings);
+      const reopenedGroups = await (
+        await admin.request.get(base + "/api/v1/groups?page_size=100")
+      ).json();
+      assert.deepEqual(
+        reopenedGroups.items.find((group) => group.id === savedGroup.id)
+          .advanced,
+        extraSettings,
+      );
       // 面板托管接入脚本与 Agent 产物，两个路由都必须**免登录**可取 ——
       // 接入命令在目标设备上执行，那里没有会话。
       const installer = await fetch(base + "/download/agent-install.sh");
@@ -279,7 +467,9 @@ try {
       // 探针视图的断言依赖该组成员看到的历史桶数量，多出节点会把默认选中项挤掉。
       await admin.getByRole("link", { name: "设备组", exact: true }).click();
       await admin.getByRole("button", { name: "新增", exact: true }).click();
-      await admin.getByLabel("名称", { exact: true }).fill(`join-${browserName}`);
+      await admin
+        .getByLabel("名称", { exact: true })
+        .fill(`join-${browserName}`);
       await admin.getByLabel("设备类型", { exact: true }).selectOption("entry");
       await save(admin);
       const joinRow = admin.locator("tr", { hasText: `join-${browserName}` });
@@ -391,6 +581,137 @@ try {
       const user = await userContext.newPage();
       user.on("pageerror", (e) => exceptions.push(e.message));
       await login(user, username, userPassword);
+      await user.getByRole("link", { name: "API 列表", exact: true }).click();
+      await user.getByRole("heading", { name: "全站 API 列表" }).waitFor();
+      assert.equal(await user.getByText(/共 122 个接口/).count(), 1);
+      assert.equal(
+        await user
+          .getByRole("link", { name: "身份用户组", exact: true })
+          .count(),
+        0,
+      );
+      assert.equal(
+        (await user.request.get(base + "/api/v1/identity-groups")).status(),
+        403,
+      );
+      await admin
+        .getByRole("link", { name: "身份用户组", exact: true })
+        .click();
+      await admin
+        .getByRole("row")
+        .filter({ hasText: identity.name })
+        .getByRole("button", { name: "编辑", exact: true })
+        .click();
+      assert.equal(
+        await admin.getByLabel("身份用户组 ID", { exact: true }).inputValue(),
+        identity.id,
+      );
+      await admin
+        .getByLabel("身份用户组 ID", { exact: true })
+        .fill(spareIdentity.id);
+      await admin
+        .locator("dialog")
+        .getByRole("button", { name: "保存", exact: true })
+        .click();
+      await admin
+        .locator("dialog")
+        .getByRole("alert")
+        .filter({ hasText: "ID 或名称可能已存在" })
+        .waitFor();
+      const editedIdentityID = `clients-${browserName}`;
+      await admin
+        .getByLabel("身份用户组 ID", { exact: true })
+        .fill(editedIdentityID);
+      await admin
+        .getByLabel("名称", { exact: true })
+        .fill(`${identity.name}-edited`);
+      await save(admin);
+      identity.id = editedIdentityID;
+      identity.name += "-edited";
+      await admin
+        .getByRole("row")
+        .filter({ hasText: identity.name })
+        .getByRole("cell", { name: identity.id, exact: true })
+        .waitFor();
+      const sessionAfterIDEdit = await (
+        await user.request.get(base + "/api/v1/auth/session")
+      ).json();
+      assert.equal(sessionAfterIDEdit.user.identity_group_id, identity.id);
+      const visibleAfterIDEdit = await (
+        await user.request.get(base + "/api/v1/groups")
+      ).json();
+      assert.equal(visibleAfterIDEdit.items.length, 1);
+      assert.equal(visibleAfterIDEdit.items[0].id, savedGroup.id);
+      // Existing sessions must immediately follow the user's current identity ID.
+      await admin.getByRole("link", { name: "用户管理", exact: true }).click();
+      await admin
+        .getByRole("row")
+        .filter({ hasText: username })
+        .getByRole("cell", { name: identity.id, exact: true })
+        .waitFor();
+      for (const [nextIdentity, expectedGroups] of [
+        [spareIdentity, 0],
+        [identity, 1],
+      ]) {
+        await admin
+          .getByRole("row")
+          .filter({ hasText: username })
+          .getByRole("button", { name: "身份组", exact: true })
+          .click();
+        assert.equal(
+          await admin.getByLabel("角色", { exact: true }).isDisabled(),
+          true,
+        );
+        await admin
+          .getByLabel("身份用户组 ID", { exact: true })
+          .selectOption(nextIdentity.id);
+        await save(admin);
+        await admin
+          .getByRole("row")
+          .filter({ hasText: username })
+          .getByRole("cell", { name: nextIdentity.id, exact: true })
+          .waitFor();
+        const groups = await (
+          await user.request.get(base + "/api/v1/groups")
+        ).json();
+        const nodes = await (
+          await user.request.get(base + "/api/v1/nodes")
+        ).json();
+        assert.equal(groups.items.length, expectedGroups);
+        assert.equal(nodes.items.length, expectedGroups);
+      }
+      await admin
+        .getByRole("link", { name: "身份用户组", exact: true })
+        .click();
+      await admin
+        .getByRole("row")
+        .filter({ hasText: identity.name })
+        .getByRole("button", { name: "删除", exact: true })
+        .click();
+      await admin
+        .locator("dialog")
+        .getByRole("button", { name: "确认删除", exact: true })
+        .click();
+      await admin
+        .locator("dialog")
+        .getByRole("alert")
+        .filter({ hasText: "仍被用户或设备组引用" })
+        .waitFor();
+      await admin.keyboard.press("Escape");
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      await admin
+        .getByRole("row")
+        .filter({ hasText: spareIdentity.name })
+        .getByRole("button", { name: "删除", exact: true })
+        .click();
+      await admin
+        .locator("dialog")
+        .getByRole("button", { name: "确认删除", exact: true })
+        .click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      await admin
+        .getByRole("cell", { name: spareIdentity.name, exact: true })
+        .waitFor({ state: "detached" });
       assert.equal(
         await user.getByRole("link", { name: "用户管理", exact: true }).count(),
         0,
@@ -410,7 +731,11 @@ try {
         403,
       );
       assert.equal(
-        (await user.request.get(base + `/api/v1/probes/${registered.node_id}/history`)).status(),
+        (
+          await user.request.get(
+            base + `/api/v1/probes/${registered.node_id}/history`,
+          )
+        ).status(),
         403,
       );
       await user.getByRole("link", { name: "转发规则", exact: true }).click();
@@ -633,11 +958,17 @@ try {
         .waitFor();
       assert.equal(await history.locator("polyline").count(), 1);
       assert.equal(
-        (await user.request.get(base + `/api/v1/probes/${registered.node_id}/history`)).status(),
+        (
+          await user.request.get(
+            base + `/api/v1/probes/${registered.node_id}/history`,
+          )
+        ).status(),
         200,
       );
       const historical = await (
-        await user.request.get(base + `/api/v1/probes/${registered.node_id}/history`)
+        await user.request.get(
+          base + `/api/v1/probes/${registered.node_id}/history`,
+        )
       ).json();
       assert.equal(historical.total, 4);
       assert.equal(historical.items[0].memory_percent, 50);
@@ -685,14 +1016,12 @@ try {
         .getByRole("button", { name: "确认提交", exact: true })
         .click();
       await admin.locator("dialog").waitFor({ state: "detached" });
-      const addonCard = admin
-        .locator("article")
-        .filter({
-          has: admin.getByRole("heading", {
-            name: `addon-${browserName}`,
-            exact: true,
-          }),
-        });
+      const addonCard = admin.locator("article").filter({
+        has: admin.getByRole("heading", {
+          name: `addon-${browserName}`,
+          exact: true,
+        }),
+      });
       await addonCard
         .getByRole("button", { name: "编辑套餐", exact: true })
         .click();
@@ -705,14 +1034,12 @@ try {
       // 断言都在这个页面上。
       await user.getByRole("link", { name: "套餐与钱包", exact: true }).click();
       await user.getByRole("button", { name: "刷新状态", exact: true }).click();
-      const userAddon = user
-        .locator("article")
-        .filter({
-          has: user.getByRole("heading", {
-            name: `addon-${browserName}`,
-            exact: true,
-          }),
-        });
+      const userAddon = user.locator("article").filter({
+        has: user.getByRole("heading", {
+          name: `addon-${browserName}`,
+          exact: true,
+        }),
+      });
       await userAddon
         .getByRole("button", { name: "购买叠加包", exact: true })
         .click();
@@ -732,110 +1059,278 @@ try {
         BigInt(beforeAddon.quota_bytes) + 1024n,
       );
       // Functional completion: real APIs and embedded pages, no external gateways.
-      await admin.getByRole("link", {name:"站点设置",exact:true}).click();
-      await admin.getByLabel("公告",{exact:true}).fill(`功能测试 ${browserName}`);
-      await admin.getByLabel("注册策略",{exact:true}).selectOption("invite");
-      await admin.getByRole("button",{name:"保存站点设置",exact:true}).click();
-      await admin.getByText("站点设置已保存，刷新页面可查看品牌更新。",{exact:false}).waitFor();
-      await admin.getByRole("button",{name:"生成注册邀请码",exact:true}).click();
-      const siteInvite=await admin.getByLabel("请保存邀请码",{exact:true}).inputValue();
-      const registrationContext=await browser.newContext();
-      const visitor=await registrationContext.newPage();
-      await visitor.goto(base+"/");
-      await visitor.getByRole("button",{name:"注册账号",exact:true}).click();
-      await visitor.getByLabel("用户名",{exact:true}).fill(`self-${browserName}`);
-      await visitor.getByLabel("密码",{exact:true}).fill(randomUUID());
-      await visitor.getByLabel("注册邀请码",{exact:true}).fill(siteInvite);
-      await visitor.getByRole("button",{name:"创建账号",exact:true}).click();
-      await visitor.getByText("注册成功，请登录。",{exact:false}).waitFor();
+      await admin.getByRole("link", { name: "站点设置", exact: true }).click();
+      await admin
+        .getByLabel("公告", { exact: true })
+        .fill(`功能测试 ${browserName}`);
+      await admin
+        .getByLabel("注册策略", { exact: true })
+        .selectOption("invite");
+      await admin
+        .getByRole("button", { name: "保存站点设置", exact: true })
+        .click();
+      await admin
+        .getByText("站点设置已保存，刷新页面可查看品牌更新。", { exact: false })
+        .waitFor();
+      await admin
+        .getByRole("button", { name: "生成注册邀请码", exact: true })
+        .click();
+      const siteInvite = await admin
+        .getByLabel("请保存邀请码", { exact: true })
+        .inputValue();
+      const registrationContext = await browser.newContext();
+      const visitor = await registrationContext.newPage();
+      await visitor.goto(base + "/");
+      await visitor
+        .getByRole("button", { name: "注册账号", exact: true })
+        .click();
+      await visitor
+        .getByLabel("用户名", { exact: true })
+        .fill(`self-${browserName}`);
+      await visitor.getByLabel("密码", { exact: true }).fill(randomUUID());
+      await visitor.getByLabel("注册邀请码", { exact: true }).fill(siteInvite);
+      await visitor
+        .getByRole("button", { name: "创建账号", exact: true })
+        .click();
+      await visitor.getByText("注册成功，请登录。", { exact: false }).waitFor();
       await registrationContext.close();
-      await admin.getByLabel("注册策略",{exact:true}).selectOption("closed");
-      await admin.getByRole("button",{name:"保存站点设置",exact:true}).click();
+      await admin
+        .getByLabel("注册策略", { exact: true })
+        .selectOption("closed");
+      await admin
+        .getByRole("button", { name: "保存站点设置", exact: true })
+        .click();
       // 提交中的按钮转圈而不是换文字（换文字会让宽度跳），所以同步信号是
       // data-busy 消失，而不是文案变回来。
-      await admin.locator('button[data-busy="true"]').waitFor({state:"detached"});
+      await admin
+        .locator('button[data-busy="true"]')
+        .waitFor({ state: "detached" });
       // 网络诊断（LookingGlass）：页面把请求排给节点，节点领走并回传结果。
       // 这里由测试自己扮演 Agent —— 面板侧并不知道对面是谁。
-      await admin.getByRole("link", {name:"网络诊断",exact:true}).click();
+      await admin.getByRole("link", { name: "网络诊断", exact: true }).click();
       // 显式选中本轮这台机器：同一个数据库里还留着前几个浏览器引擎注册的
       // 同名节点，页面的默认选中项并不保证是本轮的这一个。
       await admin
-        .getByLabel("诊断节点",{exact:true})
+        .getByLabel("诊断节点", { exact: true })
         .selectOption(registered.node_id);
       // 方式下拉走真实点击：用户报的缺陷就是这一处点不动。
-      await pickOption(admin,"诊断方式","tcping");
-      await admin.getByLabel("诊断目标",{exact:true}).fill("127.0.0.1:9");
-      await admin.getByRole("button",{name:"开始诊断",exact:true}).click();
+      await pickOption(admin, "诊断方式", "tcping");
+      await admin.getByLabel("诊断目标", { exact: true }).fill("127.0.0.1:9");
+      await admin
+        .getByRole("button", { name: "开始诊断", exact: true })
+        .click();
       // 等请求真正落库再让节点来领 —— click() 在异步提交完成前就返回了。
-      await admin.getByText("诊断编号",{exact:false}).waitFor();
-      const pending=await (await admin.request.post(base+"/api/v1/agent/looking-glass",{headers:{Authorization:`Bearer ${registered.token}`}})).json();
-      assert.ok(pending.request?.id,"节点应当领到这条诊断");
-      assert.match(pending.request.target,/^127.0.0.1:9$/,"下发的目标应当是规范化之后的值");
-      await admin.request.post(base+"/api/v1/agent/looking-glass/result",{headers:{Authorization:`Bearer ${registered.token}`},data:{...pending.request,output:"第 1 次：成功（1 ms）\n"}});
-      await admin.getByText("第 1 次：成功",{exact:false}).waitFor();
+      await admin.getByText("诊断编号", { exact: false }).waitFor();
+      const pending = await (
+        await admin.request.post(base + "/api/v1/agent/looking-glass", {
+          headers: { Authorization: `Bearer ${registered.token}` },
+        })
+      ).json();
+      assert.ok(pending.request?.id, "节点应当领到这条诊断");
+      assert.match(
+        pending.request.target,
+        /^127.0.0.1:9$/,
+        "下发的目标应当是规范化之后的值",
+      );
+      await admin.request.post(base + "/api/v1/agent/looking-glass/result", {
+        headers: { Authorization: `Bearer ${registered.token}` },
+        data: { ...pending.request, output: "第 1 次：成功（1 ms）\n" },
+      });
+      await admin.getByText("第 1 次：成功", { exact: false }).waitFor();
       // 非法目标在创建时就被拒绝，且不会排进队列。
-      await admin.getByLabel("诊断目标",{exact:true}).fill("example.com; id");
-      await admin.getByRole("button",{name:"开始诊断",exact:true}).click();
-      await admin.getByText("主机名不合法",{exact:false}).waitFor();
+      await admin
+        .getByLabel("诊断目标", { exact: true })
+        .fill("example.com; id");
+      await admin
+        .getByRole("button", { name: "开始诊断", exact: true })
+        .click();
+      await admin.getByText("主机名不合法", { exact: false }).waitFor();
 
       // A second registered fixture node is used only as an exit directory entry.
-      const fixtureHeaders={Origin:base,"X-Requested-With":"fetch"};
-      const userRecord = (await (await admin.request.get(base+"/api/v1/users?page_size=100")).json()).items.find((x) => x.username === username);
-      const exitGroup = await (await admin.request.post(base+"/api/v1/groups",{headers:fixtureHeaders,data:{name:`exit-group-${browserName}`,type:"exit",user_ids:[userRecord.id],multiplier:"1",port_min:10000,port_max:60000}})).json();
-      const exitEnrollment=await (await admin.request.post(base+"/api/v1/nodes/enrollment",{headers:fixtureHeaders,data:{name:`exit-${browserName}`,group_ids:[exitGroup.id]}})).json();
-      const exitRegistration=await (await admin.request.post(base+"/api/v1/agent/register",{data:{token:exitEnrollment.token,name:`exit-${browserName}`,capabilities:["tcp","tls"]}})).json();
-      await admin.request.post(base+"/api/v1/agent/probe",{headers:{Authorization:`Bearer ${exitRegistration.token}`},data:{sampled_at:new Date().toISOString()}});
-      await admin.getByRole("link",{name:"出口管理",exact:true}).click();
-      await admin.getByRole("button",{name:"新增出口",exact:true}).click();
-      await admin.getByLabel("出口名称",{exact:true}).fill(`managed-${browserName}`);
-      await admin.getByLabel("出口设备组",{exact:true}).selectOption(exitGroup.id);
-      await admin.getByLabel("出口服务器",{exact:true}).selectOption(exitRegistration.node_id);
-      await admin.getByLabel("出口端点",{exact:true}).fill("exit.example.test:443");
-      await admin.getByLabel("TLS 服务器名称",{exact:true}).fill("exit.example.test");
-      await admin.getByLabel("出口凭据",{exact:true}).fill("fixture-exit-secret-only");
-      await admin.getByRole("button",{name:"保存出口",exact:true}).click();
-      await admin.locator("dialog").waitFor({state:"detached"});
-      await user.getByRole("link",{name:"转发规则",exact:true}).click();
-      await user.getByRole("button",{name:"新增",exact:true}).click();
-      await user.getByLabel("名称",{exact:true}).fill("managed draft");
-      await user.getByLabel("入口服务器",{exact:true}).selectOption(registered.node_id);
-      await user.getByLabel("设备组",{exact:true}).selectOption(savedGroup.id);
-      await user.getByLabel("出口选择",{exact:true}).selectOption(exitGroup.id);
-      await user.getByLabel("监听地址",{exact:true}).fill(":10022");
-      await user.getByLabel("目标地址",{exact:true}).fill("target.example.test:443");
-      await user.getByLabel("启用规则",{exact:true}).uncheck();
-      await user.getByRole("group",{name:"Proxy Protocol",exact:true}).getByLabel("发送",{exact:true}).selectOption("v2");
+      const fixtureHeaders = { Origin: base, "X-Requested-With": "fetch" };
+      const userRecord = (
+        await (
+          await admin.request.get(base + "/api/v1/users?page_size=100")
+        ).json()
+      ).items.find((x) => x.username === username);
+      const exitGroup = await (
+        await admin.request.post(base + "/api/v1/groups", {
+          headers: fixtureHeaders,
+          data: {
+            name: `exit-group-${browserName}`,
+            type: "exit",
+            identity_group_ids: [userRecord.identity_group_id],
+            multiplier: "1",
+            port_min: 10000,
+            port_max: 60000,
+          },
+        })
+      ).json();
+      const exitEnrollment = await (
+        await admin.request.post(base + "/api/v1/nodes/enrollment", {
+          headers: fixtureHeaders,
+          data: { name: `exit-${browserName}`, group_ids: [exitGroup.id] },
+        })
+      ).json();
+      const exitRegistration = await (
+        await admin.request.post(base + "/api/v1/agent/register", {
+          data: {
+            token: exitEnrollment.token,
+            name: `exit-${browserName}`,
+            capabilities: ["tcp", "tls"],
+          },
+        })
+      ).json();
+      await admin.request.post(base + "/api/v1/agent/probe", {
+        headers: { Authorization: `Bearer ${exitRegistration.token}` },
+        data: { sampled_at: new Date().toISOString() },
+      });
+      await admin.getByRole("link", { name: "出口管理", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "新增出口", exact: true })
+        .click();
+      await admin
+        .getByLabel("出口名称", { exact: true })
+        .fill(`managed-${browserName}`);
+      await admin
+        .getByLabel("出口设备组", { exact: true })
+        .selectOption(exitGroup.id);
+      await admin
+        .getByLabel("出口服务器", { exact: true })
+        .selectOption(exitRegistration.node_id);
+      await admin
+        .getByLabel("出口端点", { exact: true })
+        .fill("exit.example.test:443");
+      await admin
+        .getByLabel("TLS 服务器名称", { exact: true })
+        .fill("exit.example.test");
+      await admin
+        .getByLabel("出口凭据", { exact: true })
+        .fill("fixture-exit-secret-only");
+      await admin
+        .getByRole("button", { name: "保存出口", exact: true })
+        .click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      await user.getByRole("link", { name: "转发规则", exact: true }).click();
+      await user.getByRole("button", { name: "新增", exact: true }).click();
+      await user.getByLabel("名称", { exact: true }).fill("managed draft");
+      await user
+        .getByLabel("入口服务器", { exact: true })
+        .selectOption(registered.node_id);
+      await user
+        .getByLabel("设备组", { exact: true })
+        .selectOption(savedGroup.id);
+      await user
+        .getByLabel("出口选择", { exact: true })
+        .selectOption(exitGroup.id);
+      await user.getByLabel("监听地址", { exact: true }).fill(":10022");
+      await user
+        .getByLabel("目标地址", { exact: true })
+        .fill("target.example.test:443");
+      await user.getByLabel("启用规则", { exact: true }).uncheck();
+      await user
+        .getByRole("group", { name: "Proxy Protocol", exact: true })
+        .getByLabel("发送", { exact: true })
+        .selectOption("v2");
       await save(user);
-      const managedRules=await (await user.request.get(base+"/api/v1/rules")).json();
-      const managedRule=managedRules.items.find(x=>x.name==="managed draft");
-      assert.ok(managedRule.selected_exit_id);assert.equal(managedRule.tunnel,undefined);assert.equal(managedRule.proxy_protocol.send,"v2");
-      await user.getByRole("link",{name:"运营与任务",exact:true}).click();
-      await user.getByText("导入规则",{exact:true}).click();
-      const importDraft={name:"preview draft",node_id:registered.node_id,group_id:savedGroup.id,network:"tcp",transport:"direct",listen:":10023",target:"127.0.0.1:8080",enabled:false};
-      await user.getByLabel("规则 JSON",{exact:true}).fill(JSON.stringify([importDraft]));
-      await user.getByRole("button",{name:"预览导入",exact:true}).click();
-      await user.getByText("第 1 条 · 将新增",{exact:false}).waitFor();
-      assert.equal((await (await user.request.get(base+"/api/v1/rules")).json()).items.some(x=>x.name==="preview draft"),false);
-      await user.getByRole("button",{name:"确认并创建导入任务",exact:true}).click();
-      await user.getByText("导入任务已创建。",{exact:false}).waitFor();
+      const managedRules = await (
+        await user.request.get(base + "/api/v1/rules")
+      ).json();
+      const managedRule = managedRules.items.find(
+        (x) => x.name === "managed draft",
+      );
+      assert.ok(managedRule.selected_exit_id);
+      assert.equal(managedRule.tunnel, undefined);
+      assert.equal(managedRule.proxy_protocol.send, "v2");
+      await user.getByRole("link", { name: "运营与任务", exact: true }).click();
+      await user.getByText("导入规则", { exact: true }).click();
+      const importDraft = {
+        name: "preview draft",
+        node_id: registered.node_id,
+        group_id: savedGroup.id,
+        network: "tcp",
+        transport: "direct",
+        listen: ":10023",
+        target: "127.0.0.1:8080",
+        enabled: false,
+      };
+      await user
+        .getByLabel("规则 JSON", { exact: true })
+        .fill(JSON.stringify([importDraft]));
+      await user.getByRole("button", { name: "预览导入", exact: true }).click();
+      await user.getByText("第 1 条 · 将新增", { exact: false }).waitFor();
+      assert.equal(
+        (
+          await (await user.request.get(base + "/api/v1/rules")).json()
+        ).items.some((x) => x.name === "preview draft"),
+        false,
+      );
+      await user
+        .getByRole("button", { name: "确认并创建导入任务", exact: true })
+        .click();
+      await user.getByText("导入任务已创建。", { exact: false }).waitFor();
       let imported;
-      for(let attempt=0;attempt<50;attempt++){imported=(await (await user.request.get(base+"/api/v1/rules")).json()).items.find(x=>x.name==="preview draft");if(imported)break;await user.waitForTimeout(100)}
+      for (let attempt = 0; attempt < 50; attempt++) {
+        imported = (
+          await (await user.request.get(base + "/api/v1/rules")).json()
+        ).items.find((x) => x.name === "preview draft");
+        if (imported) break;
+        await user.waitForTimeout(100);
+      }
       assert.ok(imported);
-      await user.getByLabel("导入方式",{exact:true}).selectOption("update_by_port");
-      await user.getByLabel("规则 JSON",{exact:true}).fill(JSON.stringify([{...importDraft,name:"updated draft",target:"127.0.0.1:8081"}]));
-      await user.getByRole("button",{name:"预览导入",exact:true}).click();
-      await user.getByText("第 1 条 · 将更新",{exact:false}).waitFor();
-      await user.getByRole("button",{name:"确认并创建导入任务",exact:true}).click();
+      await user
+        .getByLabel("导入方式", { exact: true })
+        .selectOption("update_by_port");
+      await user
+        .getByLabel("规则 JSON", { exact: true })
+        .fill(
+          JSON.stringify([
+            { ...importDraft, name: "updated draft", target: "127.0.0.1:8081" },
+          ]),
+        );
+      await user.getByRole("button", { name: "预览导入", exact: true }).click();
+      await user.getByText("第 1 条 · 将更新", { exact: false }).waitFor();
+      await user
+        .getByRole("button", { name: "确认并创建导入任务", exact: true })
+        .click();
       let updated;
-      for(let attempt=0;attempt<50;attempt++){updated=(await (await user.request.get(base+"/api/v1/rules")).json()).items.find(x=>x.id===imported.id&&x.target==="127.0.0.1:8081");if(updated)break;await user.waitForTimeout(100)}
+      for (let attempt = 0; attempt < 50; attempt++) {
+        updated = (
+          await (await user.request.get(base + "/api/v1/rules")).json()
+        ).items.find(
+          (x) => x.id === imported.id && x.target === "127.0.0.1:8081",
+        );
+        if (updated) break;
+        await user.waitForTimeout(100);
+      }
       assert.ok(updated);
-      await admin.getByRole("link",{name:"运营与任务",exact:true}).click();
-      await admin.getByLabel("购买记录 ID",{exact:true}).fill(beforeAddon.id);
-      await admin.getByLabel("退回金额（分）",{exact:true}).fill("100");
-      await admin.getByLabel("套餐退款原因",{exact:true}).fill("browser functional regression");
-      await admin.getByRole("button",{name:"退回钱包并调整佣金",exact:true}).click();
-      await admin.getByText("套餐退款已入钱包，配额和相关佣金已同步调整。",{exact:false}).waitFor();
-      assert.ok((await (await admin.request.get(base+`/api/v1/purchases/${beforeAddon.id}/funding`)).json()).items.some(x=>x.refunded_cents==="100"));
+      await admin
+        .getByRole("link", { name: "运营与任务", exact: true })
+        .click();
+      await admin
+        .getByLabel("购买记录 ID", { exact: true })
+        .fill(beforeAddon.id);
+      await admin.getByLabel("退回金额（分）", { exact: true }).fill("100");
+      await admin
+        .getByLabel("套餐退款原因", { exact: true })
+        .fill("browser functional regression");
+      await admin
+        .getByRole("button", { name: "退回钱包并调整佣金", exact: true })
+        .click();
+      await admin
+        .getByText("套餐退款已入钱包，配额和相关佣金已同步调整。", {
+          exact: false,
+        })
+        .waitFor();
+      assert.ok(
+        (
+          await (
+            await admin.request.get(
+              base + `/api/v1/purchases/${beforeAddon.id}/funding`,
+            )
+          ).json()
+        ).items.some((x) => x.refunded_cents === "100"),
+      );
       await user.getByRole("link", { name: "账号与 API", exact: true }).click();
       await user.getByRole("button", { name: "创建 Token" }).click();
       await user
@@ -851,9 +1346,7 @@ try {
           headers: { Authorization: `Bearer ${apiToken}` },
         })
       ).json();
-      const simulated = devices.items.find(
-        (d) => d.address === "203.0.113.99",
-      );
+      const simulated = devices.items.find((d) => d.address === "203.0.113.99");
       assert.ok(simulated, "设备地址接口必须给出本组机器当前的 IP");
       assert.equal(simulated.node_id, registered.node_id);
       assert.equal(simulated.online, true);
@@ -913,10 +1406,10 @@ try {
       await admin
         .getByLabel("凭据名称", { exact: true })
         .fill(`admin-issued-${browserName}`);
+      await admin.getByRole("checkbox", { name: "永久有效（不过期）" }).check();
       await admin
-        .getByRole("checkbox", { name: "永久有效（不过期）" })
-        .check();
-      await admin.getByRole("button", { name: "生成凭据", exact: true }).click();
+        .getByRole("button", { name: "生成凭据", exact: true })
+        .click();
       const issued = await admin.getByLabel("API Token 密钥").inputValue();
       assert.ok(issued.length > 20);
       await admin.getByRole("button", { name: "已复制，继续管理" }).click();
@@ -963,7 +1456,9 @@ try {
         200,
       );
       await admin.getByRole("button", { name: "撤销", exact: true }).click();
-      await admin.getByText("这个账号还没有 API 凭据。", { exact: true }).waitFor();
+      await admin
+        .getByText("这个账号还没有 API 凭据。", { exact: true })
+        .waitFor();
       // 用完就关：留着的对话框会挡住后面的页面操作。
       await admin.getByRole("button", { name: "关闭对话框" }).click();
       await admin.locator("dialog").waitFor({ state: "detached" });

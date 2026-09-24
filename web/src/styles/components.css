@@ -925,6 +925,17 @@ fieldset > :last-child {
   color: var(--color-ink);
 }
 
+.identity-grants {
+  min-inline-size: 0;
+}
+.identity-grants .check {
+  align-items: flex-start;
+}
+.identity-grants .check span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* inline-flex 会让它在表单列里跟在上一个控件后面（下拉框右边冒出一个勾选框）；
    用块级 + fit-content：另起一行，但只占内容宽度。
    flex-direction 必须显式写成 row —— 基础 label 规则里是 column，而

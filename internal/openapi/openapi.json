@@ -1017,6 +1017,19 @@
           "id": {
             "type": "string"
           },
+          "identity_group_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "max_rules": {
             "format": "int64",
             "type": "integer"
@@ -1068,7 +1081,7 @@
           "id",
           "name",
           "type",
-          "user_ids",
+          "identity_group_ids",
           "blocked_protocols",
           "disabled_networks",
           "disabled_transports",
@@ -1278,6 +1291,19 @@
             ],
             "description": "Disabled forwarding methods: direct, direct-tls, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
           },
+          "identity_group_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "max_rules": {
             "format": "int64",
             "type": "integer"
@@ -1306,19 +1332,6 @@
               "chain_exit"
             ],
             "type": "string"
-          },
-          "user_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
@@ -1438,6 +1451,19 @@
             ],
             "description": "Disabled forwarding methods: direct, direct-tls, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
           },
+          "identity_group_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "max_rules": {
             "format": "int64",
             "type": "integer"
@@ -1466,19 +1492,6 @@
               "chain_exit"
             ],
             "type": "string"
-          },
-          "user_ids": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "version": {
             "format": "int64",
@@ -1535,6 +1548,80 @@
           "family",
           "source",
           "observed_at"
+        ],
+        "type": "object"
+      },
+      "IdentityGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "device_group_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "user_count": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "user_count",
+          "device_group_count"
+        ],
+        "type": "object"
+      },
+      "IdentityGroupCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "Administrator-specified identity group ID; editable with references updated atomically.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 190,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "IdentityGroupPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/IdentityGroup"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
         ],
         "type": "object"
       },
@@ -4312,6 +4399,12 @@
           "id": {
             "type": "string"
           },
+          "identity_group_id": {
+            "type": "string"
+          },
+          "identity_group_name": {
+            "type": "string"
+          },
           "role": {
             "type": "string"
           },
@@ -4323,6 +4416,7 @@
           "id",
           "username",
           "role",
+          "identity_group_id",
           "disabled"
         ],
         "type": "object"
@@ -4330,7 +4424,7 @@
       "UserCreate": {
         "additionalProperties": false,
         "properties": {
-          "password": {
+          "identity_group_id": {
             "type": "string"
           },
           "role": {
@@ -4346,8 +4440,57 @@
         },
         "required": [
           "username",
-          "password",
           "role"
+        ],
+        "type": "object"
+      },
+      "UserCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "disabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "identity_group_id": {
+            "type": "string"
+          },
+          "identity_group_name": {
+            "type": "string"
+          },
+          "initial_password": {
+            "description": "System-generated initial password returned exactly once.",
+            "pattern": "^[A-Za-z0-9]{8}(?:-[A-Za-z0-9]{8}){3}$",
+            "readOnly": true,
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "role",
+          "identity_group_id",
+          "disabled",
+          "initial_password"
+        ],
+        "type": "object"
+      },
+      "UserIdentityGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "identity_group_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "identity_group_id"
         ],
         "type": "object"
       },
@@ -4374,6 +4517,25 @@
         "required": [
           "items",
           "total"
+        ],
+        "type": "object"
+      },
+      "UserPasswordReset": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "description": "System-generated replacement password returned exactly once.",
+            "pattern": "^[A-Za-z0-9]{8}(?:-[A-Za-z0-9]{8}){3}$",
+            "readOnly": true,
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "password"
         ],
         "type": "object"
       },
@@ -4953,16 +5115,6 @@
     "/agent/diagnostics": {
       "post": {
         "operationId": "post_agent_diagnostics",
-        "parameters": [
-          {
-            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
-            "in": "header",
-            "name": "X-Requested-With",
-            "schema": {
-              "const": "fetch"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -4992,10 +5144,7 @@
         },
         "security": [
           {
-            "cookieSession": []
-          },
-          {
-            "ownerBearer": []
+            "nodeBearer": []
           }
         ],
         "summary": "Claim one bounded diagnostic task",
@@ -5005,16 +5154,6 @@
     "/agent/diagnostics/result": {
       "post": {
         "operationId": "post_agent_diagnostics_result",
-        "parameters": [
-          {
-            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
-            "in": "header",
-            "name": "X-Requested-With",
-            "schema": {
-              "const": "fetch"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -5047,10 +5186,7 @@
         },
         "security": [
           {
-            "cookieSession": []
-          },
-          {
-            "ownerBearer": []
+            "nodeBearer": []
           }
         ],
         "summary": "Submit fenced diagnostic result",
@@ -5102,16 +5238,6 @@
     "/agent/looking-glass": {
       "post": {
         "operationId": "post_agent_looking-glass",
-        "parameters": [
-          {
-            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
-            "in": "header",
-            "name": "X-Requested-With",
-            "schema": {
-              "const": "fetch"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "content": {
@@ -5141,10 +5267,7 @@
         },
         "security": [
           {
-            "cookieSession": []
-          },
-          {
-            "ownerBearer": []
+            "nodeBearer": []
           }
         ],
         "summary": "Claim one pending looking glass request",
@@ -5154,16 +5277,6 @@
     "/agent/looking-glass/result": {
       "post": {
         "operationId": "post_agent_looking-glass_result",
-        "parameters": [
-          {
-            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
-            "in": "header",
-            "name": "X-Requested-With",
-            "schema": {
-              "const": "fetch"
-            }
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -5196,10 +5309,7 @@
         },
         "security": [
           {
-            "cookieSession": []
-          },
-          {
-            "ownerBearer": []
+            "nodeBearer": []
           }
         ],
         "summary": "Submit one fenced looking glass result",
@@ -6651,7 +6761,7 @@
             "ownerBearer": []
           }
         ],
-        "summary": "Authorized groups; user_ids hidden for ordinary users",
+        "summary": "Device groups authorized through the current user's identity group",
         "x-role": "user"
       },
       "post": {
@@ -6926,6 +7036,237 @@
         "security": [],
         "summary": "Health and database kind",
         "x-role": "public"
+      }
+    },
+    "/identity-groups": {
+      "get": {
+        "operationId": "get_identity-groups",
+        "parameters": [
+          {
+            "description": "page starts at 1; page_size defaults to 20, capped at 100",
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "page starts at 1; page_size defaults to 20, capped at 100",
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityGroupPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "List identity groups and reference counts",
+        "x-role": "admin"
+      },
+      "post": {
+        "operationId": "post_identity-groups",
+        "parameters": [
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentityGroupCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityGroup"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Create an identity group",
+        "x-role": "admin"
+      }
+    },
+    "/identity-groups/{id}": {
+      "delete": {
+        "operationId": "delete_identity-groups_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Delete an unreferenced identity group",
+        "x-role": "admin"
+      },
+      "put": {
+        "operationId": "put_identity-groups_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentityGroupCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityGroup"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Edit identity group ID and name while preserving user and device-group references",
+        "x-role": "admin"
       }
     },
     "/ledger": {
@@ -7737,6 +8078,9 @@
           }
         ],
         "summary": "Latest address of the single device visible to this API token; 409 when the group has several",
+        "x-aliases": [
+          "/online/device/ip"
+        ],
         "x-role": "user"
       }
     },
@@ -7779,6 +8123,9 @@
           }
         ],
         "summary": "Latest addresses of every device visible to this API token, grouped and ordered",
+        "x-aliases": [
+          "/online/device/ip/list"
+        ],
         "x-role": "user"
       }
     },
@@ -10381,7 +10728,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/User"
+                  "$ref": "#/components/schemas/UserCreated"
                 }
               }
             },
@@ -10408,7 +10755,134 @@
             "cookieSession": []
           }
         ],
-        "summary": "Create user",
+        "summary": "Create user and return the system-generated initial password exactly once",
+        "x-role": "admin"
+      }
+    },
+    "/users/{id}/identity-group": {
+      "put": {
+        "operationId": "put_users_id_identity-group",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserIdentityGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Assign a user to an identity group",
+        "x-role": "admin"
+      }
+    },
+    "/users/{id}/reset-password": {
+      "post": {
+        "operationId": "post_users_id_reset-password",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPasswordReset"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Reset a user password, revoke sessions and tokens, and return the replacement exactly once",
         "x-role": "admin"
       }
     },

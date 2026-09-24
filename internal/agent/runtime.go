@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +25,7 @@ type Runtime struct {
 	closed    bool
 }
 type binding struct {
+	changed  chan struct{}
 	ctx      context.Context
 	cancel   context.CancelFunc
 	pool     *resourcePool
@@ -50,7 +50,6 @@ type udpSession struct {
 	tunnel  *tunnel.Session
 	peer    *net.UDPAddr
 	rule    contract.Rule
-	until   time.Time
 }
 
 func NewRuntime(store *Store, client tunnel.Client) *Runtime {
@@ -184,7 +183,7 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 			next[k] = old
 			continue
 		}
-		b := &binding{rule: v, until: c.ValidUntil, conns: map[net.Conn]struct{}{}, sessions: map[string]*udpSession{}, runtime: r, slots: make(chan struct{}, 256), backends: map[string]*backendState{}}
+		b := &binding{changed: make(chan struct{}), rule: v, until: c.ValidUntil, conns: map[net.Conn]struct{}{}, sessions: map[string]*udpSession{}, runtime: r, slots: make(chan struct{}, 256), backends: map[string]*backendState{}}
 		b.ctx, b.cancel = context.WithCancel(context.Background())
 		var e error
 		if v.Network == "tcp" {
@@ -231,7 +230,7 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 	}
 	for k, b := range next {
 		b.mu.Lock()
-		changed := !reflect.DeepEqual(b.rule, rules[k]) || !sameRoutes(b.routes, routes[k])
+		changed := b.ctx.Err() != nil || !sameForwardingRule(b.rule, rules[k]) || !sameRoutes(b.routes, routes[k])
 		b.routes = routes[k]
 		for name, v := range b.routes {
 			v.pool = r.pools[limitOwner(v.rule)]
@@ -240,6 +239,8 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 		b.rule = rules[k]
 		b.until = c.ValidUntil
 		b.pool = r.pools[limitOwner(b.rule)]
+		close(b.changed)
+		b.changed = make(chan struct{})
 		if changed {
 			b.cancel()
 			b.ctx, b.cancel = context.WithCancel(context.Background())
@@ -403,7 +404,7 @@ func (b *binding) handleTCP(c net.Conn) {
 		return
 	}
 	defer b.untrack(c)
-	v, until, ctx, pool := b.snapshot()
+	v, _, ctx, pool := b.snapshot()
 	client, err := receiveProxy(c, v.ProxyProtocol)
 	if err != nil {
 		return
@@ -420,17 +421,17 @@ func (b *binding) handleTCP(c net.Conn) {
 		if !ok {
 			return
 		}
-		v, until, pool = selected.rule, selected.until, selected.pool
+		v, pool = selected.rule, selected.pool
 		client = replay
-	}
-	if e := b.runtime.Store.Available(v, until); e != nil {
-		return
 	}
 	release, ok := pool.acquire(client.RemoteAddr())
 	if !ok {
 		return
 	}
 	defer release()
+	if e := b.awaitAvailable(ctx, v.ID); e != nil {
+		return
+	}
 	if len(v.BlockedProtocols) > 0 {
 		c.SetReadDeadline(time.Now().Add(10 * time.Second))
 		reader := bufio.NewReader(client)
@@ -465,7 +466,7 @@ func (b *binding) handleTCP(c net.Conn) {
 	}
 	flowCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	tunnel.Relay(&cancelConn{Conn: client, cancel: cancel}, &cancelConn{Conn: target, cancel: cancel}, 2*time.Minute, func(up bool, n int) error { return b.charge(flowCtx, pool, v, until, up, n) })
+	tunnel.Relay(&cancelConn{Conn: client, cancel: cancel}, &cancelConn{Conn: target, cancel: cancel}, 2*time.Minute, func(up bool, n int) error { return b.charge(flowCtx, pool, v, up, n) })
 }
 
 type cancelConn struct {
@@ -516,7 +517,13 @@ func (b *binding) serveUDP() {
 			return
 		}
 		v, until, ctx, pool := b.snapshot()
-		if blocked(buf[:n], v.BlockedProtocols) || b.runtime.Store.Available(v, until) != nil {
+		if blocked(buf[:n], v.BlockedProtocols) {
+			continue
+		}
+		if e := b.runtime.Store.Available(v, until); e != nil {
+			if transientMeterError(e) {
+				b.runtime.Store.requestUsage()
+			}
 			continue
 		}
 		k := peer.String()
@@ -539,7 +546,7 @@ func (b *binding) serveUDP() {
 				release()
 				continue
 			}
-			s = &udpSession{ctx: ctx, pool: pool, release: release, conn: conn, tunnel: t, peer: peer, rule: v, until: until}
+			s = &udpSession{ctx: ctx, pool: pool, release: release, conn: conn, tunnel: t, peer: peer, rule: v}
 			b.mu.Lock()
 			if b.closed {
 				b.mu.Unlock()
@@ -551,7 +558,7 @@ func (b *binding) serveUDP() {
 			b.mu.Unlock()
 			go b.readUDP(k, s)
 		}
-		if err := b.charge(s.ctx, s.pool, s.rule, s.until, true, n); err != nil {
+		if err := b.charge(s.ctx, s.pool, s.rule, true, n); err != nil {
 			if errors.Is(err, errRateDrop) {
 				continue
 			}
@@ -594,7 +601,7 @@ func (b *binding) readUDP(k string, s *udpSession) {
 		if e != nil {
 			return
 		}
-		if e = b.charge(s.ctx, s.pool, s.rule, s.until, false, len(p)); e != nil {
+		if e = b.charge(s.ctx, s.pool, s.rule, false, len(p)); e != nil {
 			if errors.Is(e, errRateDrop) {
 				continue
 			}

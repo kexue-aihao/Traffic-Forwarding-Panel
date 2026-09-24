@@ -10,7 +10,7 @@ import (
 // 之后把密钥发给用户」的操作顺序。
 func (f *fixture) userWithToken(name string, body map[string]any) (string, map[string]any) {
 	f.t.Helper()
-	u := read[map[string]any](f.t, f.req("POST", "/users", map[string]any{"username": name, "password": "user-password-long", "role": "user"}, ""), 201)
+	u := read[map[string]any](f.t, f.req("POST", "/users", map[string]any{"username": name, "role": "user"}, ""), 201)
 	id, _ := u["id"].(string)
 	if id == "" {
 		f.t.Fatalf("账号创建没有返回 id: %v", u)
