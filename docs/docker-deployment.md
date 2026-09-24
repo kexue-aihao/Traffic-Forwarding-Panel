@@ -6,15 +6,20 @@
 
 ## 一键安装或升级
 
+Debian 服务器已安装 curl、Docker 和 Docker Compose v2 时，复制下面完整的一行执行。root 用户可直接运行，普通用户使用 sudo 提权。命令自动获取最新正式版，首次安装和后续升级均适用：
+
 ```sh
-curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.6/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
+curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/raw/master/install.sh | bash
 ```
+
+入口先将发布版安装脚本完整下载到临时文件，再执行，结束后清理临时文件。复制时不要手动换行；若终端出现 `>` 等待后续输入，先按 `Ctrl+C`，再重新复制整行。
 
 直接执行，无需域名或交互输入。脚本自动选择架构、下载镜像包及 SHA256 清单、校验并 `docker load`、配置容器、初始化管理员，等待健康检查通过。管理员用户名默认 `admin`，使用系统随机源生成 48 位密码，安装完成时显示；请保存并可在登录后修改。密码只通过标准输入传给初始化进程，不写入 `.env` 或镜像。若终端输出丢失，可使用下文的本机改密命令。
 
-可指定端口、目录及用户名：
+如需指定端口、目录、用户名或使用 `--password-stdin`，先将安装脚本保存到本地：
 
 ```sh
+curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/latest/download/install-docker.sh -o install-docker.sh
 sudo bash install-docker.sh --port 18080 \
   --dir /opt/traffic-forwarding-panel --admin admin
 ```

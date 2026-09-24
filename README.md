@@ -42,13 +42,15 @@ HTTPS 反向代理应保留 Host，并覆盖 `X-Forwarded-Proto` 为实际协议
 
 ### Docker 一键部署 / 1Panel
 
-服务器已有 Docker 和 Docker Compose v2 时执行：
+Debian 服务器已安装 curl、Docker 和 Docker Compose v2 时，复制下面完整的一行执行。root 用户可直接运行，普通用户会通过 sudo 提权：
 
 ```sh
-curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.6/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
+curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/raw/master/install.sh | bash
 ```
 
-无需输入域名或密码，执行后自动下载并启动容器。脚本识别 amd64/arm64，校验 Docker 镜像包，配置数据持久化、健康检查和自动重启，生成随机管理员密码并在完成时显示。默认目录 `/opt/traffic-forwarding-panel`，仅监听宿主机 `127.0.0.1:18080`。
+首次安装和后续升级都使用这条命令，自动获取最新正式版，无需手动修改版本号。入口先完整下载安装脚本，再执行；升级前自动备份，保留已有账号、数据和配置。如果终端显示 `>` 等待继续输入，先按 `Ctrl+C` 取消，再使用代码块的复制按钮复制整行，不要手动在命令中间换行。
+
+首次安装无需输入域名或密码，执行后自动下载并启动容器。脚本识别 amd64/arm64，校验 Docker 镜像包，配置数据持久化、健康检查和自动重启，生成随机管理员密码并在完成时显示。默认目录 `/opt/traffic-forwarding-panel`，仅监听宿主机 `127.0.0.1:18080`。
 
 在 1Panel 新建反向代理网站，填写你的域名、代理地址 `http://127.0.0.1:18080`，申请证书并开启 HTTPS；启用 WebSocket，关闭代理缓存。管理员入口 `https://你的域名/admin`。详见 [Docker 与 1Panel 部署](docs/docker-deployment.md)，其中包括 OpenResty 使用桥接网络时的配置、离线安装、支付配置和备份方式。
 
