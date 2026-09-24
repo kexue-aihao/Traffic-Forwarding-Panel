@@ -4,10 +4,10 @@
 
 使用 Caddy 自动 HTTPS 与 YAML 启动配置时，见 [Caddy 部署](caddy-deployment.md)。该示例从当前源码构建，包含独立的 `deploy/caddy/compose.yaml`，不覆盖这里的现有 1Panel 安装。
 
-## 一键安装
+## 一键安装或升级
 
 ```sh
-curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.4/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
+curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.5/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
 ```
 
 直接执行，无需域名或交互输入。脚本自动选择架构、下载镜像包及 SHA256 清单、校验并 `docker load`、配置容器、初始化管理员，等待健康检查通过。管理员用户名默认 `admin`，使用系统随机源生成 48 位密码，安装完成时显示；请保存并可在登录后修改。密码只通过标准输入传给初始化进程，不写入 `.env` 或镜像。若终端输出丢失，可使用下文的本机改密命令。
@@ -32,7 +32,9 @@ sudo bash install-docker.sh --port 18080 \
 
 如需指定初始密码，可使用 `--password-stdin` 从标准输入传入一行 12–72 字节的密码；默认无需该选项。
 
-重复运行仅启动现有安装，保留账号、数据库和配置。安装器不会自动替换已有版本，也不会清理已有数据。
+v0.1.5 起，同一命令兼顾首次安装和升级。已有旧版会先下载、校验并导入目标镜像，再停机备份整个安装目录，仅更新 `.env` 的 `TFP_IMAGE` 并重建面板容器；管理员账号、数据库、端口、域名、支付配置、Compose 及覆盖文件均保留。`--port`、`--admin` 和 `--password-stdin` 只用于首次安装。旧版脚本重复运行仍然只启动旧容器，因此升级时必须重新下载新脚本。
+
+脚本最后同时核对容器镜像 ID 和 `/panel -version`，通过后显示“升级完成，当前运行版本”。同版本重复执行只启动并验证，不下载镜像或重复备份；旧脚本不能自动降级较新的安装。同一目录的并发安装/升级会被锁阻止，需要系统提供 `flock`（常见发行版的 util-linux 已包含）。
 
 ## 1Panel 建站
 
@@ -115,13 +117,17 @@ chmod 600 config/payments.json
 
 ## 离线安装和升级
 
-从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.4_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
+从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.5_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
 
 ```sh
 sudo bash install-docker.sh --bundle /path/to/downloads
 ```
 
-升级采用显式步骤：备份 → 校验新版本 Docker 包 → `docker load -i 新镜像包.tar.gz` → 修改 `.env` 的 `TFP_IMAGE` 为新版本及当前架构 → `docker compose up -d --wait`。保留数据目录和域名配置，勿重新初始化管理员。数据库迁移可能不兼容旧版程序，回退需要同时恢复升级前备份。
+`--bundle` 对已有安装同样会执行自动升级。备份保存在安装目录旁，例如 `/opt/traffic-forwarding-panel.backup-日期-随机后缀/installation.tar`，目录仅 root 可读，包含停机后的数据库、`.env`、Compose 文件和配置。升级成功后请按自己的备份保留策略保管或清理，脚本不会删除这些备份。
+
+下载或校验失败发生在停机前；备份失败会尝试重新启动原容器。新程序开始运行后若健康或版本验证失败，脚本会返回非零状态并输出备份路径，不会自动降级可能已迁移的数据库。先查看 `docker compose logs panel` 修复配置；确需回退时，停止面板，将当前安装目录另存，再在原路径完整恢复 `installation.tar`，使用备份内的 `.env` 和旧镜像启动。不要仅切换旧镜像运行升级后的数据库。
+
+自动备份面向本安装器默认的 SQLite `data/panel.db` 和安装目录内的绑定挂载。自定义镜像、外部数据库、目录外数据挂载需手动备份并升级：校验 Docker 包 → `docker load` → 修改 `.env` 的 `TFP_IMAGE` → `docker compose up -d --wait`。保留数据和配置，勿重新初始化管理员。
 
 镜像只部署面板服务；Agent 仍需安装在真实入口/出口节点。镜像已经把 `/agent` 放在 `/panel` 旁边，面板因此会从自身可执行文件所在目录发布 Agent，控制台「设备组 → 接入设备」生成的命令可直接在目标设备上执行。要给与面板不同架构的设备接入，把 `agent-linux-<arch>` 放进一个目录并把 `TFP_AGENT_DIR` 指向它。此处的 HTTPS 反代测试不替代真实 1Panel 安装、Linux 跨机转发、容量与商户实付验收。
 
