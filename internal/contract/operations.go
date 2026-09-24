@@ -66,8 +66,9 @@ type Control struct {
 	Active    []string       `json:"active"`
 }
 
-// TerminalMessage carries complete commands, never shell fragments. Each command
-// is audited before execution; output is streamed and is not stored by the panel.
+// TerminalMessage carries legacy complete commands or interactive input/resize.
+// Only legacy commands are audited; interactive keystrokes and output are not
+// stored by the panel. PTY output uses base64 to preserve arbitrary byte splits.
 type TerminalMessage struct {
 	Type    string `json:"type"`
 	Command string `json:"command,omitempty"`

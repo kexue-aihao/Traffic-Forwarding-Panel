@@ -32,7 +32,7 @@ func TestInteractiveBridgeProtocolAndRevocation(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer agent.Close()
-	for _, msg := range []contract.TerminalMessage{{Type: "input", Data: "secret-keystrokes\x03"}, {Type: "resize", Cols: 100, Rows: 30}} {
+	for _, msg := range []contract.TerminalMessage{{Type: "input", Data: "secret-keystrokes\x03"}, {Type: "input", Data: strings.Repeat("\x1b", 4096)}, {Type: "resize", Cols: 100, Rows: 30}} {
 		if e = browser.WriteJSON(msg); e != nil {
 			t.Fatal(e)
 		}

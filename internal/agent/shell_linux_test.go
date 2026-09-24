@@ -54,7 +54,7 @@ func TestInteractiveShellRetainsDirectoryResizesAndInterrupts(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	write("stty -echo; cd /tmp; printf 'REA''DY\\n'\n")
+	write("PS1='__TFP_READY__ '; stty -echo; cd /tmp; printf 'REA''DY\\n'\n")
 	readUntil("READY")
 	write("pwd\n")
 	readUntil("/tmp")
@@ -66,6 +66,7 @@ func TestInteractiveShellRetainsDirectoryResizesAndInterrupts(t *testing.T) {
 	write("printf 'BEFORE\\n'; sleep 60; printf 'AFTER\\n'\n")
 	readUntil("BEFORE")
 	write("\x03")
+	readUntil("__TFP_READY__")
 	write("printf 'INTERRUPTED\\n'\n")
 	readUntil("INTERRUPTED")
 	write("printf '中文\\n'\n")

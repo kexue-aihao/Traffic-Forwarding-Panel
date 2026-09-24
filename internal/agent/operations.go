@@ -176,6 +176,8 @@ func (a *Agent) runTerminal(ctx context.Context, op contract.NodeOperation) erro
 	defer stop()
 	conn.SetReadLimit(8192)
 	if op.Kind == "shell" {
+		// A 4096-byte input can expand sixfold when JSON escapes control bytes.
+		conn.SetReadLimit(32768)
 		return runShell(ctx, conn)
 	}
 	commands := make(chan string, 1)

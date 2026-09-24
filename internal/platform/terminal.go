@@ -98,6 +98,9 @@ func (s *Server) attachTerminal(w http.ResponseWriter, r *http.Request, agentSid
 		return
 	}
 	conn.SetReadLimit(16384)
+	if interactive {
+		conn.SetReadLimit(32768)
+	}
 	if agentSide {
 		b.agent = conn
 	} else {
