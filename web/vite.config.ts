@@ -36,6 +36,7 @@ export default defineConfig({
           "node_modules/lucide-static/LICENSE",
           resolve(output, "lucide-LICENSE.txt"),
         );
+        copyFileSync("node_modules/@xterm/xterm/LICENSE", resolve(output, "xterm-LICENSE.txt"));
         const names = [
           "activity",
           "radar",

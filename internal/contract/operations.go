@@ -73,4 +73,13 @@ type TerminalMessage struct {
 	Command string `json:"command,omitempty"`
 	Data    string `json:"data,omitempty"`
 	Code    int    `json:"code,omitempty"`
+	Cols    uint16 `json:"cols,omitempty"`
+	Rows    uint16 `json:"rows,omitempty"`
+}
+
+// ValidShellInput bounds interactive input and terminal dimensions. Keystrokes
+// are never retained in the command audit (they may contain passwords).
+func ValidShellInput(m TerminalMessage) bool {
+	return m.Type == "input" && len(m.Data) > 0 && len(m.Data) <= 4096 ||
+		m.Type == "resize" && m.Cols >= 2 && m.Cols <= 500 && m.Rows >= 2 && m.Rows <= 300
 }

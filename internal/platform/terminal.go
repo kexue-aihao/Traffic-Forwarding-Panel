@@ -46,18 +46,24 @@ func (s *Server) browserTerminal(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "terminal authorization expired")
 		return
 	}
-	s.attachTerminal(w, r, false, u.ID, digest(cookie.Value))
+	op, e := s.loadOperation(r.Context(), s.Store.DB, oid)
+	if e != nil {
+		fail(w, 404, "operation unavailable")
+		return
+	}
+	s.attachTerminal(w, r, false, u.ID, digest(cookie.Value), op.Kind == "shell")
 }
 func (s *Server) agentTerminal(w http.ResponseWriter, r *http.Request) {
 	op, e := s.loadOperation(r.Context(), s.Store.DB, r.PathValue("id"))
-	if e != nil || op.Kind != "terminal" || op.NodeID != r.Context().Value(nodeKey{}).(string) || op.Status != "running" || !op.ExpiresAt.After(time.Now()) || op.Claim == "" || subtle.ConstantTimeCompare([]byte(op.Claim), []byte(r.Header.Get("X-Operation-Claim"))) != 1 {
+	if e != nil || (op.Kind != "terminal" && op.Kind != "shell") || op.NodeID != r.Context().Value(nodeKey{}).(string) || op.Status != "running" || !op.ExpiresAt.After(time.Now()) || op.Claim == "" || subtle.ConstantTimeCompare([]byte(op.Claim), []byte(r.Header.Get("X-Operation-Claim"))) != 1 {
 		fail(w, 403, "terminal task unavailable")
 		return
 	}
-	s.attachTerminal(w, r, true, "", "")
+	s.attachTerminal(w, r, true, "", "", op.Kind == "shell")
 }
-func (s *Server) attachTerminal(w http.ResponseWriter, r *http.Request, agentSide bool, user, session string) {
+func (s *Server) attachTerminal(w http.ResponseWriter, r *http.Request, agentSide bool, user, session string, shell ...bool) {
 	oid := r.PathValue("id")
+	interactive := len(shell) > 0 && shell[0]
 	up := websocket.Upgrader{ReadBufferSize: 4096, WriteBufferSize: 4096, CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		if agentSide {
@@ -149,29 +155,36 @@ func (s *Server) attachTerminal(w http.ResponseWriter, r *http.Request, agentSid
 		}
 		target := b.browser
 		if !agentSide {
-			if msg.Type != "command" || !validCommand(msg.Command) || count >= 128 {
-				return
-			}
-			count++
-			if !s.terminalAuthorized(ctx, oid, user, session) {
-				return
-			}
-			e = s.Store.Write(ctx, storage.Critical, func(tx *sql.Tx) error {
-				var status string
-				if e := tx.QueryRowContext(ctx, s.q("SELECT status FROM cp_node_operations WHERE id=?"), oid).Scan(&status); e != nil {
+			if interactive {
+				if !contract.ValidShellInput(msg) || !s.terminalAuthorized(ctx, oid, user, session) {
+					return
+				}
+				target = b.agent
+			} else {
+				if msg.Type != "command" || !validCommand(msg.Command) || count >= 128 {
+					return
+				}
+				count++
+				if !s.terminalAuthorized(ctx, oid, user, session) {
+					return
+				}
+				e = s.Store.Write(ctx, storage.Critical, func(tx *sql.Tx) error {
+					var status string
+					if e := tx.QueryRowContext(ctx, s.q("SELECT status FROM cp_node_operations WHERE id=?"), oid).Scan(&status); e != nil {
+						return e
+					}
+					if status != "running" {
+						return errors.New("terminal closed")
+					}
+					_, e := tx.ExecContext(ctx, s.q("INSERT INTO cp_terminal_commands(id,operation_id,command,created_at) VALUES(?,?,?,?)"), id(), oid, msg.Command, time.Now().Unix())
 					return e
+				})
+				if e != nil {
+					return
 				}
-				if status != "running" {
-					return errors.New("terminal closed")
-				}
-				_, e := tx.ExecContext(ctx, s.q("INSERT INTO cp_terminal_commands(id,operation_id,command,created_at) VALUES(?,?,?,?)"), id(), oid, msg.Command, time.Now().Unix())
-				return e
-			})
-			if e != nil {
-				return
+				msg = contract.TerminalMessage{Type: "command", Command: msg.Command}
+				target = b.agent
 			}
-			msg = contract.TerminalMessage{Type: "command", Command: msg.Command}
-			target = b.agent
 		} else if msg.Type != "output" && msg.Type != "exit" {
 			return
 		}
@@ -224,7 +237,7 @@ func (s *Server) RunOperationLoop(ctx context.Context) {
 			return
 		case <-tick.C:
 			_ = s.Store.Write(ctx, storage.Background, func(tx *sql.Tx) error {
-				_, e := tx.ExecContext(ctx, s.q("UPDATE cp_node_operations SET status='expired',updated_at=? WHERE status IN ('pending','running') AND expires_at<=?"), time.Now().Unix(), time.Now().Unix())
+				_, e := tx.ExecContext(ctx, s.q("UPDATE cp_node_operations SET status='expired',updated_at=? WHERE status IN ('pending','running') AND expires_at<=? AND NOT (kind='uninstall' AND status='running')"), time.Now().Unix(), time.Now().Unix())
 				return e
 			})
 		}

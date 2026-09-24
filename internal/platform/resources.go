@@ -643,6 +643,9 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 	if e = tx.QueryRowContext(ctx, s.q(groupQuery), rule.GroupID, rule.NodeID).Scan(&payload); e != nil {
 		return errors.New("node not in group")
 	}
+	if e = s.nodeAvailableTx(ctx, tx, rule.NodeID); e != nil {
+		return e
+	}
 	// 监听地址留空 = 从设备组允许的范围里随机分配。
 	if strings.TrimSpace(rule.Listen) == "" {
 		listen, e := s.allocateListen(ctx, tx, payload, rule.NodeID, rule.Network)

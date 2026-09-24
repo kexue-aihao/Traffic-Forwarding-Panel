@@ -134,9 +134,9 @@ onUnmounted(() => {alive = false; clearInterval(timer); socket?.close(); access.
       <h2>最近运维任务</h2>
       <p v-if="!operations.length" class="muted">暂无任务。</p>
       <article v-for="op in operations" :key="op.id" class="operation-item">
-        <p>{{ op.kind === 'terminal' ? '终端' : '升级' }} · {{ labels[op.status] || op.status }} · {{ formatDateTime(op.created_at) }}</p>
+        <p>{{ ({ terminal: '终端命令', shell: 'WebSSH', uninstall: '卸载设备', upgrade: '升级' })[op.kind] || op.kind }} · {{ labels[op.status] || op.status }} · {{ formatDateTime(op.created_at) }}</p>
         <p v-if="op.error" class="error">{{ op.error }}</p>
-        <button v-if="['pending', 'running'].includes(op.status)" :disabled="busy" @click="cancel(op)">取消任务</button>
+        <button v-if="['pending', 'running'].includes(op.status) && !(op.kind === 'uninstall' && op.status === 'running')" :disabled="busy" @click="cancel(op)">取消任务</button>
         <button v-if="op.kind === 'terminal'" @click="commands(op)">查看命令审计</button>
       </article>
       <pre v-for="(entry, index) in audit" :key="index" class="terminal-output">{{ formatDateTime(entry.created_at) }}

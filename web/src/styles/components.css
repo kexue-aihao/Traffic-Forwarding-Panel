@@ -176,7 +176,11 @@
   transition: --spot-alpha var(--duration-state) var(--ease-state);
   background-image: radial-gradient(
     240px circle at var(--spot-x) var(--spot-y),
-    color-mix(in oklab, var(--spot-color) calc(var(--spot-alpha) * 100%), transparent),
+    color-mix(
+      in oklab,
+      var(--spot-color) calc(var(--spot-alpha) * 100%),
+      transparent
+    ),
     transparent 70%
   );
 }
@@ -563,7 +567,11 @@ nav a[aria-current="page"] .icon {
   transition: --spot-alpha var(--duration-state) var(--ease-state);
   background-image: radial-gradient(
     240px circle at var(--spot-x) var(--spot-y),
-    color-mix(in oklab, var(--spot-color) calc(var(--spot-alpha) * 100%), transparent),
+    color-mix(
+      in oklab,
+      var(--spot-color) calc(var(--spot-alpha) * 100%),
+      transparent
+    ),
     transparent 70%
   );
 }
@@ -1090,6 +1098,156 @@ tbody tr:hover td {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--space-5);
+}
+
+.probe-list {
+  display: grid;
+  gap: 12px;
+}
+.probe-list .probe {
+  padding: 18px 22px;
+  min-width: 0;
+}
+.probe-row {
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 1.2fr) minmax(220px, 1fr) minmax(230px, 1.3fr)
+    auto;
+  align-items: center;
+  gap: 24px;
+}
+.probe-name {
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+.probe-identity p {
+  margin: 6px 0;
+}
+.probe-network.metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 18px;
+  margin: 0;
+}
+.probe-network dd {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.probe-resources {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+.probe-meter > div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  gap: 6px;
+}
+.probe-meter {
+  min-width: 0;
+}
+.probe-meter strong {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.probe-meter small {
+  display: block;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.probe-meter meter,
+.meter-unknown {
+  display: block;
+  width: 100%;
+  height: 7px;
+  margin: 5px 0;
+  border: 0;
+  border-radius: 10px;
+  background: var(--color-hover);
+}
+.probe-meter meter::-webkit-meter-bar {
+  background: var(--color-hover);
+  border: 0;
+  height: 7px;
+}
+.probe-meter meter::-webkit-meter-optimum-value {
+  background: var(--color-accent);
+  border-radius: 10px;
+}
+.probe-meter meter::-moz-meter-bar {
+  background: var(--color-accent);
+  border-radius: 10px;
+}
+.probe-meter meter.high::-webkit-meter-optimum-value {
+  background: #dc6b36;
+}
+.probe-meter meter.high::-moz-meter-bar {
+  background: #dc6b36;
+}
+.probe-actions {
+  display: grid;
+  gap: 8px;
+}
+.probe-actions button {
+  padding: 6px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.probe-actions button.danger {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+.probe-details {
+  margin-top: 12px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+  font-size: 12px;
+}
+.probe-details summary {
+  cursor: pointer;
+}
+.probe[data-status="离线"] .probe-status {
+  color: var(--color-ink-muted);
+}
+dialog:has(.web-terminal) {
+  width: min(1100px, calc(100vw - 28px));
+}
+.web-terminal {
+  height: min(55dvh, 540px);
+  min-height: 220px;
+  min-width: 0;
+  background: #101820;
+  padding: 12px;
+  margin: 16px 0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+@media (max-width: 1200px) {
+  .probe-row {
+    grid-template-columns: minmax(150px, 1fr) minmax(200px, 1fr);
+    gap: 16px;
+  }
+  .probe-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+}
+@media (max-width: 600px) {
+  .probe-list .probe {
+    padding: 16px;
+  }
+  .probe-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .probe-details summary span {
+    display: block;
+    margin-top: 5px;
+  }
 }
 
 .price {

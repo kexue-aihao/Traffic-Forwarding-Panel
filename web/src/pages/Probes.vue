@@ -1,8 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import {
+  computed,
+  defineAsyncComponent,
+  onMounted,
+  onUnmounted,
+  ref,
+} from "vue";
 import { api, errorText, ApiError } from "../core/api";
 import ProbeHistory from "../components/ProbeHistory.vue";
 import LocationFlag from "../components/LocationFlag.vue";
+const ProbeActions = defineAsyncComponent(
+  () => import("../components/ProbeActions.vue"),
+);
+import ProbeMeter from "../components/ProbeMeter.vue";
+import { adminSite, state, notice } from "../core/state";
 import Select from "../components/Select.vue";
 import {
   displayTimeZoneLabel,
@@ -20,6 +31,8 @@ interface Probe {
   disk_total: string | null;
   upload_bps: number | null;
   download_bps: number | null;
+  upload_total?: string | null;
+  download_total?: string | null;
   load1: number | null;
   cpu_model: string | null;
   swap_used: string | null;
@@ -44,7 +57,46 @@ interface Probe {
 }
 const probes = ref<Probe[]>([]);
 const names = ref<Record<string, string>>({});
-const nodes = ref<{ id: string; name: string }[]>([]);
+interface Node {
+  id: string;
+  name: string;
+  capabilities?: string[];
+}
+const nodes = ref<Node[]>([]);
+const operation = ref<{ node: Node; mode: "shell" | "uninstall" }>();
+const canManage = computed(() => adminSite && state.user?.role === "admin");
+function act(p: Probe, mode: "shell" | "uninstall") {
+  operation.value = {
+    node: nodes.value.find((n) => n.id === p.node_id) || {
+      id: p.node_id,
+      name: nodeTitle(p),
+    },
+    mode,
+  };
+}
+function removed() {
+  operation.value = undefined;
+  notice("设备已完成卸载");
+  void load();
+}
+function percent(used: string | null, total: string | null) {
+  return used !== null && total !== null && Number(total) > 0
+    ? (Number(used) / Number(total)) * 100
+    : null;
+}
+function uptime(value: string | null) {
+  if (value === null) return "未知";
+  const seconds = Number(value);
+  return `${Math.floor(seconds / 86400)} 天 ${Math.floor((seconds % 86400) / 3600)} 小时`;
+}
+function status(p: Probe) {
+  return p.online === false
+    ? "离线"
+    : now.value - Date.parse(p.sampled_at) > 30000
+      ? "数据陈旧"
+      : "在线";
+}
+
 const groups = ref<{ id: string; name: string }[]>([]);
 // 探针页面是按设备组看的：选了组就只看这个组的机器，没选就合并显示
 // 当前账号有权查看的全部设备。
@@ -61,34 +113,19 @@ function groupLabel(p: Probe) {
 const error = ref("");
 const connected = ref(false);
 const now = ref(Date.now());
-const histories = ref<Record<string, number[]>>({});
+
 let events: EventSource | undefined;
 let ticker: ReturnType<typeof setInterval> | undefined;
 let alive = true;
 function accept(items: Probe[]) {
   probes.value = items;
-  const allowed = new Set(items.map((p) => p.node_id));
-  for (const key of Object.keys(histories.value))
-    if (!allowed.has(key)) delete histories.value[key];
-  for (const p of items) {
-    if (p.upload_bps !== null) {
-      const h = histories.value[p.node_id] || [];
-      histories.value[p.node_id] = [...h, p.upload_bps].slice(-30);
-    }
-  }
 }
-function points(id: string) {
-  const h = histories.value[id] || [];
-  const max = Math.max(...h, 1);
-  return h
-    .map(
-      (v, i) =>
-        `${(i * 300) / Math.max(h.length - 1, 1)},${68 - (v / max) * 60}`,
-    )
-    .join(" ");
-}
+let generation = 0;
 const count = computed(() => probes.value.length);
 async function load() {
+  const request = ++generation;
+  events?.close();
+  connected.value = false;
   error.value = "";
   try {
     const scope = group.value
@@ -99,7 +136,7 @@ async function load() {
       loadNodes(scope),
       loadGroups(),
     ]);
-    if (!alive) return;
+    if (!alive || request !== generation) return;
     accept(p.items);
     nodes.value = n;
     groups.value = g;
@@ -114,6 +151,7 @@ async function load() {
     };
     events.addEventListener("probes", (event: MessageEvent) => {
       try {
+        if (!alive || request !== generation) return;
         accept((JSON.parse(event.data) as { items: Probe[] }).items);
         connected.value = true;
         error.value = "";
@@ -129,15 +167,15 @@ async function load() {
       });
     };
   } catch (e) {
-    error.value = errorText(e);
+    if (alive && request === generation) error.value = errorText(e);
   }
 }
 // scope 带上 group_id 时，历史选择器只列这个组的机器，与上面的探针卡片一致。
 async function loadNodes(scope: string) {
-  const result: { id: string; name: string }[] = [];
+  const result: Node[] = [];
   for (let page = 1; ; page++) {
     const next = await api<{
-      items: { id: string; name: string }[];
+      items: Node[];
       total: number;
     }>(`/nodes${scope ? scope + "&" : "?"}page=${page}&page_size=100`);
     result.push(...next.items);
@@ -207,116 +245,150 @@ onUnmounted(() => {
           </option>
         </Select></label
       >
-      <p class="small muted">
-        探针是付费能力：只有拥有有效套餐、且设备属于所选设备组的账号才能查看，
-        页面里也只有该组的机器。上方历史查询跟随同一个范围。
-      </p>
+      <p class="small muted">按设备组查看实时状态，历史趋势跟随同一范围。</p>
     </div>
     <p v-if="error" class="warning" role="status">{{ error }}</p>
-    <ProbeHistory :nodes="nodes" />
     <p v-if="!probes.length" class="card empty">
       尚无授权节点采样。节点接入并上报后将在这里显示。
     </p>
-    <div class="probe-grid">
-      <article v-for="p in probes" :key="p.node_id" class="card probe">
-        <div class="section-heading">
-          <h2 class="probe-name">
-            <LocationFlag
-              :code="p.location?.country_code"
-              :name="p.location?.country_name"
-            />{{ nodeTitle(p) }}
-          </h2>
-          <span class="badge">{{
-            p.online === false
-              ? "离线"
-              : now - Date.parse(p.sampled_at) > 30000
-                ? "数据陈旧"
-                : "近期采样"
-          }}</span>
+    <div class="probe-list">
+      <article
+        v-for="p in probes"
+        :key="p.node_id"
+        class="card probe"
+        :data-status="status(p)"
+      >
+        <div class="probe-row">
+          <div class="probe-identity">
+            <h2 class="probe-name">
+              <LocationFlag
+                :code="p.location?.country_code"
+                :name="p.location?.country_name"
+              />{{ nodeTitle(p) }}
+            </h2>
+            <p class="small probe-status">
+              <span
+                class="live-dot"
+                :data-live="String(status(p) === '在线')"
+                aria-hidden="true"
+              />{{ status(p) }} · 运行 {{ uptime(p.uptime_seconds) }}
+            </p>
+            <p
+              v-if="p.location?.country_name || groupLabel(p)"
+              class="small muted probe-place"
+            >
+              <template v-if="p.location?.country_name"
+                >位置 {{ p.location.country_name
+                }}<template v-if="p.location.city"
+                  >·{{ p.location.city }}</template
+                ><template v-if="groupLabel(p)"> · </template></template
+              ><template v-if="groupLabel(p)"
+                >设备组 {{ groupLabel(p) }}</template
+              >
+            </p>
+          </div>
+          <dl class="metrics probe-network">
+            <div>
+              <dt>↑ 上行速度</dt>
+              <dd>{{ formatBytes(p.upload_bps, "/s") }}</dd>
+            </div>
+            <div>
+              <dt>↓ 下行速度</dt>
+              <dd>{{ formatBytes(p.download_bps, "/s") }}</dd>
+            </div>
+            <div>
+              <dt>↑ 累计上行</dt>
+              <dd>{{ formatBytes(p.upload_total ?? null) }}</dd>
+            </div>
+            <div>
+              <dt>↓ 累计下行</dt>
+              <dd>{{ formatBytes(p.download_total ?? null) }}</dd>
+            </div>
+          </dl>
+          <div class="probe-resources">
+            <ProbeMeter
+              label="CPU"
+              :value="p.cpu_percent"
+              :detail="p.cpu_model || '型号未知'"
+            />
+            <ProbeMeter
+              label="内存"
+              :value="percent(p.memory_used, p.memory_total)"
+              :detail="`${formatBytes(p.memory_used)} / ${formatBytes(p.memory_total)}`"
+            />
+            <ProbeMeter
+              label="磁盘"
+              :value="percent(p.disk_used, p.disk_total)"
+              :detail="`${formatBytes(p.disk_used)} / ${formatBytes(p.disk_total)}`"
+            />
+          </div>
+          <div v-if="canManage" class="probe-actions">
+            <button @click="act(p, 'shell')">WebSSH</button>
+            <button class="danger" @click="act(p, 'uninstall')">
+              卸载设备
+            </button>
+          </div>
         </div>
-        <p class="small muted">采样于 {{ formatDateTime(p.sampled_at) }}</p>
-        <p
-          v-if="p.location?.country_name || groupLabel(p)"
-          class="small muted probe-place"
-        >
-          <template v-if="p.location?.country_name"
-            >位置 {{ p.location.country_name
-            }}<template v-if="p.location.city">·{{ p.location.city }}</template
-            ><template v-if="groupLabel(p)"> · </template></template
-          ><template v-if="groupLabel(p)">设备组 {{ groupLabel(p) }}</template>
-        </p>
-        <dl class="metrics">
-          <div>
-            <dt>上行</dt>
-            <dd>{{ formatBytes(p.upload_bps, "/s") }}</dd>
-          </div>
-          <div>
-            <dt>下行</dt>
-            <dd>{{ formatBytes(p.download_bps, "/s") }}</dd>
-          </div>
-          <div>
-            <dt>CPU 型号</dt>
-            <dd>{{ p.cpu_model || "未知" }}</dd>
-          </div>
-          <div>
-            <dt>CPU</dt>
-            <dd>
-              {{
-                p.cpu_percent === null ? "未知" : p.cpu_percent.toFixed(1) + "%"
-              }}
-            </dd>
-          </div>
-          <div>
-            <dt>负载</dt>
-            <dd>{{ p.load1 ?? "未知" }}</dd>
-          </div>
-          <div>
-            <dt>内存 已用 / 总量</dt>
-            <dd>
-              {{ formatBytes(p.memory_used) }} /
-              {{ formatBytes(p.memory_total) }}
-            </dd>
-          </div>
-          <div>
-            <dt>磁盘 已用 / 总量</dt>
-            <dd>
-              {{ formatBytes(p.disk_used) }} / {{ formatBytes(p.disk_total) }}
-            </dd>
-          </div>
-          <div>
-            <dt>虚拟交换 已用 / 总量</dt>
-            <dd>
-              {{ formatBytes(p.swap_used) }} / {{ formatBytes(p.swap_total) }}
-            </dd>
-          </div>
-        </dl>
-        <svg
-          v-if="(histories[p.node_id]?.length || 0) > 1"
-          class="chart"
-          viewBox="0 0 300 76"
-          role="img"
-          :aria-label="`${nodeTitle(p)} 本次会话上行趋势，自动缩放`"
-        >
-          <polyline
-            :points="points(p.node_id)"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          />
-        </svg>
-        <p class="small muted">趋势仅保留本次页面会话，不代表计费流量。</p>
-        <div v-if="p.public_ips?.length">
-          <p v-for="ip in p.public_ips" :key="ip.address" class="small">
+        <details class="probe-details">
+          <summary>
+            设备详情
+            <span class="muted"
+              >· 采样于 {{ formatDateTime(p.sampled_at) }}</span
+            >
+          </summary>
+          <p class="small muted">采样于 {{ formatDateTime(p.sampled_at) }}</p>
+          <dl class="metrics">
+            <div>
+              <dt>CPU 型号</dt>
+              <dd>{{ p.cpu_model || "未知" }}</dd>
+            </div>
+            <div>
+              <dt>负载</dt>
+              <dd>{{ p.load1 ?? "未知" }}</dd>
+            </div>
+            <div>
+              <dt>内存 已用 / 总量</dt>
+              <dd>
+                {{ formatBytes(p.memory_used) }} /
+                {{ formatBytes(p.memory_total) }}
+              </dd>
+            </div>
+            <div>
+              <dt>磁盘 已用 / 总量</dt>
+              <dd>
+                {{ formatBytes(p.disk_used) }} / {{ formatBytes(p.disk_total) }}
+              </dd>
+            </div>
+            <div>
+              <dt>虚拟交换 已用 / 总量</dt>
+              <dd>
+                {{ formatBytes(p.swap_used) }} / {{ formatBytes(p.swap_total) }}
+              </dd>
+            </div>
+          </dl>
+          <p v-for="ip in p.public_ips || []" :key="ip.address" class="small">
             {{ ip.family }} · {{ ip.address }}<br /><span class="muted"
               >{{ ip.source }} · {{ formatDateTime(ip.observed_at) }}</span
             >
           </p>
-        </div>
-        <p v-else class="small muted">
-          公网地址不对普通账号展示。脚本取地址请用下方接口。
-        </p>
+          <p v-if="!p.public_ips?.length" class="small muted">
+            公网地址不对普通账号展示。脚本取地址请用下方接口。
+          </p>
+        </details>
       </article>
     </div>
+    <p class="small muted">
+      累计流量来自机器的非回环网卡计数，重启或网卡重置后可能归零，包含其他程序和虚拟网卡流量，不代表转发计费流量。单位按
+      1024 进位：1024 GB = 1 TB。
+    </p>
+    <ProbeHistory :nodes="nodes" />
+    <ProbeActions
+      v-if="operation"
+      :node="operation.node"
+      :mode="operation.mode"
+      @close="operation = undefined"
+      @removed="removed"
+    />
     <section class="card probe-api">
       <h2>设备地址接口</h2>
       <p class="small muted">

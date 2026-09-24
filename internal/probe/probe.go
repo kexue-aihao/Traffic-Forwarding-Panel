@@ -74,6 +74,7 @@ func (c *Collector) Sample(ctx context.Context, nodeID string) contract.Probe {
 	if values, e := gnet.IOCountersWithContext(ctx, true); e == nil {
 		next := map[string]gnet.IOCountersStat{}
 		up, down := float64(0), float64(0)
+		var sent, received uint64
 		valid := !c.last.IsZero()
 		for _, v := range values {
 			iface, e := net.InterfaceByName(v.Name)
@@ -81,6 +82,8 @@ func (c *Collector) Sample(ctx context.Context, nodeID string) contract.Probe {
 				continue
 			}
 			next[v.Name] = v
+			sent += v.BytesSent
+			received += v.BytesRecv
 			old, ok := c.previous[v.Name]
 			if !ok || v.BytesSent < old.BytesSent || v.BytesRecv < old.BytesRecv {
 				valid = false
@@ -95,6 +98,9 @@ func (c *Collector) Sample(ctx context.Context, nodeID string) contract.Probe {
 			down /= secs
 			p.UploadBPS = &up
 			p.DownloadBPS = &down
+		}
+		if len(next) > 0 {
+			p.UploadTotal, p.DownloadTotal = &sent, &received
 		}
 		c.previous = next
 	} else {

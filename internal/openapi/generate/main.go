@@ -305,6 +305,8 @@ func main() {
 		{"POST", "/nodes/{id}/rotate-token", "Empty", "NodeSecret", "200", "admin", "Rotate node credential", false},
 		{"POST", "/nodes/{id}/operation-access", "OperationAccess", "OperationAccessSecret", "201", "admin", "Short-lived password reauthentication for node operations", false},
 		{"POST", "/nodes/{id}/terminal", "OperationCreate", "NodeOperation", "201", "admin", "Create an audited remote terminal task", false},
+		{"POST", "/nodes/{id}/shell", "OperationCreate", "NodeOperation", "201", "admin", "Create an interactive PTY terminal task", false},
+		{"POST", "/nodes/{id}/uninstall", "OperationCreate", "NodeOperation", "201", "admin", "Create a managed Agent uninstall task", false},
 		{"POST", "/nodes/{id}/looking-glass", "LookingGlassInput", "LookingGlass", "202", "admin", "Run ping, tcping or mtr from the node; argv is built server-side and never goes through a shell", false},
 		{"GET", "/looking-glass/{id}", "", "LookingGlass", "200", "user", "Poll one looking glass result", false},
 		{"POST", "/nodes/{id}/upgrade", "UpgradeOperationCreate", "NodeOperation", "201", "admin", "Create a signed Agent upgrade task", false},

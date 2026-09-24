@@ -47,6 +47,11 @@ jobs:
           TFP_TEST_DSN: root:test-only@tcp(localhost:3306)/tfp_test?parseTime=true
       - run: go build ./cmd/panel ./cmd/agent
       - run: GOOS=linux GOARCH=arm64 go build ./cmd/panel ./cmd/agent
+      - name: Real systemd Agent uninstall and acknowledgement retry
+        run: |
+          go build -o .local/systemd-panel ./cmd/panel
+          go build -o .local/systemd-agent ./cmd/agent
+          sudo env TFP_DISPOSABLE_SYSTEMD_TEST=1 python3 scripts/test_agent_uninstall.py .local/systemd-panel .local/systemd-agent
   web:
     runs-on: ubuntu-latest
     steps:

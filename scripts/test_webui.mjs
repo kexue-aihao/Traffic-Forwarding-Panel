@@ -29,6 +29,7 @@ let historyRequests = [];
 const summerUTC = "2026-07-14T16:20:30.000Z";
 const winterUTC = "2026-01-15T16:20:30.000Z";
 let tokenExpiry = "";
+let probeOperations = [];
 const uncertainOrder = {
   id: "uncertain-fixture",
   channel: "epay",
@@ -74,6 +75,8 @@ const fixtureProbe = {
   memory_total: null,
   disk_used: String(1023n * 1024n ** 3n),
   disk_total: String(1024n ** 4n),
+  upload_total: String(1024n ** 4n),
+  download_total: String(1023n * 1024n ** 3n),
   upload_bps: 1023 * 1024 ** 3,
   download_bps: 1024 ** 4,
   load1: null,
@@ -145,6 +148,18 @@ const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = raw ? JSON.parse(raw) : {};
+    if (path === "/nodes/n1/operations") return json({ items: probeOperations });
+    if (path === "/nodes/n1/operation-access") return json({ token: "fixture-operation-token" }, 201);
+    if (["/nodes/n1/shell", "/nodes/n1/uninstall"].includes(path)) {
+      const operation = { id: `probe-op-${probeOperations.length}`, kind: path.split("/").at(-1), status: "pending" };
+      probeOperations.unshift(operation); return json(operation, 201);
+    }
+    if (/^\/node-operations\/probe-op-\d+\/cancel$/.test(path)) {
+      const operation = probeOperations.find(item => item.id === path.split("/")[2]);
+      if (operation) operation.status = "cancelled";
+      res.writeHead(204); return res.end();
+    }
+
     if (path === "/nodes/enrollment")
       return json({ token: "fixture-enrollment", expires_at: winterUTC });
     if (path === "/auth/tokens" && req.method === "POST") {
@@ -367,11 +382,19 @@ try {
     authorized = false;
     expire = false;
     rules = [];
+    node.capabilities = [];
+    probeOperations = [];
     historyMode = "samples";
     historyRequests = [];
     const browser = await engine.launch({ headless: true });
     try {
       const page = await browser.newPage({ timezoneId: "America/New_York" });
+      const terminalMessages = [];
+      await page.routeWebSocket(/\/node-operations\/[^/]+\/terminal$/, socket => {
+        socket.onMessage(message => terminalMessages.push(JSON.parse(message.toString())));
+        socket.send(JSON.stringify({ type: "output", data: Buffer.from("root@fixture:~# ").toString("base64") }));
+      });
+
       await page.clock.setFixedTime(new Date(summerUTC));
       const errors = [];
       page.on("pageerror", (e) => errors.push(e.message));
@@ -513,6 +536,7 @@ try {
       assert.equal(await page.locator("td img").count(), 0);
       await page.getByRole("link", { name: "实时探针", exact: true }).click();
       await page.getByRole("heading", { name: "Fixture node" }).waitFor();
+      await page.locator(".probe-details summary").first().click();
       await page
         .getByText("采样于 2026-01-16 00:20:30", { exact: true })
         .waitFor();
@@ -534,6 +558,7 @@ try {
         4,
         "设备地址接口应当在页面里写明",
       );
+      await page.locator(".probe-details summary").first().evaluate(el => { el.parentElement.open = true; });
       await page
         .getByText("fixture · 2026-07-15 00:20:30", { exact: true })
         .waitFor();
@@ -550,6 +575,59 @@ try {
         .locator(".probe .metrics")
         .getByText("1023 GB / 1 TB", { exact: true })
         .waitFor();
+      assert.equal(await page.locator(".probe-row").count(), 1);
+      await page.locator(".probe-network").getByText("1 TB", { exact: true }).waitFor();
+      assert.equal(await page.locator(".probe-meter meter").count(), 1, "unknown metrics must not become zero meters");
+      if (new URL(page.url()).pathname.startsWith("/admin")) {
+        await page.getByRole("button", { name: "WebSSH", exact: true }).click();
+        await page.getByText("此 Agent 尚不支持该功能。", { exact: false }).waitFor();
+        assert.equal(await page.getByRole("button", { name: "验证并连接" }).count(), 0);
+        await page.getByRole("button", { name: "关闭对话框" }).click();
+        await page.getByRole("dialog").waitFor({ state: "hidden" });
+        await page.getByRole("button", { name: "卸载设备", exact: true }).click();
+        await page.getByText("卸载开始后不能撤销。", { exact: false }).waitFor();
+        await page.getByRole("button", { name: "关闭对话框" }).click();
+        await page.getByRole("dialog").waitFor({ state: "hidden" });
+      }
+      node.capabilities = ["shell-v1", "uninstall-v1"];
+      const nodesRefreshed = page.waitForResponse(response => response.url().includes("/api/v1/nodes?") && response.status() === 200);
+      await page.getByRole("button", { name: "重新连接", exact: true }).click();
+      await nodesRefreshed;
+      await page.getByRole("button", { name: "WebSSH", exact: true }).click();
+      await page.getByLabel("管理员密码", { exact: true }).fill("fixture-password");
+      await page.getByRole("button", { name: "验证并连接", exact: true }).click();
+      await page.getByRole("button", { name: "断开连接", exact: true }).waitFor().catch(async e => { throw new Error(`${e.message}\n${await page.getByRole("dialog").innerText()}\n${errors.join("\n")}`); });
+      await page.locator(".xterm-helper-textarea").press("a");
+      await page.locator(".xterm-helper-textarea").press("Control+c");
+      await page.waitForFunction(() => document.querySelector(".xterm") !== null);
+      await page.getByRole("button", { name: "断开连接", exact: true }).click();
+      await page.getByRole("button", { name: "验证并连接", exact: true }).waitFor();
+      assert.ok(terminalMessages.some(message => message.type === "resize" && message.cols > 2));
+      assert.ok(terminalMessages.some(message => message.type === "input" && message.data === "a"));
+      assert.ok(terminalMessages.some(message => message.type === "input" && message.data === "\x03"));
+      await page.getByRole("button", { name: "关闭对话框" }).click();
+      await page.getByRole("dialog").waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: "卸载设备", exact: true }).click();
+      await page.getByLabel("管理员密码", { exact: true }).fill("fixture-password");
+      await page.getByRole("button", { name: "确认卸载此设备", exact: true }).click();
+      await page.getByText("等待设备接收", { exact: true }).waitFor();
+      assert.equal(await page.locator(".probe-row").count(), 1, "pending uninstall cannot hide the device");
+      await page.getByRole("button", { name: "取消等待", exact: true }).click();
+      await page.getByText("已取消", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "关闭对话框" }).click();
+      await page.getByRole("dialog").waitFor({ state: "hidden" });
+      if (name === "chromium") {
+        await mkdir(resolve(import.meta.dirname, "../.gocache/screens"), { recursive: true });
+        const viewport = page.viewportSize();
+        for (const width of [1440, 390]) {
+          await page.setViewportSize({ width, height: 1000 });
+          await page.locator(".probe-details").evaluate(el => { el.open = false; });
+          await page.evaluate(() => window.scrollTo(0, 0));
+          await page.screenshot({ path: resolve(import.meta.dirname, `../.gocache/screens/probe-list-${width}.png`) });
+          assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "probe page overflows viewport");
+        }
+        await page.setViewportSize(viewport);
+      }
       const history = page.getByRole("region", { name: "历史趋势" });
       await history.getByText("6 个采样桶 · 5 个CPU有效值").waitFor();
       assert.match(

@@ -142,6 +142,13 @@ func (s *Server) agent(next http.HandlerFunc) http.HandlerFunc {
 			fail(w, 401, "node identity required")
 			return
 		}
+		if r.URL.Path != "/api/v1/agent/control/result" {
+			var count int
+			if e := s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT COUNT(*) FROM cp_node_operations WHERE node_id=? AND kind='uninstall' AND status='succeeded'"), node).Scan(&count); e != nil || count != 0 {
+				fail(w, 401, "node removed")
+				return
+			}
+		}
 		s.mu.Lock()
 		s.lastContact[node] = time.Now()
 		s.mu.Unlock()
@@ -177,6 +184,11 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 			where += " AND " + clause
 		}
 		args = append(args, group)
+	}
+	if where == "" {
+		where = " WHERE " + liveNodeSQL
+	} else {
+		where += " AND " + liveNodeSQL
 	}
 	n, o := pages(r)
 	var total int
@@ -429,12 +441,13 @@ type probeNode struct {
 // 只该拿到自己那一组的地址。
 func (s *Server) visibleNodes(ctx context.Context, u contract.User, group string) (map[string]probeNode, error) {
 	nodes := map[string]probeNode{}
-	query := "SELECT id,payload,last_seen FROM cp_nodes"
+	query := "SELECT n.id,n.payload,n.last_seen FROM cp_nodes n WHERE 1=1"
 	args := []any{}
 	if u.Role != "admin" {
 		query = "SELECT n.id,n.payload,n.last_seen FROM cp_nodes n WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE ng.node_id=n.id AND iu.id=?)"
 		args = append(args, u.ID)
 	}
+	query += " AND " + liveNodeSQL
 	rows, e := s.Store.DB.QueryContext(ctx, s.q(query), args...)
 	if e != nil {
 		return nil, e

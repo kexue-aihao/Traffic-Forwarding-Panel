@@ -90,6 +90,9 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		if err := s.nodeAvailableTx(r.Context(), tx, e.NodeID); err != nil {
+			return err
+		}
 		if !group.CanHostExit() {
 			return errors.New("出口节点只能关联出口类型的设备组")
 		}
@@ -242,7 +245,7 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 		rule.Transport, rule.Tunnel, rule.SelectedExitID = candidate.Transport, candidate.Tunnel, parts[0].SelectedExitID
 		return g.Multiplier, nil
 	}
-	rows, err := tx.QueryContext(ctx, s.q("SELECT e.payload,n.last_seen FROM cp_exits e JOIN cp_nodes n ON n.id=e.node_id JOIN cp_node_groups ng ON ng.node_id=e.node_id AND ng.group_id=e.group_id WHERE e.group_id=? ORDER BY e.id"), g.ID)
+	rows, err := tx.QueryContext(ctx, s.q("SELECT e.payload,n.last_seen FROM cp_exits e JOIN cp_nodes n ON n.id=e.node_id JOIN cp_node_groups ng ON ng.node_id=e.node_id AND ng.group_id=e.group_id WHERE e.group_id=? AND NOT EXISTS(SELECT 1 FROM cp_node_operations o WHERE o.node_id=n.id AND o.kind='uninstall' AND (o.status IN ('running','succeeded') OR (o.status='pending' AND o.expires_at>?))) ORDER BY e.id"), g.ID, time.Now().Unix())
 	if err != nil {
 		return "", err
 	}
@@ -282,6 +285,9 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 	}
 	if best == nil {
 		return "", errors.New("no authorized online exit")
+	}
+	if err := s.nodeAvailableTx(ctx, tx, best.NodeID); err != nil {
+		return "", err
 	}
 	rule.Transport = best.Transport
 	rule.Tunnel = &best.Tunnel

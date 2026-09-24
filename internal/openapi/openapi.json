@@ -2626,6 +2626,17 @@
               }
             ]
           },
+          "download_total": {
+            "anyOf": [
+              {
+                "pattern": "^-?[0-9]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "group_ids": {
             "anyOf": [
               {
@@ -2746,6 +2757,17 @@
               }
             ]
           },
+          "upload_total": {
+            "anyOf": [
+              {
+                "pattern": "^-?[0-9]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "uptime_seconds": {
             "anyOf": [
               {
@@ -2768,6 +2790,8 @@
           "disk_total",
           "upload_bps",
           "download_bps",
+          "upload_total",
+          "download_total",
           "uptime_seconds",
           "load1",
           "cpu_model",
@@ -7961,6 +7985,73 @@
         "x-role": "admin"
       }
     },
+    "/nodes/{id}/shell": {
+      "post": {
+        "operationId": "post_nodes_id_shell",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeOperation"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Create an interactive PTY terminal task",
+        "x-role": "admin"
+      }
+    },
     "/nodes/{id}/terminal": {
       "post": {
         "operationId": "post_nodes_id_terminal",
@@ -8025,6 +8116,73 @@
           }
         ],
         "summary": "Create an audited remote terminal task",
+        "x-role": "admin"
+      }
+    },
+    "/nodes/{id}/uninstall": {
+      "post": {
+        "operationId": "post_nodes_id_uninstall",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeOperation"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Create a managed Agent uninstall task",
         "x-role": "admin"
       }
     },

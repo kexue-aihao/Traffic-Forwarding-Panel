@@ -30,6 +30,8 @@ type Agent struct {
 	Probe           *probe.Collector
 	PollInterval    time.Duration
 	EnableTerminal  bool
+	EnableUninstall bool
+	PanelCA         []byte
 	Upgrader        *Upgrader
 	usageMu         sync.Mutex
 	configMu        sync.Mutex
@@ -96,7 +98,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}
 	defer a.Runtime.Close()
-	if a.EnableTerminal || a.Upgrader != nil {
+	if a.EnableTerminal || a.EnableUninstall || a.Upgrader != nil {
 		controlCtx, cancel := context.WithCancel(ctx)
 		done := make(chan struct{})
 		go func() { defer close(done); a.runControl(controlCtx) }()

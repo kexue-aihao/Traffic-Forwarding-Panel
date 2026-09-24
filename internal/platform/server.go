@@ -405,6 +405,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/agent/control/result", s.agent(s.agentControlResult))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/operation-access", s.operationsAdmin(s.operationAccess))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/terminal", s.operationsAdmin(s.createTerminal))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/shell", s.operationsAdmin(s.createShell))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/uninstall", s.operationsAdmin(s.createUninstall))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/looking-glass", s.operationsAdmin(s.createLookingGlass))
 	mux.HandleFunc("GET /api/v1/looking-glass/{id}", s.RequireUser(s.lookingGlass))
 	mux.HandleFunc("POST /api/v1/agent/looking-glass", s.agent(s.claimLookingGlass))

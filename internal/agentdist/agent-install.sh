@@ -144,13 +144,15 @@ fi
 
 [ "$(id -u)" -eq 0 ] || die "需要 root 权限：请用 sudo 重新执行"
 
+[ ! -e /var/lib/tfp-agent-uninstall ] || die "设备正在远程卸载并等待面板确认，请稍后重试；可用 journalctl -u tfp-agent-uninstall 查看进度"
+
 # ── 卸载 ────────────────────────────────────────────────────────────
 if [ "$UNINSTALL" = "yes" ]; then
   echo "正在卸载…"
   systemctl disable --now tfp-agent.service 2>/dev/null || true
   systemctl disable --now tfp-exit.service 2>/dev/null || true
   rm -f "$UNIT_PATH" "$EXIT_UNIT" "$BIN_PATH"
-  rm -f "$ENV_DIR/agent.env" "$ENV_DIR/exit.env"
+  rm -f "$ENV_DIR/agent.env" "$ENV_DIR/exit.env" "$ENV_DIR/managed-install"
   systemctl daemon-reload
   echo "已卸载。状态目录 $STATE_DIR 保留 —— 里面是节点身份，删除它等于让本机重新注册。"
   exit 0
@@ -221,6 +223,9 @@ umask 077
 printf 'TFP_ENROLLMENT_TOKEN=%s\n' "$TOKEN" > "$ENV_DIR/agent.env"
 chmod 0600 "$ENV_DIR/agent.env"
 
+touch "$ENV_DIR/managed-install"
+chmod 0600 "$ENV_DIR/managed-install"
+
 # ── 注册用的 Agent ──────────────────────────────────────────────────
 #
 # 出口模式也要装它：出口服务本身不跟面板通信，没有这个 agent，设备不会出现
@@ -235,7 +240,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$ENV_DIR/agent.env
-ExecStart=$BIN_PATH -panel $PANEL_URL -name $NODE_NAME -state $STATE_DIR/agent-state.json -disk /$CA_ARG
+ExecStart=$BIN_PATH -panel $PANEL_URL -name $NODE_NAME -state $STATE_DIR/agent-state.json -disk / -enable-terminal -enable-uninstall$CA_ARG
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576

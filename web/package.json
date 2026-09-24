@@ -1,7 +1,7 @@
 {
   "name": "traffic-forwarding-ui",
   "private": true,
-  "version": "0.1.6",
+  "version": "0.1.7",
   "type": "module",
   "engines": {
     "node": ">=22.12"
@@ -14,6 +14,8 @@
   },
   "dependencies": {
     "@fontsource-variable/inter": "5.3.0",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
     "vue": "3.5.43",
     "vue-router": "5.3.1"
   },

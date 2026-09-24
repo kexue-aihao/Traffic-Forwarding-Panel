@@ -37,6 +37,7 @@ func main() {
 func run() error {
 	mode := flag.String("mode", "agent", "agent, exit or reverse-exit")
 	showVersion := flag.Bool("version", false, "print Agent release version")
+	enableUninstall := flag.Bool("enable-uninstall", false, "enable remote uninstall of an official systemd installation")
 	enableTerminal := flag.Bool("enable-terminal", false, "enable audited Linux remote commands as the Agent service account")
 	releaseKey := flag.String("release-key", "", "base64 Ed25519 public key file; enables supervised Linux upgrades")
 	panel := flag.String("panel", "https://localhost:8443", "panel base URL")
@@ -61,6 +62,9 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *mode == "uninstall-worker" {
+		return agent.RunUninstallWorker(ctx)
+	}
 	tc, e := trustConfig(*ca)
 	if e != nil {
 		return e
@@ -159,7 +163,13 @@ func run() error {
 	if upgrader != nil {
 		upgrader.HTTP = httpClient
 	}
-	a := agent.Agent{URL: *panel, EnrollmentToken: os.Getenv("TFP_ENROLLMENT_TOKEN"), Name: *name, Store: store, Runtime: runtime, Probe: collector, HTTP: httpClient, EnableTerminal: *enableTerminal, Upgrader: upgrader}
+	a := agent.Agent{URL: *panel, EnrollmentToken: os.Getenv("TFP_ENROLLMENT_TOKEN"), Name: *name, Store: store, Runtime: runtime, Probe: collector, HTTP: httpClient, EnableTerminal: *enableTerminal, EnableUninstall: *enableUninstall, Upgrader: upgrader}
+	if *ca != "" {
+		a.PanelCA, e = os.ReadFile(*ca)
+		if e != nil {
+			return e
+		}
+	}
 	e = a.Run(ctx)
 	if errors.Is(context.Cause(ctx), agent.ErrRestart) {
 		return agent.ErrRestart

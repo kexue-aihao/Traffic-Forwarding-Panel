@@ -195,6 +195,8 @@ type Probe struct {
 	DiskTotal     *uint64   `json:"disk_total,string"`
 	UploadBPS     *float64  `json:"upload_bps"`
 	DownloadBPS   *float64  `json:"download_bps"`
+	UploadTotal   *uint64   `json:"upload_total,string"`
+	DownloadTotal *uint64   `json:"download_total,string"`
 	UptimeSeconds *uint64   `json:"uptime_seconds,string"`
 	Load1         *float64  `json:"load1"`
 	// CPU 型号是静态的，但「这台机器性能怎么样」第一个要看的就是它 ——

@@ -2,7 +2,7 @@
 
 Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP 四种加密承载。
 
-当前版本为正式版 `v0.1.6`。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.6.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持对已有 Docker 安装自动备份并升级；[租约切换保留连接与独立同步](docs/traffic-continuity.md) 需要升级入口 Agent 才生效。Cyber 按用户要求跳过；生产容量及 Linux/公网/真实支付仍待验收。
+当前版本为正式版 `v0.1.7`。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.7.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持对已有 Docker 安装自动备份并升级；[租约切换保留连接与独立同步](docs/traffic-continuity.md) 需要升级入口 Agent 才生效。Cyber 按用户要求跳过；生产容量及 Linux/公网/真实支付仍待验收。
 
 ## 本机启动
 
@@ -63,6 +63,7 @@ curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/raw/master/in
 - [支付协议与固定版本](docs/payment/protocol-sources.md)、[支付实现边界](docs/payment/implementation-status.md)：已接入的渠道仍需分别验证真实商户；Cyber 已跳过。
 - [API 契约](docs/api-contract.md)：浏览器使用 Cookie；自动化使用独立 API Token（权限固定为所有者资源）。管理员建号后即可在「用户管理」里签发凭据交给用户：明文只在创建或重置的那一次显示，之后连管理员也取不回来，遗失只能重置；有效期可选有限时长或永久。
 - 探针页面按设备组查看，只有持有效套餐且设备属于该组的账号能看到，页面里也只有该组的机器。机器按 IP 归属地显示位置图标便于区分；普通用户看得到位置、看不到机器地址。客户脚本可用 API Token 调 `GET /online/device/ip`（单台）或 `GET /online/device/ip/list`（多台）取本组机器当前地址，机器被替换或换 IP 之后返回新值。
+- 探针采用紧凑设备列表，显示运行时长、上下行速率、累计流量及资源进度条（1024 GB = 1 TB）。管理员可点击 **WebSSH** 打开交互终端，或点击 **卸载设备** 让机器卸载 Agent；需再次验证管理员密码。更新面板后，请在旧设备上重新执行设备组接入命令更新 Agent，才能启用新功能。操作机制和卸载限制见 [实施状态](docs/implementation-status.md#探针列表webssh-与远程卸载v017)。
 - 站点金额单位是元（结算币种人民币），充值区间在站点设置里以元填写；每条支付通道可单独设置额外手续费与人民币兑 USDT 的汇率，充值界面按它算出应付金额。
 
 钱包以人民币整数分记账；充值后再余额购买套餐。续费立即重置周期和配额，从购买成功时间增加上海自然月并夹紧月末。不会沿用旧到期时间，也不会在每月 1 日另送配额。

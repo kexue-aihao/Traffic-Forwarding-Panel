@@ -81,6 +81,22 @@ func (s *Server) createTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	s.createOperation(w, r, "terminal", in.Access, in.Key, nil)
 }
+func (s *Server) createShell(w http.ResponseWriter, r *http.Request) {
+	s.createSimpleOperation(w, r, "shell")
+}
+func (s *Server) createUninstall(w http.ResponseWriter, r *http.Request) {
+	s.createSimpleOperation(w, r, "uninstall")
+}
+func (s *Server) createSimpleOperation(w http.ResponseWriter, r *http.Request, kind string) {
+	var in struct {
+		Access string `json:"access_token"`
+		Key    string `json:"idempotency_key"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	s.createOperation(w, r, kind, in.Access, in.Key, nil)
+}
 func (s *Server) createUpgrade(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Access  string           `json:"access_token"`
@@ -107,6 +123,11 @@ func (s *Server) createOperation(w http.ResponseWriter, r *http.Request, kind, a
 	payload := strJSON(upgrade)
 	fingerprint := digest(strJSON([]string{op.NodeID, kind, payload}))
 	err := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		if kind == "uninstall" {
+			if e := s.lockUninstallGroups(r.Context(), tx, op.NodeID); e != nil {
+				return e
+			}
+		}
 		// Node row serializes active-operation creation and claiming on all databases.
 		query := "SELECT payload FROM cp_nodes WHERE id=?"
 		if s.Store.Dialect != "sqlite" {
@@ -136,13 +157,21 @@ func (s *Server) createOperation(w http.ResponseWriter, r *http.Request, kind, a
 		if !errors.Is(e, sql.ErrNoRows) {
 			return e
 		}
+		if e := s.nodeAvailableTx(r.Context(), tx, op.NodeID); e != nil {
+			return e
+		}
+		if kind == "uninstall" {
+			if e := s.canUninstallTx(r.Context(), tx, op.NodeID); e != nil {
+				return e
+			}
+		}
 		if !contains(node.Capabilities, kind+"-v1") {
 			return errors.New("Agent has not enabled this operation")
 		}
 		if upgrade != nil && (upgrade.OS != node.OS || upgrade.Arch != node.Arch) {
 			return errors.New("release platform does not match node")
 		}
-		if _, e = tx.ExecContext(r.Context(), s.q("UPDATE cp_node_operations SET status='expired',updated_at=? WHERE node_id=? AND status IN ('pending','running') AND expires_at<=?"), time.Now().Unix(), op.NodeID, time.Now().Unix()); e != nil {
+		if _, e = tx.ExecContext(r.Context(), s.q("UPDATE cp_node_operations SET status='expired',updated_at=? WHERE node_id=? AND status IN ('pending','running') AND expires_at<=? AND NOT (kind='uninstall' AND status='running')"), time.Now().Unix(), op.NodeID, time.Now().Unix()); e != nil {
 			return e
 		}
 		var active int
@@ -217,7 +246,7 @@ func (s *Server) nodeOperations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		op.Claim = ""
-		if (op.Status == "pending" || op.Status == "running") && !op.ExpiresAt.After(time.Now()) {
+		if (op.Status == "pending" || op.Status == "running") && !op.ExpiresAt.After(time.Now()) && !(op.Kind == "uninstall" && op.Status == "running") {
 			op.Status = "expired"
 		}
 		ops = append(ops, op)
@@ -231,11 +260,20 @@ func (s *Server) cancelOperation(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return e
 		}
+		if op.Kind == "uninstall" && op.Status == "running" {
+			return errors.New("uninstall already started")
+		}
 		if op.Status != "pending" && op.Status != "running" {
 			return nil
 		}
-		if _, e = tx.ExecContext(r.Context(), s.q("UPDATE cp_node_operations SET status='cancelled',updated_at=? WHERE id=? AND status IN ('pending','running')"), time.Now().Unix(), op.ID); e != nil {
+		result, e := tx.ExecContext(r.Context(), s.q("UPDATE cp_node_operations SET status='cancelled',updated_at=? WHERE id=? AND status IN ('pending','running') AND NOT (kind='uninstall' AND status='running')"), time.Now().Unix(), op.ID)
+		if e != nil {
 			return e
+		}
+		if count, e := result.RowsAffected(); e != nil {
+			return e
+		} else if count != 1 {
+			return errConflict
 		}
 		return s.AuditTx(r.Context(), tx, u.ID, "node.operation.cancel", op.ID)
 	})
@@ -261,7 +299,7 @@ func (s *Server) agentControl(w http.ResponseWriter, r *http.Request) {
 		// A node crash can leave a running claim behind. Agents poll every two
 		// seconds, so a quiet running claim is safe to return to the queue after
 		// this grace period; active terminal sessions refresh updated_at below.
-		if _, e := tx.ExecContext(r.Context(), s.q("UPDATE cp_node_operations SET status='pending',claim_token='',updated_at=? WHERE node_id=? AND status='running' AND updated_at<?"), time.Now().Unix(), node, time.Now().Add(-30*time.Second).Unix()); e != nil {
+		if _, e := tx.ExecContext(r.Context(), s.q("UPDATE cp_node_operations SET status='pending',claim_token='',updated_at=? WHERE node_id=? AND status='running' AND kind<>'uninstall' AND updated_at<?"), time.Now().Unix(), node, time.Now().Add(-30*time.Second).Unix()); e != nil {
 			return e
 		}
 		rows, e := tx.QueryContext(r.Context(), s.q("SELECT id FROM cp_node_operations WHERE node_id=? AND status IN ('pending','running') ORDER BY created_at,id LIMIT 10"), node)
@@ -294,7 +332,7 @@ func (s *Server) agentControl(w http.ResponseWriter, r *http.Request) {
 				return e
 			}
 			_, grantErr := s.operationGrant(r.Context(), tx, owner, node, session, access)
-			if !op.ExpiresAt.After(time.Now()) || grantErr != nil {
+			if !(op.Kind == "uninstall" && op.Status == "running") && (!op.ExpiresAt.After(time.Now()) || grantErr != nil) {
 				if _, e = tx.ExecContext(r.Context(), s.q("UPDATE cp_node_operations SET status='expired',updated_at=? WHERE id=?"), time.Now().Unix(), oid); e != nil {
 					return e
 				}
@@ -302,6 +340,9 @@ func (s *Server) agentControl(w http.ResponseWriter, r *http.Request) {
 			}
 			result.Active = append(result.Active, oid)
 			if op.Status == "running" {
+				if op.Kind == "uninstall" && result.Operation == nil {
+					result.Operation = &op
+				}
 				if _, e = tx.ExecContext(r.Context(), s.q("UPDATE cp_node_operations SET updated_at=? WHERE id=? AND status='running'"), time.Now().Unix(), oid); e != nil {
 					return e
 				}
@@ -337,11 +378,17 @@ func (s *Server) agentControlResult(w http.ResponseWriter, r *http.Request) {
 	}
 	node := r.Context().Value(nodeKey{}).(string)
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		if e := s.lockNodeTx(r.Context(), tx, node); e != nil {
+			return e
+		}
 		op, e := s.loadOperation(r.Context(), tx, in.ID)
 		if e != nil {
 			return e
 		}
 		if op.NodeID != node || op.Claim == "" || subtle.ConstantTimeCompare([]byte(op.Claim), []byte(in.Claim)) != 1 {
+			return errConflict
+		}
+		if op.Kind == "uninstall" && in.Status != "succeeded" && in.Status != "failed" {
 			return errConflict
 		}
 		if op.Status == in.Status {
@@ -362,6 +409,14 @@ func (s *Server) agentControlResult(w http.ResponseWriter, r *http.Request) {
 		}
 		if op.Status != "running" {
 			return errConflict
+		}
+		if op.Kind == "uninstall" && in.Status == "succeeded" {
+			if _, e = tx.ExecContext(r.Context(), s.q("DELETE FROM cp_node_groups WHERE node_id=?"), node); e != nil {
+				return e
+			}
+			if _, e = tx.ExecContext(r.Context(), s.q("DELETE FROM cp_exits WHERE node_id=?"), node); e != nil {
+				return e
+			}
 		}
 		// The wire error is a short category; do not persist raw host paths or output.
 		message := ""
@@ -384,7 +439,7 @@ func (s *Server) agentControlResult(w http.ResponseWriter, r *http.Request) {
 // A live session must retain its original cookie, password grant and task.
 func (s *Server) terminalAuthorized(ctx context.Context, oid, user, session string) bool {
 	var count int
-	e := s.Store.DB.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_node_operations o JOIN cp_operation_access a ON a.token_hash=o.access_hash JOIN cp_sessions s ON s.token_hash=a.session_hash JOIN cp_users u ON u.id=o.user_id WHERE o.id=? AND o.user_id=? AND o.kind='terminal' AND o.status IN ('pending','running') AND o.expires_at>? AND a.expires_at>? AND s.expires_at>? AND a.session_hash=? AND u.disabled=0 AND u.role='admin'`), oid, user, time.Now().Unix(), time.Now().Unix(), time.Now().Unix(), session).Scan(&count)
+	e := s.Store.DB.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_node_operations o JOIN cp_operation_access a ON a.token_hash=o.access_hash JOIN cp_sessions s ON s.token_hash=a.session_hash JOIN cp_users u ON u.id=o.user_id WHERE o.id=? AND o.user_id=? AND o.kind IN ('terminal','shell') AND o.status IN ('pending','running') AND o.expires_at>? AND a.expires_at>? AND s.expires_at>? AND a.session_hash=? AND u.disabled=0 AND u.role='admin'`), oid, user, time.Now().Unix(), time.Now().Unix(), time.Now().Unix(), session).Scan(&count)
 	return e == nil && count == 1
 }
 

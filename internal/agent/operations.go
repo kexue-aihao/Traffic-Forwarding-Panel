@@ -16,12 +16,15 @@ import (
 )
 
 // Version is injected at release build time using -ldflags -X.
-var Version = "0.1.6"
+var Version = "0.1.7"
 
 func (a *Agent) capabilities() []string {
 	result := capabilities()
+	if a.EnableUninstall && managedInstall(a.Store.path) == nil {
+		result = append(result, "uninstall-v1")
+	}
 	if a.EnableTerminal && runtime.GOOS == "linux" {
-		result = append(result, "terminal-v1")
+		result = append(result, "terminal-v1", "shell-v1")
 	}
 	if a.Upgrader != nil && runtime.GOOS == "linux" {
 		result = append(result, "upgrade-v1")
@@ -32,7 +35,7 @@ func (a *Agent) capabilities() []string {
 func (a *Agent) runControl(ctx context.Context) {
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
-	var current string
+	var current, delegated string
 	var cancel context.CancelFunc
 	var result *contract.OperationResult
 	finished := make(chan contract.OperationResult, 1)
@@ -71,15 +74,31 @@ func (a *Agent) runControl(ctx context.Context) {
 				}
 			}
 			if op := control.Operation; op != nil {
-				if current != "" || result != nil {
+				if op.ID == current || op.ID == delegated {
+					// The same durable uninstall claim may be delivered after reconnect.
+				} else if current != "" || result != nil {
 					_ = a.request(ctx, "POST", "/agent/control/result", contract.OperationResult{ID: op.ID, Claim: op.Claim, Status: "failed", Error: "busy"}, nil)
 				} else {
 					taskCtx, taskCancel := context.WithDeadline(ctx, op.ExpiresAt)
+					if op.Kind == "uninstall" {
+						taskCancel()
+						taskCtx, taskCancel = context.WithCancel(ctx)
+					}
 					cancel = taskCancel
 					current = op.ID
 					go func() {
 						status := "succeeded"
 						switch op.Kind {
+						case "uninstall":
+							if !a.EnableUninstall || a.stageUninstall(taskCtx, *op) != nil {
+								status = "failed"
+							} else {
+								status = "delegated"
+							}
+						case "shell":
+							if !a.EnableTerminal || a.runTerminal(taskCtx, *op) != nil {
+								status = "failed"
+							}
 						case "terminal":
 							if !a.EnableTerminal || a.runTerminal(taskCtx, *op) != nil {
 								status = "failed"
@@ -107,6 +126,10 @@ func (a *Agent) runControl(ctx context.Context) {
 			cancel()
 			cancel = nil
 			current = ""
+			if r.Status == "delegated" {
+				delegated = r.ID
+				continue
+			}
 			if r.Status == "staged" {
 				// Complete the durable operation before asking the supervisor to
 				// restart. A temporary panel failure is retried on the next poll.
@@ -152,6 +175,9 @@ func (a *Agent) runTerminal(ctx context.Context, op contract.NodeOperation) erro
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 	conn.SetReadLimit(8192)
+	if op.Kind == "shell" {
+		return runShell(ctx, conn)
+	}
 	commands := make(chan string, 1)
 	go func() {
 		defer cancel()
