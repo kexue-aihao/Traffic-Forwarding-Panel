@@ -385,6 +385,17 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		if err := s.validateGroupTypeTx(r.Context(), tx, g, create); err != nil {
 			return err
 		}
+		if g.Advanced != nil {
+			for _, groupID := range append(append([]string{}, g.Advanced.IPv6Group...), g.Advanced.ReverseGroup...) {
+				if groupID != g.ID {
+					// Legacy advanced settings can contain unresolved IDs. Lock
+					// existing references without making those settings invalid.
+					if _, err := s.groupTx(r.Context(), tx, groupID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+						return err
+					}
+				}
+			}
+		}
 		if create {
 			// 接入密钥在设备组诞生时就有，之后固定不变 —— 运营方复制一次命令
 			// 就能反复使用，装失败不必回控制台重新生成。

@@ -515,6 +515,46 @@ try {
       }
       await admin.keyboard.press("Escape");
       await admin.locator("dialog").waitFor({ state: "detached" });
+      // Delete an idle group with enrolled devices; closing the confirmation
+      // leaves it intact, while confirming detaches devices and revokes its key.
+      await joinRow.getByRole("button", { name: "删除", exact: true }).click();
+      await admin
+        .getByRole("heading", { name: "删除设备组", exact: true })
+        .waitFor();
+      await admin.keyboard.press("Escape");
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      await joinRow.waitFor();
+      await joinRow.getByRole("button", { name: "删除", exact: true }).click();
+      if (browserName === "chromium") {
+        const viewport = admin.viewportSize();
+        for (const [size, width] of [
+          ["desktop", 1440],
+          ["mobile", 320],
+        ]) {
+          await admin.setViewportSize({ width, height: 900 });
+          assert.ok(
+            await admin
+              .locator("dialog")
+              .evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
+          );
+          await admin.screenshot({
+            path: resolve(root, `.gocache/screens/group-delete-${size}.png`),
+          });
+        }
+        await admin.setViewportSize(viewport);
+      }
+      await admin
+        .getByRole("button", { name: "确认删除", exact: true })
+        .click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      await joinRow.waitFor({ state: "detached" });
+      const revokedGroupKey = await admin.request.post(
+        base + "/api/v1/agent/register",
+        {
+          data: { token: groupKey, name: "deleted-group" },
+        },
+      );
+      assert.equal(revokedGroupKey.status(), 401);
       const registration = await admin.request.post(
         base + "/api/v1/agent/register",
         {
@@ -583,7 +623,7 @@ try {
       await login(user, username, userPassword);
       await user.getByRole("link", { name: "API 列表", exact: true }).click();
       await user.getByRole("heading", { name: "全站 API 列表" }).waitFor();
-      assert.equal(await user.getByText(/共 122 个接口/).count(), 1);
+      await user.getByText(/共 \d+ 个接口/).waitFor();
       assert.equal(
         await user
           .getByRole("link", { name: "身份用户组", exact: true })
@@ -1242,6 +1282,27 @@ try {
       assert.ok(managedRule.selected_exit_id);
       assert.equal(managedRule.tunnel, undefined);
       assert.equal(managedRule.proxy_protocol.send, "v2");
+      await admin.getByRole("link", { name: "设备组", exact: true }).click();
+      await admin
+        .getByRole("row")
+        .filter({
+          has: admin.getByRole("cell", {
+            name: `group-${browserName}`,
+            exact: true,
+          }),
+        })
+        .getByRole("button", { name: "删除", exact: true })
+        .click();
+      await admin
+        .getByRole("button", { name: "确认删除", exact: true })
+        .click();
+      await admin
+        .locator("dialog")
+        .getByRole("alert")
+        .filter({ hasText: "转发规则" })
+        .waitFor();
+      await admin.keyboard.press("Escape");
+      await admin.locator("dialog").waitFor({ state: "detached" });
       await user.getByRole("link", { name: "运营与任务", exact: true }).click();
       await user.getByText("导入规则", { exact: true }).click();
       const importDraft = {

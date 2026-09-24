@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-VERSION="0.1.5"
+VERSION="0.1.6"
 RELEASE_URL="https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v${VERSION}"
 install_dir=/opt/traffic-forwarding-panel
 port=18080

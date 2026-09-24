@@ -2,7 +2,7 @@
 
 Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP 四种加密承载。
 
-当前版本为正式版 `v0.1.5`。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.5.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持对已有 Docker 安装自动备份并升级；[租约切换保留连接与独立同步](docs/traffic-continuity.md) 需要升级入口 Agent 才生效。Cyber 按用户要求跳过；生产容量及 Linux/公网/真实支付仍待验收。
+当前版本为正式版 `v0.1.6`。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.6.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持对已有 Docker 安装自动备份并升级；[租约切换保留连接与独立同步](docs/traffic-continuity.md) 需要升级入口 Agent 才生效。Cyber 按用户要求跳过；生产容量及 Linux/公网/真实支付仍待验收。
 
 ## 本机启动
 
@@ -45,7 +45,7 @@ HTTPS 反向代理应保留 Host，并覆盖 `X-Forwarded-Proto` 为实际协议
 服务器已有 Docker 和 Docker Compose v2 时执行：
 
 ```sh
-curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.5/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
+curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v0.1.6/install-docker.sh -o install-docker.sh && sudo bash install-docker.sh
 ```
 
 无需输入域名或密码，执行后自动下载并启动容器。脚本识别 amd64/arm64，校验 Docker 镜像包，配置数据持久化、健康检查和自动重启，生成随机管理员密码并在完成时显示。默认目录 `/opt/traffic-forwarding-panel`，仅监听宿主机 `127.0.0.1:18080`。

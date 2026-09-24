@@ -376,6 +376,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/groups", s.RequireUser(s.groups))
 	mux.HandleFunc("POST /api/v1/groups", s.admin(s.saveGroup))
 	mux.HandleFunc("PUT /api/v1/groups/{id}", s.admin(s.saveGroup))
+	mux.HandleFunc("DELETE /api/v1/groups/{id}", s.admin(s.deleteGroup))
 	mux.HandleFunc("GET /api/v1/groups/{id}/join-key", s.admin(s.groupJoinKey))
 	mux.HandleFunc("POST /api/v1/groups/{id}/join-key", s.admin(s.rotateGroupJoinKey))
 	mux.HandleFunc("GET /api/v1/nodes", s.RequireUser(s.nodes))

@@ -297,6 +297,7 @@ func main() {
 		{"GET", "/groups", "", "GroupPage", "200", "user", "Device groups authorized through the current user's identity group", true},
 		{"POST", "/groups", "GroupCreate", "Group", "201", "admin", "Create device group", false},
 		{"PUT", "/groups/{id}", "GroupUpdate", "Group", "200", "admin", "Update group with version check", false},
+		{"DELETE", "/groups/{id}", "", "", "204", "admin", "Delete an unused device group at the expected version; detach devices and grants, remove idle exits; 409 while rules or other groups reference it or removal awaits Agent ACK; 404 if missing. Devices, leases and usage history are retained", false},
 		{"GET", "/groups/{id}/join-key", "", "GroupJoinKey", "200", "admin", "Fixed per-group access key behind the device onboarding command; readable again at any time", false},
 		{"POST", "/groups/{id}/join-key", "Empty", "GroupJoinKey", "200", "admin", "Rotate the group access key; commands already distributed stop working", false},
 		{"GET", "/nodes", "", "NodePage", "200", "user", "Authorized nodes", true},
@@ -427,7 +428,7 @@ func main() {
 		if r.path == "/online/device/ip" || r.path == "/online/device/ip/list" {
 			operation["x-aliases"] = []string{r.path}
 		}
-		if r.method == "DELETE" && r.path == "/rules/{id}" {
+		if r.method == "DELETE" && (r.path == "/rules/{id}" || r.path == "/groups/{id}") {
 			params = append(params, schema{"name": "version", "in": "query", "required": true, "schema": num})
 		}
 		if len(params) > 0 {

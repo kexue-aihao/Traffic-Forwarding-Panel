@@ -165,12 +165,9 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 		rule.SelectedExitID = ""
 		return "1", nil
 	}
-	var raw, role string
-	var g contract.Group
-	if err := tx.QueryRowContext(ctx, s.q("SELECT payload FROM cp_groups WHERE id=?"), rule.ExitGroupID).Scan(&raw); err != nil {
-		return "", err
-	}
-	if err := json.Unmarshal([]byte(raw), &g); err != nil {
+	var role string
+	g, err := s.groupTx(ctx, tx, rule.ExitGroupID)
+	if err != nil {
 		return "", err
 	}
 	if err := tx.QueryRowContext(ctx, s.q("SELECT role FROM cp_users WHERE id=?"), rule.UserID).Scan(&role); err != nil {
@@ -182,11 +179,8 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 			return "", errors.New("exit group not authorized")
 		}
 	}
-	var entry contract.Group
-	if err := tx.QueryRowContext(ctx, s.q("SELECT payload FROM cp_groups WHERE id=?"), rule.GroupID).Scan(&raw); err != nil {
-		return "", err
-	}
-	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+	entry, err := s.groupTx(ctx, tx, rule.GroupID)
+	if err != nil {
 		return "", err
 	}
 	if !g.CanExit() || !entry.CanEnter() {

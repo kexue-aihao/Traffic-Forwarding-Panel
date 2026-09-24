@@ -12,7 +12,12 @@ import (
 func (s *Server) groupTx(ctx context.Context, tx *sql.Tx, id string) (contract.Group, error) {
 	var g contract.Group
 	var raw string
-	if err := tx.QueryRowContext(ctx, s.q("SELECT payload FROM cp_groups WHERE id=?"), id).Scan(&raw); err != nil {
+	// Serialize reference creation with group deletion on server databases.
+	query := "SELECT payload FROM cp_groups WHERE id=?"
+	if s.Store.Dialect != "sqlite" {
+		query += " FOR UPDATE"
+	}
+	if err := tx.QueryRowContext(ctx, s.q(query), id).Scan(&raw); err != nil {
 		return g, err
 	}
 	err := json.Unmarshal([]byte(raw), &g)

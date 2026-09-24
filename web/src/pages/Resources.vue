@@ -718,15 +718,21 @@ async function remove() {
     await api(
       deletingIdentityGroup
         ? `/identity-groups/${encodeURIComponent(String(deleting.value.id))}`
-        : `/rules/${encodeURIComponent(String(deleting.value.id))}?version=${Number(deleting.value.version)}`,
+        : `/${resource}/${encodeURIComponent(String(deleting.value.id))}?version=${Number(deleting.value.version)}`,
       "DELETE",
     );
     deleting.value = null;
     notice(
       deletingIdentityGroup
         ? "身份用户组已删除。"
-        : "删除请求已提交，端口释放以节点确认解绑为准。",
+        : resource === "groups"
+          ? "设备组已删除，设备归属和组授权已解除。"
+          : "删除请求已提交，端口释放以节点确认解绑为准。",
     );
+    if (rows.value.length === 1 && page.value > 1) {
+      query(page.value - 1);
+      return;
+    }
     await load();
   } catch (e) {
     formError.value = errorText(e);
@@ -1010,7 +1016,7 @@ const labels: Record<string, string> = {
                   >
                     编辑</button
                   ><button
-                    v-if="resource === 'rules'"
+                    v-if="['rules', 'groups'].includes(resource)"
                     class="danger"
                     @click="
                       deleting = row;
@@ -1791,13 +1797,22 @@ const labels: Record<string, string> = {
     /><Modal
       v-if="deleting"
       :title="
-        resource === 'identity-groups' ? '删除身份用户组' : '删除转发规则'
+        resource === 'identity-groups'
+          ? '删除身份用户组'
+          : resource === 'groups'
+            ? '删除设备组'
+            : '删除转发规则'
       "
       :busy="busy"
       @close="deleting = null"
       ><p v-if="resource === 'identity-groups'">
         确认删除
         {{ deleting.name }}？仅未关联用户且未授权给设备组的身份组可以删除。
+      </p>
+      <p v-else-if="resource === 'groups'">
+        确认删除 {{ deleting.name }}？删除后将解除该组的设备归属和用户授权，
+        清理闲置出口，原接入命令将失效。设备和历史流量记录保留。
+        若仍被转发规则或其他设备组引用，请先解除引用；已删除的规则须等待节点确认停止。
       </p>
       <p v-else>
         确认删除 {{ deleting.name }}？现有转发会在节点应用配置后停止。

@@ -33,6 +33,7 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 | GET /groups | 分页 | 授权 Group 列表 |
 | POST /groups | `{name,type,direct_policy,chain_group_ids,identity_group_ids,blocked_protocols,disabled_networks,disabled_transports,advanced,multiplier,port_min,port_max}` | 管理员 Group；按身份用户组 ID 授权；`type` 为 `monitor|entry|exit|chain_exit`，创建后不可修改；`direct_policy` 仅入口使用；链式出口引用 2–3 个出口组 |
 | PUT /groups/{id} | 同上加 version | 管理员乐观锁 |
+| DELETE /groups/{id} | 查询 `version` | 管理员删除设备组，解除设备归属和组授权、清理闲置出口，原接入命令失效；设备、租约与流量历史保留。仍被规则（含停用规则）、链式出口或高级设置引用，或已删除规则等待节点确认停止时返回 409；版本过期返回 409，不存在返回 404。节点确认后清理该组已删除规则的内部记录 |
 | GET /groups/{id}/join-key | —— | 管理员 `{group_id,join_key}`，设备组的固定接入密钥；可随时再次读取 |
 | POST /groups/{id}/join-key | `{}` | 管理员 `{group_id,join_key}`，轮换后已分发出去的接入命令立即失效 |
 | GET /nodes | 分页 | 授权 Node 列表 |
