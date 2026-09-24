@@ -149,7 +149,7 @@ func TestIdentityGroupManualIDValidation(t *testing.T) {
 func TestIdentityGroupIDEditPreservesReferencesAndAuthorization(t *testing.T) {
 	f := setup(t)
 	admin := f.cookie
-	identity := read[contract.IdentityGroup](t, f.req("POST", "/identity-groups", map[string]any{"id": "1001", "name": "VIP"}, ""), 201)
+	identity := read[contract.IdentityGroup](t, f.req("POST", "/identity-groups", map[string]any{"id": strings.Repeat("1", 64), "name": "VIP"}, ""), 201)
 	other := read[contract.IdentityGroup](t, f.req("POST", "/identity-groups", map[string]any{"id": "2001", "name": "Other"}, ""), 201)
 	alice := read[contract.UserCreated](t, f.req("POST", "/users", map[string]any{"username": "alice", "role": "user", "identity_group_id": identity.ID}, ""), 201)
 	read[contract.UserCreated](t, f.req("POST", "/users", map[string]any{"username": "bob", "role": "user", "identity_group_id": identity.ID}, ""), 201)
@@ -188,9 +188,14 @@ func TestIdentityGroupIDEditPreservesReferencesAndAuthorization(t *testing.T) {
 			t.Fatal("failed edit changed user assignments", users, err)
 		}
 	}
-	updated := read[contract.IdentityGroup](t, f.req("PUT", "/identity-groups/"+identity.ID, map[string]any{"id": "3001", "name": "VIP new"}, ""), 200)
-	if updated.ID != "3001" || updated.Name != "VIP new" || updated.UserCount != 2 || updated.DeviceGroupCount != 2 {
+	replacementID := strings.Repeat("3", 64)
+	updated := read[contract.IdentityGroup](t, f.req("PUT", "/identity-groups/"+identity.ID, map[string]any{"id": replacementID, "name": "VIP new"}, ""), 200)
+	if updated.ID != replacementID || updated.Name != "VIP new" || updated.UserCount != 2 || updated.DeviceGroupCount != 2 {
 		t.Fatal("identity edit response incorrect", updated)
+	}
+	var auditTarget string
+	if err := f.s.Store.DB.QueryRow(f.s.q(`SELECT target FROM cp_audit WHERE action=?`), "identity-group.update").Scan(&auditTarget); err != nil || auditTarget != updated.ID {
+		t.Fatal("identity edit audit must retain the target ID", auditTarget, err)
 	}
 	for _, group := range groups {
 		var raw string

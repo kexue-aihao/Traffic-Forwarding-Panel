@@ -217,7 +217,7 @@ func (s *Server) updateIdentityGroup(w http.ResponseWriter, r *http.Request) {
 		if err = tx.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_group_identity_groups WHERE identity_group_id=?`), group.ID).Scan(&group.DeviceGroupCount); err != nil {
 			return err
 		}
-		return s.AuditTx(ctx, tx, actor.ID, "identity-group.update", strJSON(map[string]string{"previous_id": previous.ID, "id": group.ID}))
+		return s.AuditTx(ctx, tx, actor.ID, "identity-group.update", group.ID)
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
