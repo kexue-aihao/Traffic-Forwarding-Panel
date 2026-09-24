@@ -6,6 +6,7 @@ import {
   webkit,
 } from "../web/node_modules/@playwright/test/index.mjs";
 import { createServer } from "node:http";
+import { once } from "node:events";
 import { readFile, mkdir } from "node:fs/promises";
 import { resolve, extname } from "node:path";
 import assert from "node:assert/strict";
@@ -25,7 +26,6 @@ let createdKeys = [];
 let reconcileCalls = 0;
 let historyMode = "samples";
 let historyRequests = [];
-let releaseHistory;
 const summerUTC = "2026-07-14T16:20:30.000Z";
 const winterUTC = "2026-01-15T16:20:30.000Z";
 let tokenExpiry = "";
@@ -216,7 +216,9 @@ const server = createServer(async (req, res) => {
         download_bps: 2048 * index,
       }));
       if (historyMode === "hold") {
-        releaseHistory = () => json({ items: items.slice(0, 1), total: 1 });
+        server.emit("history-held", () => {
+          if (!res.destroyed) json({ items: items.slice(0, 1), total: 1 });
+        });
         return;
       }
       return json({ items, total: items.length });
@@ -680,13 +682,12 @@ try {
       await history.getByRole("button", { name: "重试历史查询" }).click();
       await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();
       historyMode = "hold";
-      const heldRequest = page.waitForRequest(
-        (request) =>
-          request.url().includes("/history?") &&
-          request.url().includes("resolution=minute"),
-      );
+      // Wait for the fixture to hold the response before changing its mode.
+      const heldRequest = once(server, "history-held", {
+        signal: AbortSignal.timeout(15000),
+      });
       await page.getByLabel("历史时间范围").selectOption("1h");
-      await heldRequest;
+      const [releaseHistory] = await heldRequest;
       await history.getByText("正在加载历史采样…").waitFor();
       historyMode = "samples";
       const cancelledHistory = page.waitForEvent("requestfailed", {
