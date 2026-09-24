@@ -69,4 +69,24 @@ func TestLeaseRetirementReturnsOnlyConfirmedUnusedBudget(t *testing.T) {
 	if lease.Bytes != 850 {
 		t.Fatalf("unused reservation returned incorrectly: %d", lease.Bytes)
 	}
+	u = contract.UsageRecord{ID: "exhausted-usage", NodeID: "n", RuleID: "r", LeaseID: lease.ID, EntitlementID: ent.ID, StartedAt: s.Now(), EndedAt: s.Now(), UploadBytes: lease.Bytes}
+	if err = s.Write(ctx, func(tx *sql.Tx) error { return s.SettleUsage(ctx, tx, u) }); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err = retire("n", lease.Bytes); err != nil {
+			t.Fatal("exhausted lease retirement must succeed without a refund", err)
+		}
+	}
+	var allocated, used int64
+	if err = s.DB.QueryRowContext(ctx, s.q("SELECT allocated,used FROM commerce_entitlements WHERE id=?"), ent.ID).Scan(&allocated, &used); err != nil {
+		t.Fatal(err)
+	}
+	if allocated != 1000 || used != 1000 {
+		t.Fatalf("exhausted retirement changed consumed quota: allocated=%d used=%d", allocated, used)
+	}
+	var closed int
+	if err = s.DB.QueryRowContext(ctx, s.q("SELECT closed FROM commerce_lease_reservations WHERE lease_id=?"), lease.ID).Scan(&closed); err != nil || closed != 1 {
+		t.Fatal("exhausted reservation remained open", closed, err)
+	}
 }

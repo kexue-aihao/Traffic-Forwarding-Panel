@@ -147,6 +147,11 @@ func (s *Service) RetireLease(ctx context.Context, tx *sql.Tx, node, leaseID str
 	if n != 1 {
 		return ErrConflict
 	}
+	// A fully consumed reservation closes without changing its allocation.
+	// MySQL reports zero affected rows for the otherwise redundant update.
+	if refund == 0 {
+		return nil
+	}
 	r, err = tx.ExecContext(ctx, s.q("UPDATE commerce_entitlements SET allocated=allocated-? WHERE id=? AND allocated>=?"), refund, ent, refund)
 	if err != nil {
 		return err
