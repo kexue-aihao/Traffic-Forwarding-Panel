@@ -101,6 +101,30 @@ docker compose exec panel /panel -reset-password admin
 
 改密命令从标准输入读取新密码，不把密码写在命令参数中。管理员账号初始化前失败会保留配置和数据库：确认该目录属于本次安装后，可执行 `docker compose run --rm -T panel -init-admin admin`，从标准输入提供密码。若账号已存在，使用本机改密命令；成功后执行 `touch .initialized`、`docker compose up -d --wait`。不要删除已有数据库来重试。
 
+## 综合管理脚本
+
+可以使用一个脚本统一执行安装、升级、重置密码和卸载：
+
+该脚本面向 Docker Compose 部署；Caddy + systemd 原生部署请继续使用对应的二进制和 service 配置。
+
+```sh
+curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/latest/download/panel-manager.sh \
+  -o /tmp/panel-manager.sh
+sudo bash /tmp/panel-manager.sh
+```
+
+脚本默认使用 `/opt/traffic-forwarding-panel`，不带参数时打开菜单，也可以直接指定操作：
+
+```sh
+sudo bash /tmp/panel-manager.sh install
+sudo bash /tmp/panel-manager.sh upgrade
+sudo bash /tmp/panel-manager.sh reset-password --admin admin
+sudo bash /tmp/panel-manager.sh uninstall              # 保留数据
+sudo bash /tmp/panel-manager.sh uninstall --delete-data --yes
+```
+
+安装和升级仍使用带镜像校验、停机备份及健康检查的官方安装器。重置密码会沿用当前 Compose 的数据库配置，并撤销旧会话和 API Token。卸载默认只删除容器和服务，保留数据库与配置；只有同时指定 `--delete-data` 才会删除安装目录。
+
 ## 备份与支付配置
 
 一致性数据库快照可直接生成到持久化目录：

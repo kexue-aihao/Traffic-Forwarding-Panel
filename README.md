@@ -54,6 +54,8 @@ curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/raw/master/in
 
 在 1Panel 新建反向代理网站，填写你的域名、代理地址 `http://127.0.0.1:18080`，申请证书并开启 HTTPS；启用 WebSocket，关闭代理缓存。管理员入口 `https://你的域名/admin`。详见 [Docker 与 1Panel 部署](docs/docker-deployment.md)，其中包括 OpenResty 使用桥接网络时的配置、离线安装、支付配置和备份方式。
 
+Docker 部署也可以下载 [综合管理脚本](docs/docker-deployment.md#综合管理脚本)，统一执行安装、升级、重置密码和卸载。卸载默认保留数据库，删除数据需要显式确认。
+
 镜像包含 `/panel` 与 `/agent`，默认以 UID/GID 65532 运行。此安装仅部署面板；用于承载转发流量的 Agent 仍部署到相应入口/出口节点。面板会把自身携带的 Agent 产物与一份接入安装脚本发布在 `/download/` 下，因此接入一台设备只需要在控制台复制一条命令到目标机上执行。
 
 ## Agent、支付和接口
