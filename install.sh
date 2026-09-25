@@ -36,10 +36,11 @@ run_manager() (
     if [[ ${1:-} == --help || ${1:-} == -h ]]; then
         bash "$manager" "$@"
     elif [[ ${1:-} == menu || ${1:-} == reset-password || ${1:-} == uninstall ]] && [[ -r /dev/tty ]]; then
+        exec </dev/tty
         if ((EUID == 0)); then
-            bash "$manager" "$@" </dev/tty
+            bash "$manager" "$@"
         else
-            sudo bash "$manager" "$@" </dev/tty
+            sudo bash "$manager" "$@"
         fi
     elif ((EUID == 0)); then
         bash "$manager" "$@"

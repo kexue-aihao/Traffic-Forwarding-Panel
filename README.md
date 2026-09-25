@@ -2,7 +2,7 @@
 
 Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP 四种加密承载。
 
-当前版本为正式版 `v0.1.10`。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.10.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持对已有 Docker 安装自动备份并升级；[租约切换保留连接与独立同步](docs/traffic-continuity.md) 需要升级入口 Agent 才生效。Cyber 按用户要求跳过；生产容量及 Linux/公网/真实支付仍待验收。
+当前版本为正式版 `v0.1.11`。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.11.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持对已有 Docker 安装自动备份并升级；[租约切换保留连接与独立同步](docs/traffic-continuity.md) 需要升级入口 Agent 才生效。Cyber 按用户要求跳过；生产容量及 Linux/公网/真实支付仍待验收。
 
 ## 本机启动
 
