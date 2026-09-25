@@ -1139,7 +1139,7 @@ tbody tr:hover td {
 .probe-row {
   display: grid;
   grid-template-columns:
-    minmax(64px, 0.5fr) minmax(74px, 0.55fr) minmax(74px, 0.55fr)
+    minmax(64px, 0.5fr) minmax(116px, 0.75fr) minmax(116px, 0.75fr)
     minmax(168px, 1.1fr) minmax(100px, 0.72fr) minmax(140px, 0.92fr)
     repeat(3, minmax(102px, 0.8fr)) auto;
   align-items: center;
@@ -1235,6 +1235,17 @@ tbody tr:hover td {
   padding: 7px 12px;
   border-radius: 6px;
   background: var(--color-bg-4);
+}
+.probe-ip {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .probe-empty {
   color: var(--color-ink-subtle);

@@ -2650,6 +2650,26 @@
               }
             ]
           },
+          "ipv4_location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeoLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ipv6_location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GeoLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "load1": {
             "anyOf": [
               {

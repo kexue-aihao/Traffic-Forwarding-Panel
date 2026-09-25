@@ -20,6 +20,12 @@ import {
   formatDateTime,
   formatBytes,
 } from "../core/format";
+interface ProbeIP {
+  address: string;
+  source: string;
+  family: string;
+  observed_at: string;
+}
 interface Probe {
   node_id: string;
   sampled_at: string;
@@ -38,12 +44,7 @@ interface Probe {
   swap_used: string | null;
   swap_total: string | null;
   uptime_seconds: string | null;
-  public_ips?: {
-    address: string;
-    source: string;
-    family: string;
-    observed_at: string;
-  }[];
+  public_ips?: ProbeIP[];
   // 以下字段由控制面补齐：节点名、所属设备组和位置图标。
   node_name?: string;
   group_ids?: string[];
@@ -54,6 +55,8 @@ interface Probe {
     city?: string;
     source?: string;
   };
+  ipv4_location?: Probe["location"];
+  ipv6_location?: Probe["location"];
 }
 const probes = ref<Probe[]>([]);
 const names = ref<Record<string, string>>({});
@@ -112,6 +115,42 @@ function nodeShortID(p: Probe) {
 }
 function groupLabel(p: Probe) {
   return (p.group_ids || []).map((id) => groupNames.value[id] || id).join("、");
+}
+function ipFamily(ip: ProbeIP) {
+  const family = ip.family?.toLowerCase();
+  if (family === "ipv4" || family === "ipv6") return family;
+  return ip.address.includes(":") ? "ipv6" : "ipv4";
+}
+function addressFor(p: Probe, family: "ipv4" | "ipv6") {
+  let best: ProbeIP | undefined;
+  for (const ip of p.public_ips || []) {
+    if (ipFamily(ip) !== family || !ip.address) continue;
+    if (!best || Date.parse(ip.observed_at) > Date.parse(best.observed_at)) {
+      best = ip;
+    }
+  }
+  return best?.address || "";
+}
+function locationFor(
+  p: Probe,
+  family: "ipv4" | "ipv6",
+): Probe["location"] | undefined {
+  // Once either split field is present, the control plane is providing the
+  // address-family-aware response. Do not let the legacy fallback copy a v6
+  // location into the v4 column when the v4 lookup is still pending.
+  if (p.ipv4_location !== undefined || p.ipv6_location !== undefined) {
+    return family === "ipv4" ? p.ipv4_location : p.ipv6_location;
+  }
+  if (family === "ipv4") return p.location;
+  // Older control planes only returned one location. Keep that response
+  // compatible when the machine has no separate IPv4 observation.
+  return !addressFor(p, "ipv4") ? p.location : undefined;
+}
+function addressLabel(p: Probe, family: "ipv4" | "ipv6") {
+  const address = addressFor(p, family);
+  if (address) return address;
+  if (p.public_ips === undefined) return canManage.value ? "未上报" : "已隐藏";
+  return "未知";
 }
 const error = ref("");
 const connected = ref(false);
@@ -307,24 +346,26 @@ onUnmounted(() => {
             </span>
           </div>
           <div class="probe-cell probe-location-cell">
-            <span class="probe-label">v4 区域</span>
+            <span class="probe-label">IPv4 地址</span>
             <LocationFlag
-              v-if="p.location?.country_code"
-              :code="p.location.country_code"
-              :name="p.location.country_name"
+              :code="locationFor(p, 'ipv4')?.country_code"
+              :name="locationFor(p, 'ipv4')?.country_name"
               :size="26"
             />
-            <span v-else class="probe-empty">—</span>
+            <span class="probe-ip" :title="addressLabel(p, 'ipv4')">
+              {{ addressLabel(p, "ipv4") }}
+            </span>
           </div>
           <div class="probe-cell probe-location-cell">
-            <span class="probe-label">v6 区域</span>
+            <span class="probe-label">IPv6 地址</span>
             <LocationFlag
-              v-if="p.location?.country_code"
-              :code="p.location.country_code"
-              :name="p.location.country_name"
+              :code="locationFor(p, 'ipv6')?.country_code"
+              :name="locationFor(p, 'ipv6')?.country_name"
               :size="26"
             />
-            <span v-else class="probe-empty">—</span>
+            <span class="probe-ip" :title="addressLabel(p, 'ipv6')">
+              {{ addressLabel(p, "ipv6") }}
+            </span>
           </div>
           <div class="metrics probe-network probe-rate">
             <span class="probe-label">速率</span>

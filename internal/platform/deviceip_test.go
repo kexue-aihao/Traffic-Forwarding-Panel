@@ -191,12 +191,28 @@ func TestProbePageHidesAddressesButKeepsNodeIdentity(t *testing.T) {
 	userID, secret := f.userWithToken("alice", map[string]any{"name": "脚本", "permanent": true})
 	group := f.groupWithUser("香港", userID)
 	node := f.nodeIn(group.ID, "hk-1")
-	f.reportProbe(node, "198.51.100.7", "ipv4")
+	now := time.Now().UTC()
+	f.s.geo.complete("198.51.100.7", &contract.GeoLocation{CountryCode: "HK", CountryName: "中国香港", Source: "geo"})
+	f.s.geo.complete("2001:db8::7", &contract.GeoLocation{CountryCode: "JP", CountryName: "日本", Source: "geo"})
+	probe := contract.Probe{
+		NodeID: node.NodeID, SampledAt: now, CPUPercent: ptr(12.5), CPUModel: ptrS("Test CPU"),
+		MemoryUsed: ptrU(1024), MemoryTotal: ptrU(4096),
+		PublicIPs: []contract.IPObservation{
+			{Address: "198.51.100.7", Family: "ipv4", Source: "echo", ObservedAt: now},
+			{Address: "2001:db8::7", Family: "ipv6", Source: "echo", ObservedAt: now},
+		},
+	}
+	if rr := f.req("POST", "/agent/probe", probe, node.Token); rr.Code != 204 {
+		t.Fatalf("探针上报失败: %d %s", rr.Code, rr.Body.String())
+	}
 
 	admin := read[map[string]any](t, f.req("GET", "/probes", nil, ""), 200)
 	adminEntry := admin["items"].([]any)[0].(map[string]any)
-	if adminEntry["node_name"] != "hk-1" || len(adminEntry["public_ips"].([]any)) != 1 {
+	if adminEntry["node_name"] != "hk-1" || len(adminEntry["public_ips"].([]any)) != 2 {
 		t.Fatalf("管理员看不到地址与节点名: %v", adminEntry)
+	}
+	if adminEntry["ipv4_location"].(map[string]any)["country_code"] != "HK" || adminEntry["ipv6_location"].(map[string]any)["country_code"] != "JP" {
+		t.Fatalf("双栈地址归属地没有分别返回: %v", adminEntry)
 	}
 	if len(adminEntry["group_ids"].([]any)) != 1 {
 		t.Fatalf("探针缺少设备组归属: %v", adminEntry)
@@ -210,6 +226,9 @@ func TestProbePageHidesAddressesButKeepsNodeIdentity(t *testing.T) {
 	}
 	if userEntry["node_name"] != "hk-1" {
 		t.Fatalf("普通用户看不到节点名，无法区分设备: %v", userEntry)
+	}
+	if userEntry["ipv4_location"].(map[string]any)["country_code"] != "HK" || userEntry["ipv6_location"].(map[string]any)["country_code"] != "JP" {
+		t.Fatalf("普通用户看不到双栈归属地: %v", userEntry)
 	}
 	// 按不属于自己的组过滤要被明确拒绝，而不是静默返回空列表。
 	other := read[contract.Group](t, f.req("POST", "/groups", map[string]any{"name": "别的组", "port_min": 30000, "port_max": 31000, "multiplier": "1"}, ""), 201)

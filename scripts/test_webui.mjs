@@ -69,6 +69,8 @@ const fixtureProbe = {
   node_name: "Fixture node",
   group_ids: ["g1"],
   location: { country_code: "HK", country_name: "中国香港", city: "Hong Kong" },
+  ipv4_location: { country_code: "HK", country_name: "中国香港", city: "Hong Kong" },
+  ipv6_location: { country_code: "JP", country_name: "日本", city: "Tokyo" },
   sampled_at: winterUTC,
   cpu_percent: null,
   memory_used: null,
@@ -88,6 +90,12 @@ const fixtureProbe = {
     {
       address: "203.0.113.8",
       family: "ipv4",
+      source: "fixture",
+      observed_at: summerUTC,
+    },
+    {
+      address: "2001:db8::8",
+      family: "ipv6",
       source: "fixture",
       observed_at: summerUTC,
     },
@@ -546,6 +554,26 @@ try {
         "中国香港",
       );
       assert.equal(
+        await page.locator(".location-flag").nth(1).getAttribute("aria-label"),
+        "日本",
+      );
+      assert.equal(
+        await page.locator(".probe-location-cell").nth(0).locator(".probe-label").innerText(),
+        "IPv4 地址",
+      );
+      assert.equal(
+        await page.locator(".probe-location-cell").nth(0).locator(".probe-ip").innerText(),
+        "203.0.113.8",
+      );
+      assert.equal(
+        await page.locator(".probe-location-cell").nth(1).locator(".probe-label").innerText(),
+        "IPv6 地址",
+      );
+      assert.equal(
+        await page.locator(".probe-location-cell").nth(1).locator(".probe-ip").innerText(),
+        "2001:db8::8",
+      );
+      assert.equal(
         await page.locator(".probe-place").first().innerText(),
         "位置 中国香港·Hong Kong · 设备组 Fixture group",
       );
@@ -559,9 +587,11 @@ try {
         "设备地址接口应当在页面里写明",
       );
       await page.locator(".probe-details summary").first().evaluate(el => { el.parentElement.open = true; });
-      await page
-        .getByText("fixture · 2026-07-15 00:20:30", { exact: true })
-        .waitFor();
+      assert.equal(
+        await page.getByText("fixture · 2026-07-15 00:20:30", { exact: true }).count(),
+        2,
+        "dual stack observations should both remain visible in device details",
+      );
       assert.ok((await page.getByText("未知", { exact: true }).count()) > 0);
       await page
         .locator(".probe .metrics")

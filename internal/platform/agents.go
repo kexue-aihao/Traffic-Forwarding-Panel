@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"slices"
 	"sort"
@@ -564,9 +565,12 @@ func (s *Server) visibleProbes(ctx context.Context, u contract.User, group strin
 			p.Online = &online
 		}
 		// 位置图标对所有人可见，机器地址不是：普通用户看得到「这台在哪里」，
-		// 看不到它连哪个 IP。管理员两者都有，客户脚本走设备地址接口。
-		if ip := probeAddress(p); ip != "" {
-			p.Location = s.locationWith(ctx, ip, template)
+		// 看不到它连哪个 IP。双栈机器的两个地址要分别查询，否则 v6 会错误地
+		// 复用 v4 的归属地。管理员两者都有，客户脚本走设备地址接口。
+		p.IPv4Location, p.IPv6Location = s.probeLocations(ctx, p, template)
+		p.Location = p.IPv4Location
+		if p.Location == nil {
+			p.Location = p.IPv6Location
 		}
 		if u.Role != "admin" {
 			p.PublicIPs = nil
@@ -578,21 +582,50 @@ func (s *Server) visibleProbes(ctx context.Context, u contract.User, group strin
 	return items, nil
 }
 
-// probeAddress 取探针里最适合拿来定位的地址：优先 IPv4。
-func probeAddress(p contract.Probe) string {
-	best := ""
+// probeLocations 按地址族取最新观测并分别查询归属地。地址本身只会在
+// 管理员响应中保留；位置字段对普通账号仍然可见。
+func (s *Server) probeLocations(ctx context.Context, p contract.Probe, template string) (*contract.GeoLocation, *contract.GeoLocation) {
+	v4, v6 := probeAddressForFamily(p, "ipv4"), probeAddressForFamily(p, "ipv6")
+	var v4Location, v6Location *contract.GeoLocation
+	if v4 != "" {
+		v4Location = s.locationWith(ctx, v4, template)
+	}
+	if v6 != "" {
+		v6Location = s.locationWith(ctx, v6, template)
+	}
+	return v4Location, v6Location
+}
+
+func probeAddressForFamily(p contract.Probe, family string) string {
+	var best contract.IPObservation
+	found := false
 	for _, ip := range p.PublicIPs {
-		if ip.Address == "" {
+		if ip.Address == "" || probeIPFamily(ip) != family {
 			continue
 		}
-		if ip.Family == "ipv4" {
-			return ip.Address
-		}
-		if best == "" {
-			best = ip.Address
+		if !found || ip.ObservedAt.After(best.ObservedAt) {
+			best, found = ip, true
 		}
 	}
-	return best
+	if !found {
+		return ""
+	}
+	return best.Address
+}
+
+func probeIPFamily(ip contract.IPObservation) string {
+	family := strings.ToLower(strings.TrimSpace(ip.Family))
+	if family == "ipv4" || family == "ipv6" {
+		return family
+	}
+	parsed := net.ParseIP(strings.TrimSpace(ip.Address))
+	if parsed == nil {
+		return ""
+	}
+	if parsed.To4() != nil {
+		return "ipv4"
+	}
+	return "ipv6"
 }
 func (s *Server) probeList(w http.ResponseWriter, r *http.Request) {
 	u, _ := UserFromContext(r.Context())

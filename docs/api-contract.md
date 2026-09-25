@@ -47,7 +47,7 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 > 规则的 `listen` 留空时，面板会从**设备组允许的端口范围**里随机分配一个尚未预留的端口（随机起点 + 环形扫描，避免总挑到同一个或撞上端口预留）；显式给出则原样使用。
 | PUT /rules/{id} | 规则字段加 version | 乐观锁 |
 | DELETE /rules/{id}?version=N | 无 | 204；待节点确认解绑才释放端口 |
-| GET /probes | 可选 `group_id` | `{items: Probe[]}`；付费能力，需有效权益；只含授权设备组的机器，`group_id` 非本人所属组时 403。补 `node_name/group_ids/location`；普通用户隐藏 public_ips 但保留位置图标 |
+| GET /probes | 可选 `group_id` | `{items: Probe[]}`；付费能力，需有效权益；只含授权设备组的机器，`group_id` 非本人所属组时 403。补 `node_name/group_ids/location`；新客户端可按地址族读取 `ipv4_location/ipv6_location`，管理员响应另含 `public_ips`，普通用户隐藏地址但保留位置图标 |
 | GET /probes/events | 可选 `group_id` | SSE `event: probes` + 同上 JSON，每 5 秒重校验身份/授权 |
 | GET /online/device/ip | 可选 `group_id` | 探针页面预留的脚本接口：当前可见范围内**唯一**那台设备的 `{device:{...}}`；多台返回 409 并提示改用列表，无设备返回 404 |
 | GET /online/device/ip/list | 可选 `group_id` | `{items:[DeviceIP],total}`；一组多台时用它。机器被替换 `node_id` 变、只换 IP 时 `address/observed_at` 变，调用方无需改代码 |

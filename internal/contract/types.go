@@ -209,9 +209,13 @@ type Probe struct {
 	// 以下三个字段由控制面在返回探针时补齐，Agent 从不上报：节点名、所属
 	// 设备组和位置图标。放在 Probe 上而不是另做一层响应结构，是因为实时
 	// 推送、历史查询和前端都已经按这个形状对齐了。
-	NodeName string       `json:"node_name,omitempty"`
-	GroupIDs []string     `json:"group_ids,omitempty"`
-	Location *GeoLocation `json:"location,omitempty"`
+	NodeName string   `json:"node_name,omitempty"`
+	GroupIDs []string `json:"group_ids,omitempty"`
+	// Location 保留作为旧客户端的单一位置字段；新客户端应按地址族读取
+	// IPv4Location 与 IPv6Location，避免把一台双栈机器的两个地址混在一起。
+	Location     *GeoLocation `json:"location,omitempty"`
+	IPv4Location *GeoLocation `json:"ipv4_location,omitempty"`
+	IPv6Location *GeoLocation `json:"ipv6_location,omitempty"`
 }
 
 type UsageRecord struct {

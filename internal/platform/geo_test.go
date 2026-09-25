@@ -113,3 +113,24 @@ func TestGeoCacheDisabledTemplateNeverCallsOut(t *testing.T) {
 		t.Fatal("关闭状态下留下了在途标记")
 	}
 }
+
+func TestProbeLocationsSeparateIPv4AndIPv6(t *testing.T) {
+	cache := newGeoCache()
+	cache.complete("198.51.100.20", &contract.GeoLocation{CountryCode: "US", Source: "geo"})
+	cache.complete("2001:db8::20", &contract.GeoLocation{CountryCode: "JP", Source: "geo"})
+	server := &Server{geo: cache}
+	p := contract.Probe{PublicIPs: []contract.IPObservation{
+		{Address: "2001:db8::20", Family: "ipv6"},
+		{Address: "198.51.100.20", Family: "ipv4"},
+	}}
+	v4, v6 := server.probeLocations(context.Background(), p, "")
+	if v4 == nil || v4.CountryCode != "US" {
+		t.Fatalf("IPv4 归属地不正确: %v", v4)
+	}
+	if v6 == nil || v6.CountryCode != "JP" {
+		t.Fatalf("IPv6 归属地不正确: %v", v6)
+	}
+	if probeAddressForFamily(p, "ipv4") != "198.51.100.20" || probeAddressForFamily(p, "ipv6") != "2001:db8::20" {
+		t.Fatalf("地址族没有各自选择对应地址")
+	}
+}
