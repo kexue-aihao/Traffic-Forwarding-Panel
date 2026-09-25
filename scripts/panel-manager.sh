@@ -13,6 +13,8 @@ password_stdin=false
 delete_data=false
 assume_yes=false
 action=""
+installer_path=""
+installer_temp_path=""
 
 die() {
     printf '错误：%s\n' "$*" >&2
@@ -26,7 +28,7 @@ usage() {
 操作：
   menu                         打开交互式管理菜单（默认）
   install                      安装服务（首次安装）
-  upgrade                      升级服务（自动校验并备份）
+  upgrade                      升级到最新正式版（自动校验并备份）
   reset-password               重置管理员或用户密码
   uninstall                    卸载服务，默认保留数据
 
@@ -118,27 +120,48 @@ panel_running() {
 }
 
 find_installer() {
-    local script_dir candidate temp
+    local prefer_latest=${1:-false} script_dir candidate temp
+    installer_path=""
+    installer_temp_path=""
     script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-    candidate="$script_dir/install-docker.sh"
-    if [[ -f $candidate ]]; then
-        printf '%s\n' "$candidate"
+    candidate=""
+    if [[ -n $bundle && -f $bundle/install-docker.sh ]]; then
+        candidate="$bundle/install-docker.sh"
+    elif [[ -f $script_dir/install-docker.sh ]]; then
+        candidate="$script_dir/install-docker.sh"
+    fi
+    # A local installer is only suitable for an offline bundle. For online
+    # installs and upgrades, always fetch the latest release so an old copy
+    # next to this manager cannot pin the deployment to an old version.
+    if ! $prefer_latest && [[ -n $candidate ]]; then
+        installer_path=$candidate
         return
     fi
 
     command -v curl >/dev/null 2>&1 || die '未找到 curl，无法下载安装器'
     temp=$(mktemp)
-    curl --fail --show-error --silent --location --retry 3 --connect-timeout 20 \
-        "$REPOSITORY/releases/latest/download/install-docker.sh" -o "$temp"
+    if ! curl --fail --show-error --silent --location --retry 3 --connect-timeout 20 \
+        "$REPOSITORY/releases/latest/download/install-docker.sh" -o "$temp"; then
+        rm -f -- "$temp"
+        return 1
+    fi
     chmod 700 "$temp"
-    printf '%s\n' "$temp"
+    installer_path=$temp
+    installer_temp_path=$temp
 }
 
 run_installer() {
     local installer installer_temp="" result
     local -a args
-    installer=$(find_installer)
-    [[ $installer == /tmp/* || $installer == /var/tmp/* ]] && installer_temp=$installer
+    if [[ -n $bundle ]]; then
+        # Offline bundles contain a matching installer and image version.
+        find_installer false || return $?
+    else
+        # Online installs and upgrades must use the latest release.
+        find_installer true || return $?
+    fi
+    installer=$installer_path
+    installer_temp=$installer_temp_path
     args=(--dir "$install_dir")
     [[ -n $port ]] && args+=(--port "$port")
     [[ $admin != admin ]] && args+=(--admin "$admin")
@@ -204,7 +227,7 @@ menu() {
         printf '\nTraffic-Forwarding-Panel 管理\n'
         printf '安装目录：%s\n' "$install_dir"
         printf '  1) 安装服务\n'
-        printf '  2) 升级服务\n'
+        printf '  2) 升级到最新正式版\n'
         printf '  3) 重置密码\n'
         printf '  4) 卸载服务（保留数据）\n'
         printf '  5) 卸载服务并删除数据\n'

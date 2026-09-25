@@ -12,9 +12,9 @@ Debian 服务器已安装 curl、Docker 和 Docker Compose v2 时，复制下面
 curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/raw/master/install.sh | bash
 ```
 
-入口先将发布版安装脚本完整下载到临时文件，再执行，结束后清理临时文件。复制时不要手动换行；若终端出现 `>` 等待后续输入，先按 `Ctrl+C`，再重新复制整行。
+入口先将管理脚本完整下载到临时文件，再执行，结束后清理临时文件。运行后会打开管理菜单，可选择首次安装、升级到最新正式版或重置密码；密码重置默认使用 `admin` 账号，也可在菜单中输入其他账号。复制时不要手动换行；若终端出现 `>` 等待后续输入，先按 `Ctrl+C`，再重新复制整行。
 
-直接执行，无需域名或交互输入。脚本自动选择架构、下载镜像包及 SHA256 清单、校验并 `docker load`、配置容器、初始化管理员，等待健康检查通过。管理员用户名默认 `admin`，使用系统随机源生成 48 位密码，安装完成时显示；请保存并可在登录后修改。密码只通过标准输入传给初始化进程，不写入 `.env` 或镜像。若终端输出丢失，可使用下文的本机改密命令。
+在菜单选择首次安装后，无需域名或密码输入。脚本自动选择架构、下载镜像包及 SHA256 清单、校验并 `docker load`、配置容器、初始化管理员，等待健康检查通过。管理员用户名默认 `admin`，使用系统随机源生成 48 位密码，安装完成时显示；请保存并可在登录后修改。密码只通过标准输入传给初始化进程，不写入 `.env` 或镜像。若终端输出丢失，可使用下文的本机改密命令。
 
 如需指定端口、目录、用户名或使用 `--password-stdin`，先将安装脚本保存到本地：
 
@@ -37,7 +37,7 @@ sudo bash install-docker.sh --port 18080 \
 
 如需指定初始密码，可使用 `--password-stdin` 从标准输入传入一行 12–72 字节的密码；默认无需该选项。
 
-v0.1.5 起，同一命令兼顾首次安装和升级。已有旧版会先下载、校验并导入目标镜像，再停机备份整个安装目录，仅更新 `.env` 的 `TFP_IMAGE` 并重建面板容器；管理员账号、数据库、端口、域名、支付配置、Compose 及覆盖文件均保留。`--port`、`--admin` 和 `--password-stdin` 只用于首次安装。旧版脚本重复运行仍然只启动旧容器，因此升级时必须重新下载新脚本。
+已有旧版会先下载、校验并导入目标镜像，再停机备份整个安装目录，仅更新 `.env` 的 `TFP_IMAGE` 并重建面板容器；管理员账号、数据库、端口、域名、支付配置、Compose 及覆盖文件均保留。`--port`、`--admin` 和 `--password-stdin` 只用于首次安装。统一入口在线安装或升级时始终获取最新 Release 安装器；旧版 `install-docker.sh` 本身不会自动更新，直接重复运行它只会启动原容器。
 
 脚本最后同时核对容器镜像 ID 和 `/panel -version`，通过后显示“升级完成，当前运行版本”。同版本重复执行只启动并验证，不下载镜像或重复备份；旧脚本不能自动降级较新的安装。同一目录的并发安装/升级会被锁阻止，需要系统提供 `flock`（常见发行版的 util-linux 已包含）。
 
@@ -103,7 +103,7 @@ docker compose exec panel /panel -reset-password admin
 
 ## 综合管理脚本
 
-可以使用一个脚本统一执行安装、升级、重置密码和卸载：
+也可以直接用统一入口运行安装、升级和密码重置；下面的管理脚本还提供卸载操作：
 
 该脚本面向 Docker Compose 部署；Caddy + systemd 原生部署请继续使用对应的二进制和 service 配置。
 
@@ -144,7 +144,7 @@ chmod 600 config/payments.json
 
 ## 离线安装和升级
 
-从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.9_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
+从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.10_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
 
 ```sh
 sudo bash install-docker.sh --bundle /path/to/downloads
