@@ -1,5 +1,6 @@
 // Package probe samples actual operating-system counters. Unsupported values
-// remain nil, never synthetic zeroes. Public IP observation is opt-in.
+// remain nil, never synthetic zeroes. Public IP observations are refreshed
+// periodically from configured HTTPS echo services or the built-in curl probe.
 package probe
 
 import (
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +35,18 @@ type Collector struct {
 	ipSample time.Time
 	// CPU 型号不会变，采一次就缓存 —— 每 5 秒读一遍 /proc/cpuinfo 没有意义。
 	cpuModel *string
+}
+
+const (
+	publicIPEchoURL = "https://api.ipify.org"
+	publicIPTimeout = 6 * time.Second
+	publicIPMaxTime = "5"
+)
+
+// runPublicIPCommand is a variable so probe tests can exercise command output
+// without requiring network access or a local curl installation.
+var runPublicIPCommand = func(ctx context.Context, family string) ([]byte, error) {
+	return exec.CommandContext(ctx, "curl", "-"+family+"fsS", "--max-time", publicIPMaxTime, publicIPEchoURL).Output()
 }
 
 func (c *Collector) Sample(ctx context.Context, nodeID string) contract.Probe {
@@ -109,10 +123,14 @@ func (c *Collector) Sample(ctx context.Context, nodeID string) contract.Probe {
 	c.last = now
 	if now.Sub(c.ipSample) >= 10*time.Minute {
 		c.ips = nil
-		for _, endpoint := range c.EchoURLs {
-			if v, e := c.Observe(ctx, endpoint); e == nil {
-				c.ips = append(c.ips, v)
+		if len(c.EchoURLs) > 0 {
+			for _, endpoint := range c.EchoURLs {
+				if v, e := c.Observe(ctx, endpoint); e == nil {
+					c.ips = append(c.ips, v)
+				}
 			}
+		} else {
+			c.ips = c.observeDefault(ctx)
 		}
 		c.ipSample = now
 	}
@@ -120,7 +138,64 @@ func (c *Collector) Sample(ctx context.Context, nodeID string) contract.Probe {
 	return p
 }
 
-// Observe calls only operator-configured HTTPS services; no default third party.
+// observeDefault probes the public address seen by an external service. IPv6
+// failure is expected on IPv4-only hosts and is intentionally ignored.
+func (c *Collector) observeDefault(ctx context.Context) []contract.IPObservation {
+	type result struct {
+		family string
+		ip     contract.IPObservation
+		err    error
+	}
+	results := make(chan result, 2)
+	for _, family := range []string{"4", "6"} {
+		go func(family string) {
+			probeCtx, cancel := context.WithTimeout(ctx, publicIPTimeout)
+			defer cancel()
+			raw, err := runPublicIPCommand(probeCtx, family)
+			if err != nil {
+				results <- result{family: family, err: err}
+				return
+			}
+			ip, err := parsePublicIP(strings.TrimSpace(string(raw)))
+			if err != nil || (family == "4" && ip.To4() == nil) || (family == "6" && ip.To4() != nil) {
+				results <- result{family: family, err: fmt.Errorf("invalid IPv%s public IP", family)}
+				return
+			}
+			results <- result{family: family, ip: contract.IPObservation{
+				Address: ip.String(), Family: "ipv" + family, Source: publicIPEchoURL, ObservedAt: time.Now().UTC(),
+			}}
+		}(family)
+	}
+	byFamily := map[string]contract.IPObservation{}
+	for range 2 {
+		v := <-results
+		if v.err == nil {
+			byFamily[v.family] = v.ip
+		}
+	}
+	out := make([]contract.IPObservation, 0, len(byFamily))
+	for _, family := range []string{"4", "6"} {
+		if v, ok := byFamily[family]; ok {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func parsePublicIP(raw string) (net.IP, error) {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil || !publicIP(ip) {
+		return nil, fmt.Errorf("invalid public IP")
+	}
+	return ip, nil
+}
+
+func publicIP(ip net.IP) bool {
+	return ip != nil && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast() && !ip.IsUnspecified()
+}
+
+// Observe calls an operator-configured HTTPS service and validates that its
+// response is a public unicast IP address.
 func (c *Collector) Observe(ctx context.Context, endpoint string) (contract.IPObservation, error) {
 	var zero contract.IPObservation
 	u, e := url.Parse(endpoint)
@@ -147,8 +222,8 @@ func (c *Collector) Observe(ctx context.Context, endpoint string) (contract.IPOb
 	if e != nil || len(body) > 128 {
 		return zero, fmt.Errorf("invalid IP response")
 	}
-	ip := net.ParseIP(strings.TrimSpace(string(body)))
-	if ip == nil {
+	ip, e := parsePublicIP(string(body))
+	if e != nil {
 		return zero, fmt.Errorf("invalid IP response")
 	}
 	family := "ipv6"

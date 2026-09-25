@@ -159,6 +159,7 @@ if [ "$UNINSTALL" = "yes" ]; then
 fi
 
 command -v systemctl >/dev/null 2>&1 || die "本机没有 systemd，无法安装为服务；请改用 go build 自行部署 Agent"
+command -v curl >/dev/null 2>&1 || die "本机没有 curl，Agent 需要它探测公网 IPv4/IPv6 地址"
 curl -fsSL --max-time 20 -o /dev/null "$PANEL_URL/" 2>/dev/null \
   || die "无法访问面板 $PANEL_URL，请检查地址、网络与证书"
 

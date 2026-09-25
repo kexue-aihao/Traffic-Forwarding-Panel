@@ -264,7 +264,7 @@ go test ./internal/agent -run '^$' -bench BenchmarkDurableUsage -benchtime=500x 
 
 实际采集 gopsutil 提供的 CPU、内存、磁盘、系统负载、在线时间与网卡计数。速率为相邻样本字节差除以间隔，单位 B/s；排除回环接口，但虚拟网卡/网桥可能产生重复统计，因此不能直接用于账单。首样本、计数回绕、接口集合变化、平台不支持的指标返回 null。容器部署显示容器能够看到的系统范围，不保证宿主机全貌。
 
-默认不调用任何第三方公网 IP 服务。可显式配置运营方控制的 HTTPS 纯 IP 回显服务，每 10 分钟观察一次：
+默认每 10 分钟在目标设备上运行固定的 `curl` 命令，通过 `https://api.ipify.org` 分别探测公网 IPv4 和 IPv6。IPv6 不可用时只上报 IPv4；命令失败不会影响 Agent。需要使用自建回显服务时，可用 `-ip-echo` 覆盖默认探测：
 
 ```powershell
 ./agent.exe -panel https://panel.example.com -state ./private/agent-state.json -ip-echo https://ip4.example.com/ip,https://ip6.example.com/ip -disk C:\
