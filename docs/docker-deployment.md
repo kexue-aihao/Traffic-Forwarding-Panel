@@ -108,9 +108,7 @@ docker compose exec panel /panel -reset-password admin
 该脚本面向 Docker Compose 部署；Caddy + systemd 原生部署请继续使用对应的二进制和 service 配置。
 
 ```sh
-curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/latest/download/panel-manager.sh \
-  -o /tmp/panel-manager.sh
-sudo bash /tmp/panel-manager.sh
+curl -fsSL https://raw.githubusercontent.com/kexue-aihao/Traffic-Forwarding-Panel/master/scripts/panel-manager.sh -o /tmp/panel-manager.sh && sudo bash /tmp/panel-manager.sh
 ```
 
 脚本默认使用 `/opt/traffic-forwarding-panel`，不带参数时打开菜单，也可以直接指定操作：
