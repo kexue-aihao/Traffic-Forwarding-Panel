@@ -613,11 +613,11 @@ try {
         await page.getByText("此 Agent 尚不支持该功能。", { exact: false }).waitFor();
         assert.equal(await page.getByRole("button", { name: "验证并连接" }).count(), 0);
         await page.getByRole("button", { name: "关闭对话框" }).click();
-        await page.getByRole("dialog").waitFor({ state: "hidden" });
+        await page.getByRole("dialog").waitFor({ state: "detached" });
         await page.getByRole("button", { name: "卸载设备", exact: true }).click();
         await page.locator("dialog[open]").getByText("卸载开始后不能撤销。", { exact: false }).waitFor();
         await page.getByRole("button", { name: "关闭对话框" }).click();
-        await page.getByRole("dialog").waitFor({ state: "hidden" });
+        await page.getByRole("dialog").waitFor({ state: "detached" });
       }
       node.capabilities = ["shell-v1", "uninstall-v1"];
       const nodesRefreshed = page.waitForResponse(response => response.url().includes("/api/v1/nodes?") && response.status() === 200);
@@ -636,7 +636,7 @@ try {
       assert.ok(terminalMessages.some(message => message.type === "input" && message.data === "a"));
       assert.ok(terminalMessages.some(message => message.type === "input" && message.data === "\x03"));
       await page.getByRole("button", { name: "关闭对话框" }).click();
-      await page.getByRole("dialog").waitFor({ state: "hidden" });
+      await page.getByRole("dialog").waitFor({ state: "detached" });
       await page.getByRole("button", { name: "卸载设备", exact: true }).click();
       await page.getByLabel("管理员密码", { exact: true }).fill("fixture-password");
       await page.getByRole("button", { name: "确认卸载此设备", exact: true }).click();
@@ -645,7 +645,7 @@ try {
       await page.getByRole("button", { name: "取消等待", exact: true }).click();
       await page.getByText("已取消", { exact: true }).waitFor();
       await page.getByRole("button", { name: "关闭对话框" }).click();
-      await page.getByRole("dialog").waitFor({ state: "hidden" });
+      await page.getByRole("dialog").waitFor({ state: "detached" });
       if (name === "chromium") {
         await mkdir(resolve(import.meta.dirname, "../.gocache/screens"), { recursive: true });
         const viewport = page.viewportSize();
