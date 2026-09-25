@@ -615,7 +615,7 @@ try {
         await page.getByRole("button", { name: "关闭对话框" }).click();
         await page.getByRole("dialog").waitFor({ state: "hidden" });
         await page.getByRole("button", { name: "卸载设备", exact: true }).click();
-        await page.getByText("卸载开始后不能撤销。", { exact: false }).waitFor();
+        await page.locator("dialog[open]").getByText("卸载开始后不能撤销。", { exact: false }).waitFor();
         await page.getByRole("button", { name: "关闭对话框" }).click();
         await page.getByRole("dialog").waitFor({ state: "hidden" });
       }
