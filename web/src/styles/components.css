@@ -1102,59 +1102,210 @@ tbody tr:hover td {
 
 .probe-list {
   display: grid;
-  gap: 12px;
+  gap: 0;
+  overflow-x: auto;
 }
 .probe-list .probe {
-  padding: 18px 22px;
+  min-width: 1080px;
+  margin: 0;
+  padding: 18px 0 16px;
+  border-radius: 0;
+  background: transparent;
+  background-image: none;
+  box-shadow: inset 0 1px 0 var(--color-line-faint);
+}
+.probe-head {
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) minmax(220px, 280px) 1fr;
+  align-items: center;
+  gap: 16px;
+  min-width: 1080px;
+  margin-bottom: 12px;
+}
+.probe-head-rate {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  width: fit-content;
   min-width: 0;
+  padding: 9px 18px;
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--color-accent) 25%, var(--color-bg-4));
+  color: var(--color-ink);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .probe-row {
   display: grid;
   grid-template-columns:
-    minmax(180px, 1.2fr) minmax(220px, 1fr) minmax(230px, 1.3fr)
-    auto;
+    minmax(64px, 0.5fr) minmax(74px, 0.55fr) minmax(74px, 0.55fr)
+    minmax(168px, 1.1fr) minmax(100px, 0.72fr) minmax(140px, 0.92fr)
+    repeat(3, minmax(102px, 0.8fr)) auto;
   align-items: center;
-  gap: 24px;
+  gap: 12px;
+  min-width: 1080px;
 }
 .probe-name {
-  font-size: 17px;
+  display: block;
+  max-width: 100%;
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 20px;
   overflow-wrap: anywhere;
 }
-.probe-identity p {
-  margin: 6px 0;
-}
-.probe-network.metrics {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px 18px;
-  margin: 0;
-}
-.probe-network dd {
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
+.probe-name-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 14px;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 999px;
+  color: var(--color-accent-bright);
+  background: color-mix(in oklab, var(--color-accent-soft) 42%, transparent);
+  font-weight: 600;
   white-space: nowrap;
 }
-.probe-resources {
+.probe-name-chip > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.probe-name-chip small {
+  flex: none;
+  color: var(--color-ink-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.probe-identity p {
+  margin: 6px 0 0;
+}
+.probe-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-ink-muted);
+}
+.probe-status-square {
+  display: inline-block;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 6px;
+  background: var(--color-line-strong);
+  box-shadow: inset 0 0 0 1px var(--color-line);
+}
+.probe-status-square[data-live="true"] {
+  background: var(--color-success);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--color-success) 65%, white);
+}
+.probe-place {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.probe-cell,
+.probe-network {
+  min-width: 0;
+  min-height: 68px;
+}
+.probe-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+.probe-label {
+  display: block;
+  color: var(--color-ink-muted);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.probe-state-value {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+}
+.probe-location-cell .location-flag {
+  padding: 7px 12px;
+  border-radius: 6px;
+  background: var(--color-bg-4);
+}
+.probe-empty {
+  color: var(--color-ink-subtle);
+  font-size: 18px;
+}
+.probe-uptime strong {
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.probe-network {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+.probe-rate {
+  padding: 8px 12px;
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--color-accent) 25%, var(--color-bg-4));
+}
+.probe-network-values {
   display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.probe-network-values span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.probe-network-values b {
+  display: inline-block;
+  width: 17px;
+  color: var(--color-ink-muted);
+  font-weight: 600;
+}
+.probe-traffic {
+  padding-inline: 8px;
+}
+.probe-resources {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   min-width: 0;
+  display: contents;
 }
 .probe-meter > div {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: 13px;
   gap: 6px;
 }
 .probe-meter {
   min-width: 0;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 .probe-meter strong {
   font-variant-numeric: tabular-nums;
-  font-weight: 500;
+  font-weight: 600;
 }
 .probe-meter small {
-  display: block;
+  display: none;
   font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
@@ -1164,24 +1315,25 @@ tbody tr:hover td {
 .meter-unknown {
   display: block;
   width: 100%;
-  height: 7px;
-  margin: 5px 0;
-  border: 0;
-  border-radius: 10px;
+  height: 32px;
+  margin: 5px 0 0;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 7px;
   background: var(--color-hover);
 }
 .probe-meter meter::-webkit-meter-bar {
   background: var(--color-hover);
   border: 0;
-  height: 7px;
+  border-radius: 6px;
+  height: 30px;
 }
 .probe-meter meter::-webkit-meter-optimum-value {
   background: var(--color-accent);
-  border-radius: 10px;
+  border-radius: 6px;
 }
 .probe-meter meter::-moz-meter-bar {
   background: var(--color-accent);
-  border-radius: 10px;
+  border-radius: 6px;
 }
 .probe-meter meter.high::-webkit-meter-optimum-value {
   background: #dc6b36;
@@ -1192,6 +1344,7 @@ tbody tr:hover td {
 .probe-actions {
   display: grid;
   gap: 8px;
+  justify-items: end;
 }
 .probe-actions button {
   padding: 6px 12px;
@@ -1228,21 +1381,68 @@ dialog:has(.web-terminal) {
   overflow: hidden;
 }
 @media (max-width: 1200px) {
+  .probe-head {
+    min-width: 0;
+  }
   .probe-row {
-    grid-template-columns: minmax(150px, 1fr) minmax(200px, 1fr);
+    grid-template-columns: repeat(4, minmax(120px, 1fr));
     gap: 16px;
+    min-width: 0;
+  }
+  .probe-list .probe {
+    min-width: 0;
+    padding-inline: 0;
+  }
+  .probe-rate,
+  .probe-traffic,
+  .probe-resources,
+  .probe-actions {
+    grid-column: 1 / -1;
+  }
+  .probe-resources {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .probe-rate,
+  .probe-traffic {
+    min-height: 68px;
   }
   .probe-actions {
     display: flex;
     justify-content: flex-end;
+    flex-direction: row;
   }
 }
 @media (max-width: 600px) {
   .probe-list .probe {
     padding: 16px;
+    border-radius: var(--radius-xl);
+    background: var(--color-bg-1);
+    box-shadow: inset 0 1px 0 var(--color-highlight);
   }
   .probe-row {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .probe-head {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .probe-head-rate {
+    min-width: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
+  .probe-identity,
+  .probe-rate,
+  .probe-traffic,
+  .probe-resources,
+  .probe-actions {
+    grid-column: 1 / -1;
+  }
+  .probe-resources {
+    grid-template-columns: 1fr;
   }
   .probe-details summary span {
     display: block;

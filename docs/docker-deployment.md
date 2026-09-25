@@ -144,7 +144,7 @@ chmod 600 config/payments.json
 
 ## 离线安装和升级
 
-从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.7_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
+从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.8_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
 
 ```sh
 sudo bash install-docker.sh --bundle /path/to/downloads

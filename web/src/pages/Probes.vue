@@ -107,6 +107,9 @@ const groupNames = computed(() =>
 function nodeTitle(p: Probe) {
   return p.node_name || names.value[p.node_id] || p.node_id;
 }
+function nodeShortID(p: Probe) {
+  return p.node_id.length > 12 ? `${p.node_id.slice(0, 8)}…` : p.node_id;
+}
 function groupLabel(p: Probe) {
   return (p.group_ids || []).map((id) => groupNames.value[id] || id).join("、");
 }
@@ -258,21 +261,14 @@ onUnmounted(() => {
         class="card probe"
         :data-status="status(p)"
       >
-        <div class="probe-row">
+        <div class="probe-head">
           <div class="probe-identity">
             <h2 class="probe-name">
-              <LocationFlag
-                :code="p.location?.country_code"
-                :name="p.location?.country_name"
-              />{{ nodeTitle(p) }}
+              <span class="probe-name-chip" :title="p.node_id">
+                <span>{{ nodeTitle(p) }}</span>
+                <small>ID: {{ nodeShortID(p) }}</small>
+              </span>
             </h2>
-            <p class="small probe-status">
-              <span
-                class="live-dot"
-                :data-live="String(status(p) === '在线')"
-                aria-hidden="true"
-              />{{ status(p) }} · 运行 {{ uptime(p.uptime_seconds) }}
-            </p>
             <p
               v-if="p.location?.country_name || groupLabel(p)"
               class="small muted probe-place"
@@ -287,24 +283,79 @@ onUnmounted(() => {
               >
             </p>
           </div>
-          <dl class="metrics probe-network">
-            <div>
-              <dt>↑ 上行速度</dt>
-              <dd>{{ formatBytes(p.upload_bps, "/s") }}</dd>
+          <div class="probe-head-rate">
+            <span
+              ><b aria-hidden="true">↑</b
+              ><span>{{ formatBytes(p.upload_bps, "/s") }}</span></span
+            >
+            <span
+              ><b aria-hidden="true">↓</b
+              ><span>{{ formatBytes(p.download_bps, "/s") }}</span></span
+            >
+          </div>
+        </div>
+        <div class="probe-row">
+          <div class="probe-cell probe-state-cell">
+            <span class="probe-label">状态</span>
+            <span class="probe-state-value">
+              <span
+                class="probe-status-square"
+                :data-live="String(status(p) === '在线')"
+                aria-hidden="true"
+              />
+              <span class="sr-only">{{ status(p) }}</span>
+            </span>
+          </div>
+          <div class="probe-cell probe-location-cell">
+            <span class="probe-label">v4 区域</span>
+            <LocationFlag
+              v-if="p.location?.country_code"
+              :code="p.location.country_code"
+              :name="p.location.country_name"
+              :size="26"
+            />
+            <span v-else class="probe-empty">—</span>
+          </div>
+          <div class="probe-cell probe-location-cell">
+            <span class="probe-label">v6 区域</span>
+            <LocationFlag
+              v-if="p.location?.country_code"
+              :code="p.location.country_code"
+              :name="p.location.country_name"
+              :size="26"
+            />
+            <span v-else class="probe-empty">—</span>
+          </div>
+          <div class="metrics probe-network probe-rate">
+            <span class="probe-label">速率</span>
+            <div class="probe-network-values">
+              <span
+                ><b aria-hidden="true">↑</b
+                ><span>{{ formatBytes(p.upload_bps, "/s") }}</span></span
+              >
+              <span
+                ><b aria-hidden="true">↓</b
+                ><span>{{ formatBytes(p.download_bps, "/s") }}</span></span
+              >
             </div>
-            <div>
-              <dt>↓ 下行速度</dt>
-              <dd>{{ formatBytes(p.download_bps, "/s") }}</dd>
+          </div>
+          <div class="probe-cell probe-uptime">
+            <span class="probe-label">开机时长</span>
+            <strong>{{ uptime(p.uptime_seconds) }}</strong>
+          </div>
+          <div class="metrics probe-network probe-traffic">
+            <span class="probe-label">流量</span>
+            <div class="probe-network-values">
+              <span
+                ><b aria-hidden="true">↑</b
+                ><span>{{ formatBytes(p.upload_total ?? null) }}</span></span
+              >
+              <span
+                ><b aria-hidden="true">↓</b
+                ><span>{{ formatBytes(p.download_total ?? null) }}</span></span
+              >
             </div>
-            <div>
-              <dt>↑ 累计上行</dt>
-              <dd>{{ formatBytes(p.upload_total ?? null) }}</dd>
-            </div>
-            <div>
-              <dt>↓ 累计下行</dt>
-              <dd>{{ formatBytes(p.download_total ?? null) }}</dd>
-            </div>
-          </dl>
+          </div>
           <div class="probe-resources">
             <ProbeMeter
               label="CPU"
