@@ -66,10 +66,19 @@ interface Node {
   capabilities?: string[];
 }
 const nodes = ref<Node[]>([]);
-const operation = ref<{ node: Node; mode: "shell" | "uninstall" }>();
+const operation = ref<{
+  seq: number;
+  node: Node;
+  mode: "shell" | "uninstall";
+}>();
 const canManage = computed(() => adminSite && state.user?.role === "admin");
+// 每次 act() 换一个 seq，让 <ProbeActions> 重新挂载。Modal 只在挂载时调用
+// showModal()，复用同一个实例只会换掉 mode 这个 prop，新内容就渲染进一个从
+// 没打开过的 <dialog> 里 —— 用户看到的是「点了按钮，弹窗没出来」。
+let operationSeq = 0;
 function act(p: Probe, mode: "shell" | "uninstall") {
   operation.value = {
+    seq: ++operationSeq,
     node: nodes.value.find((n) => n.id === p.node_id) || {
       id: p.node_id,
       name: nodeTitle(p),
@@ -476,6 +485,7 @@ onUnmounted(() => {
     <ProbeHistory :nodes="nodes" />
     <ProbeActions
       v-if="operation"
+      :key="operation.seq"
       :node="operation.node"
       :mode="operation.mode"
       @close="operation = undefined"
