@@ -12,6 +12,10 @@ type User struct {
 	IdentityGroupID   string `json:"identity_group_id"`
 	IdentityGroupName string `json:"identity_group_name,omitempty"`
 	Disabled          bool   `json:"disabled"`
+	// TokenGroups 是本次请求所用凭据自带的设备组范围（空 = 不限制，按账号自己
+	// 的可见范围）。它只在一次请求里有意义，因此不进 JSON：既不该出现在会话
+	// 响应里，也不该被当作账号属性存下来。范围只会变窄 —— 它是账号权限的子集。
+	TokenGroups []string `json:"-"`
 }
 
 // UserCreated includes the initial password exactly once in the create response.
@@ -122,20 +126,23 @@ type Rule struct {
 	ProxyProtocol     *ProxyProtocol `json:"proxy_protocol,omitempty"`
 	ID                string         `json:"id"`
 	UserID            string         `json:"user_id"`
-	Name              string         `json:"name"`
-	NodeID            string         `json:"node_id"`
-	GroupID           string         `json:"group_id"`
-	Network           string         `json:"network"`
-	Transport         string         `json:"transport"`
-	Listen            string         `json:"listen"`
-	Target            string         `json:"target"`
-	Enabled           bool           `json:"enabled"`
-	Version           int64          `json:"version"`
-	BlockedProtocols  []string       `json:"blocked_protocols"`
-	Tunnel            *Tunnel        `json:"tunnel,omitempty"`
-	Lease             *Lease         `json:"lease,omitempty"`
-	Backends          []Backend      `json:"backends,omitempty"`
-	SharedTLS         *SharedTLS     `json:"shared_tls,omitempty"`
+	// Category 是运营方自己定的规则分类（「日本线路」「测试」之类）。它存在
+	// cp_rules.category 这一列里，不进发给 Agent 的配置，改动也不需要 Agent 重新应用。
+	Category         string     `json:"category,omitempty"`
+	Name             string     `json:"name"`
+	NodeID           string     `json:"node_id"`
+	GroupID          string     `json:"group_id"`
+	Network          string     `json:"network"`
+	Transport        string     `json:"transport"`
+	Listen           string     `json:"listen"`
+	Target           string     `json:"target"`
+	Enabled          bool       `json:"enabled"`
+	Version          int64      `json:"version"`
+	BlockedProtocols []string   `json:"blocked_protocols"`
+	Tunnel           *Tunnel    `json:"tunnel,omitempty"`
+	Lease            *Lease     `json:"lease,omitempty"`
+	Backends         []Backend  `json:"backends,omitempty"`
+	SharedTLS        *SharedTLS `json:"shared_tls,omitempty"`
 }
 
 // Lease is a finite node allocation; expired/unallocated bytes cannot be spent.
@@ -259,8 +266,12 @@ type GeoLocation struct {
 // 一台设备一条记录，记录里同时带 IPv4 与 IPv6：有哪一族给哪一族，两族都有就
 // 都给。客户脚本要的是「我那组机器现在连哪个地址」，所以这里只留设备名与两个
 // 地址 —— 机器被替换或换 IP 都体现在同一份列表里，不需要另外的接口或身份字段。
+//
+// 「设备名」是**设备组名**：机器自报的 ip-172-… 这种主机名，客户和运营方都认
+// 不出来，他们认的是设备组。所以字段叫 group_name 而不是 node_name —— 名字和
+// 内容对不上，比改一次字段名更贵。
 type DeviceIP struct {
-	NodeName string `json:"node_name"`
-	IPv4     string `json:"ipv4,omitempty"`
-	IPv6     string `json:"ipv6,omitempty"`
+	GroupName string `json:"group_name"`
+	IPv4      string `json:"ipv4,omitempty"`
+	IPv6      string `json:"ipv6,omitempty"`
 }

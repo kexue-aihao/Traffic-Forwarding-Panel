@@ -387,6 +387,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/nodes", s.RequireUser(s.nodes))
 	mux.HandleFunc("POST /api/v1/nodes/enrollment", s.admin(s.enroll))
 	mux.HandleFunc("GET /api/v1/rules", s.RequireUser(s.rules))
+	mux.HandleFunc("POST /api/v1/rules/category", s.RequireUser(s.setRuleCategory))
 	mux.HandleFunc("POST /api/v1/rules", s.RequireUser(s.saveRule))
 	mux.HandleFunc("PUT /api/v1/rules/{id}", s.RequireUser(s.saveRule))
 	mux.HandleFunc("DELETE /api/v1/rules/{id}", s.RequireUser(s.deleteRule))

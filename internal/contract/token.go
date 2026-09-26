@@ -19,6 +19,8 @@ type APIToken struct {
 	ExpiresAt  *time.Time `json:"expires_at"`
 	Permanent  bool       `json:"permanent"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	// GroupIDs 是这把凭据被限定到的设备组；空表示不限制（跟随账号）。
+	GroupIDs []string `json:"group_ids,omitempty"`
 }
 
 // TokenScopeOwnerResources 是当前唯一的作用域：只能操作凭据持有者自己的资源。

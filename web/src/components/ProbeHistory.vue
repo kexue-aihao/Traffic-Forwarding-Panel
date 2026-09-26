@@ -39,12 +39,13 @@ interface Metric {
   unit: "" | "%" | "MB/s";
   series: Series[];
 }
-// address 是这台机器当前的公网 IPv4。取不到（普通账号看不到地址）时退回名字。
+// label 由探针页面算好：管理员看到的是机器当前的公网 IPv4，用户视角下是设备组名
+// （同组多台时带序号）。这里只在它缺失时退回机器名。
 const props = defineProps<{
-  nodes: { id: string; name: string; address?: string }[];
+  nodes: { id: string; name: string; label?: string }[];
 }>();
-function nodeLabel(node: { name: string; address?: string }) {
-  return node.address || node.name;
+function nodeLabel(node: { name: string; label?: string }) {
+  return node.label || node.name;
 }
 const route = useRoute();
 const router = useRouter();

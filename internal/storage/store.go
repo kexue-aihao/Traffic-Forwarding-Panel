@@ -464,6 +464,20 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=10").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		// 转发规则的分类：规则多了要能分组看、批量归堆。放在列里而不是 payload 里 ——
+		// 筛选得在 SQL 里做（payload 里掏字段没法跨三种数据库），而且这一项对 Agent
+		// 没有意义，不该混进发给它的配置。
+		if err = EnsureColumn(ctx, conn, s.Dialect, "cp_rules", "category", "VARCHAR(64) NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(10)"); err != nil {
+			return err
+		}
+	}
 	if s.Dialect == "sqlite" {
 		_, err = conn.ExecContext(ctx, "COMMIT")
 	}
@@ -597,6 +611,9 @@ var schema = []string{
 	`CREATE TABLE IF NOT EXISTS cp_users(id VARCHAR(64) PRIMARY KEY, username VARCHAR(190) NOT NULL UNIQUE, password_hash VARCHAR(190) NOT NULL, role VARCHAR(32) NOT NULL, identity_group_id VARCHAR(64) NOT NULL DEFAULT '', disabled INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE TABLE IF NOT EXISTS cp_sessions(token_hash VARCHAR(64) PRIMARY KEY, user_id VARCHAR(64) NOT NULL, expires_at BIGINT NOT NULL, FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
 	`CREATE TABLE IF NOT EXISTS cp_tokens(id VARCHAR(64) PRIMARY KEY,token_hash VARCHAR(64) NOT NULL UNIQUE,user_id VARCHAR(64) NOT NULL,name VARCHAR(190) NOT NULL,expires_at BIGINT NOT NULL,prefix VARCHAR(16) NOT NULL DEFAULT '',created_at BIGINT NOT NULL DEFAULT 0,last_used_at BIGINT NOT NULL DEFAULT 0,FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
+	// 凭据可以只覆盖账号有权访问的一部分设备组。没有记录 = 不限制（沿用账号
+	// 自己的可见范围），所以升级上来的旧凭据行为不变。
+	`CREATE TABLE IF NOT EXISTS cp_token_groups(token_id VARCHAR(64) NOT NULL,group_id VARCHAR(64) NOT NULL,PRIMARY KEY(token_id,group_id))`,
 	`CREATE TABLE IF NOT EXISTS cp_groups(id VARCHAR(64) PRIMARY KEY, name VARCHAR(190) NOT NULL, payload TEXT NOT NULL, version BIGINT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS cp_group_users(group_id VARCHAR(64) NOT NULL, user_id VARCHAR(64) NOT NULL, PRIMARY KEY(group_id,user_id), FOREIGN KEY(group_id) REFERENCES cp_groups(id), FOREIGN KEY(user_id) REFERENCES cp_users(id))`,
 	`CREATE TABLE IF NOT EXISTS cp_group_identity_groups(group_id VARCHAR(64) NOT NULL,identity_group_id VARCHAR(64) NOT NULL,PRIMARY KEY(group_id,identity_group_id),FOREIGN KEY(group_id) REFERENCES cp_groups(id),FOREIGN KEY(identity_group_id) REFERENCES cp_identity_groups(id))`,

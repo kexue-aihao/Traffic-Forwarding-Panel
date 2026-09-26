@@ -36,11 +36,11 @@ func (s *Server) createDiagnostic(w http.ResponseWriter, r *http.Request) {
 		if err := json.Unmarshal([]byte(raw), &rule); err != nil {
 			return err
 		}
-		var access int
-		if err := tx.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?`), rule.GroupID, actor.ID).Scan(&access); err != nil {
+		visible, err := s.groupVisible(r.Context(), tx, actor, rule.GroupID)
+		if err != nil {
 			return err
 		}
-		if actor.Role != "admin" && access == 0 {
+		if !visible {
 			return sql.ErrNoRows
 		}
 		if rule.Network != "tcp" {
@@ -97,8 +97,8 @@ func (s *Server) diagnostic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if actor.Role != "admin" {
-		var n int
-		if s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?`), group, actor.ID).Scan(&n) != nil || n == 0 {
+		visible, err := s.groupVisible(r.Context(), s.Store.DB, actor, group)
+		if err != nil || !visible {
 			fail(w, 404, "diagnostic not found")
 			return
 		}

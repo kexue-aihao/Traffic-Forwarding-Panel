@@ -1035,6 +1035,32 @@ tbody tr:hover td {
   max-width: 320px;
 }
 
+/* 批量操作条：出现在列表上方、贴着搜索栏 —— 它是一次性的动作，不该像卡片标题
+   那样抢位置，所以只是一条矮行。 */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+}
+.bulk-bar label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-ink-muted);
+}
+.bulk-bar input {
+  max-width: 200px;
+}
+/* 勾选列只占一个方框的宽度。 */
+.select-column {
+  width: 1%;
+  white-space: nowrap;
+}
+
 .pagination {
   display: flex;
   align-items: center;

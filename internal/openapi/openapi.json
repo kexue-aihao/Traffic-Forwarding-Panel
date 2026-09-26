@@ -38,6 +38,19 @@
               }
             ]
           },
+          "group_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "type": "string"
           },
@@ -457,18 +470,18 @@
       "DeviceIP": {
         "additionalProperties": false,
         "properties": {
+          "group_name": {
+            "type": "string"
+          },
           "ipv4": {
             "type": "string"
           },
           "ipv6": {
             "type": "string"
-          },
-          "node_name": {
-            "type": "string"
           }
         },
         "required": [
-          "node_name"
+          "group_name"
         ],
         "type": "object"
       },
@@ -3621,6 +3634,9 @@
               }
             ]
           },
+          "category": {
+            "type": "string"
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -3721,6 +3737,44 @@
           "enabled",
           "version",
           "blocked_protocols"
+        ],
+        "type": "object"
+      },
+      "RuleCategory": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids",
+          "category"
+        ],
+        "type": "object"
+      },
+      "RuleCategoryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "updated": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updated",
+          "category"
         ],
         "type": "object"
       },
@@ -4160,6 +4214,12 @@
             "format": "date-time",
             "type": "string"
           },
+          "group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "name": {
             "type": "string"
           },
@@ -4210,6 +4270,19 @@
               {
                 "format": "date-time",
                 "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "group_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
@@ -6075,7 +6148,7 @@
             "ownerBearer": []
           }
         ],
-        "summary": "Issue owner-resources token; expiry within one year",
+        "summary": "Issue owner-resources token; expiry within one year, optional group_ids narrow it to those device groups",
         "x-role": "user"
       }
     },
@@ -10306,6 +10379,68 @@
         "x-role": "user"
       }
     },
+    "/rules/category": {
+      "post": {
+        "operationId": "post_rules_category",
+        "parameters": [
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleCategory"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleCategoryResult"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "ownerBearer": []
+          }
+        ],
+        "summary": "Classify up to 500 rules at once; the category is control-plane only and never reaches the Agent",
+        "x-role": "user"
+      }
+    },
     "/rules/{id}": {
       "delete": {
         "operationId": "delete_rules_id",
@@ -11430,7 +11565,7 @@
             "cookieSession": []
           }
         ],
-        "summary": "Issue an API token for an account; the secret is returned exactly once",
+        "summary": "Issue an API token for an account; the secret is returned exactly once, optional group_ids narrow it to those device groups",
         "x-role": "admin"
       }
     },

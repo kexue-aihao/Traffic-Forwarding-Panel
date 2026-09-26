@@ -161,12 +161,12 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 	// 可选按设备组收窄：探针页面的历史选择器要和探针本身看到同一批机器。
 	group := r.URL.Query().Get("group_id")
 	if group != "" && u.Role != "admin" {
-		var member int
-		if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?`), group, u.ID).Scan(&member); e != nil {
+		member, e := s.groupVisible(r.Context(), s.Store.DB, u, group)
+		if e != nil {
 			fail(w, 500, "query failed")
 			return
 		}
-		if member != 1 {
+		if !member {
 			fail(w, 403, "该设备组不在你的授权范围内")
 			return
 		}
@@ -174,8 +174,9 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 	where := ""
 	args := []any{}
 	if u.Role != "admin" {
-		where = ` WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE ng.node_id=n.id AND iu.id=?)`
+		where = ` WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE ng.node_id=n.id AND iu.id=?`
 		args = append(args, u.ID)
+		where += tokenGroupScope(u, "gig.group_id", &args) + ")"
 	}
 	if group != "" {
 		clause := `EXISTS(SELECT 1 FROM cp_node_groups ng2 WHERE ng2.node_id=n.id AND ng2.group_id=?)`
@@ -198,7 +199,10 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 	// 出来，普通用户建规则时选不到入口。
 	authorized := map[string]bool{}
 	if u.Role != "admin" {
-		rows, e := s.Store.DB.QueryContext(r.Context(), s.q(`SELECT gig.group_id FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE iu.id=?`), u.ID)
+		// 这台账号能看到哪些组，再收窄到凭据自带的范围。
+		args := []any{u.ID}
+		query := `SELECT gig.group_id FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE iu.id=?` + tokenGroupScope(u, "gig.group_id", &args)
+		rows, e := s.Store.DB.QueryContext(r.Context(), s.q(query), args...)
 		if e != nil {
 			fail(w, 500, "query failed")
 			return
@@ -474,8 +478,9 @@ func (s *Server) visibleNodes(ctx context.Context, u contract.User, group string
 	query := "SELECT n.id,n.payload,n.last_seen FROM cp_nodes n WHERE 1=1"
 	args := []any{}
 	if u.Role != "admin" {
-		query = "SELECT n.id,n.payload,n.last_seen FROM cp_nodes n WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE ng.node_id=n.id AND iu.id=?)"
+		query = "SELECT n.id,n.payload,n.last_seen FROM cp_nodes n WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE ng.node_id=n.id AND iu.id=?"
 		args = append(args, u.ID)
+		query += tokenGroupScope(u, "gig.group_id", &args) + ")"
 	}
 	query += " AND " + liveNodeSQL
 	rows, e := s.Store.DB.QueryContext(ctx, s.q(query), args...)
@@ -502,8 +507,9 @@ func (s *Server) visibleNodes(ctx context.Context, u contract.User, group string
 	args = []any{}
 	filters := []string{}
 	if u.Role != "admin" {
-		filters = append(filters, "EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=cp_node_groups.group_id AND iu.id=?)")
+		clause := "EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=cp_node_groups.group_id AND iu.id=?"
 		args = append(args, u.ID)
+		filters = append(filters, clause+tokenGroupScope(u, "gig.group_id", &args)+")")
 	}
 	if group != "" {
 		filters = append(filters, "group_id=?")
@@ -557,11 +563,11 @@ func (s *Server) visibleProbes(ctx context.Context, u contract.User, group strin
 		}
 	}
 	if group != "" && u.Role != "admin" {
-		var member int
-		if e := s.Store.DB.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?`), group, u.ID).Scan(&member); e != nil {
+		member, e := s.groupVisible(ctx, s.Store.DB, u, group)
+		if e != nil {
 			return nil, e
 		}
-		if member != 1 {
+		if !member {
 			return nil, errGroupForbidden
 		}
 	}
@@ -699,8 +705,8 @@ func (s *Server) probeEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if group != "" && u.Role != "admin" {
-		var member int
-		if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?`), group, u.ID).Scan(&member); e != nil || member != 1 {
+		member, e := s.groupVisible(r.Context(), s.Store.DB, u, group)
+		if e != nil || !member {
 			fail(w, 403, "该设备组不在你的授权范围内")
 			return
 		}

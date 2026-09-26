@@ -190,7 +190,7 @@ const server = createServer(async (req, res) => {
       return json({ code: "not_implemented", error: "该支付协议未实现此操作" }, 500);
     }
     if (path === "/rules" && req.method === "POST") {
-      rules.push({ ...body, id: "r1", version: 1 });
+      rules.push({ ...body, id: "r1", version: 1, category: "" });
       return json(rules.at(-1));
     }
     if (path === "/rules/r1" && req.method === "DELETE") {
@@ -269,6 +269,28 @@ const server = createServer(async (req, res) => {
         return;
       }
       return json({ items, total: items.length });
+    }
+    // 规则分类：批量归类与按分类筛选，形状与真实后端一致。
+    if (path === "/rules/category" && req.method === "POST") {
+      const ids = new Set(body.ids || []);
+      let updated = 0;
+      for (const rule of rules) {
+        if (!ids.has(rule.id)) continue;
+        rule.category = String(body.category || "");
+        updated++;
+      }
+      return json({ updated, category: String(body.category || "") });
+    }
+    if (path === "/rules" && req.method === "GET") {
+      const wanted = url.searchParams.get("category");
+      const uncategorized = url.searchParams.get("uncategorized") === "true";
+      const items = rules.filter((rule) =>
+        wanted ? rule.category === wanted : uncategorized ? !rule.category : true,
+      );
+      const categories = [
+        ...new Set(rules.map((rule) => rule.category).filter(Boolean)),
+      ];
+      return json({ items, total: items.length, categories });
     }
     if (path === "/auto-renew") return json({ enabled: false });
     const maps = {
@@ -612,6 +634,22 @@ try {
         .getByText("<img src=x onerror=alert(1)>", { exact: true })
         .waitFor();
       assert.equal(await page.locator("td img").count(), 0);
+      // 规则分类：多选当前页的规则归到一个分类下，列表与筛选器都要跟着走。
+      const ruleRow = page.locator("tr", { hasText: "<img src=x onerror=alert(1)>" });
+      await ruleRow.getByRole("checkbox").check();
+      await page.getByLabel("规则分类", { exact: true }).fill("日本线路");
+      await page.getByRole("button", { name: "应用分类", exact: true }).click();
+      await page.getByText("已把 1 条规则归到「日本线路」。", { exact: false }).waitFor();
+      await ruleRow.getByText("日本线路", { exact: true }).waitFor();
+      await page.getByLabel("规则分类筛选").selectOption("日本线路");
+      await page.waitForURL(/category=/);
+      // 等列表按新筛选渲染完再数行：URL 变了不代表请求回来了。
+      await page.locator("tbody tr").first().waitFor();
+      assert.equal(await page.locator("tbody tr").count(), 1, "按分类筛选应当只剩这一条");
+      await page.getByLabel("规则分类筛选").selectOption("__uncategorized__");
+      await page.getByText("暂无数据。", { exact: true }).waitFor();
+      await page.getByLabel("规则分类筛选").selectOption("");
+      await page.locator("tbody tr").first().waitFor();
       // 实时探针是独立窗口：导航项新开标签页，外壳里不再有嵌入式版本。
       {
         const probeLink = page.getByRole("link", { name: "实时探针", exact: true });
@@ -717,11 +755,31 @@ try {
         1,
         "用户视角仍然看得到位置图标",
       );
+      // 用户视角看不到机器地址，历史节点改用设备组名认机器：这一组下有两台，
+      // 所以带序号区分 —— 只写组名的话两条选项读起来一模一样。
+      assert.deepEqual(
+        await page.getByLabel("历史节点").locator("option").allTextContents(),
+        ["Fixture group-1", "Fixture group-2"],
+      );
+      // 能不能对机器动手也是用户视角的一部分：WebSSH 与卸载在用户视角下不存在，
+      // 否则管理员预览到的不是用户真正看到的那一屏。
+      assert.equal(await page.getByRole("button", { name: "WebSSH" }).count(), 0);
+      assert.equal(
+        await page.getByRole("button", { name: "卸载设备", exact: true }).count(),
+        0,
+      );
       await pickOption(page, "视角", "admin");
       assert.equal(
         await page.locator(".probe-location-cell").nth(0).locator(".probe-ip").innerText(),
         "203.0.113.8",
       );
+      // 管理员看得到地址，就按地址叫它；没上报地址的那台退回机器名。
+      assert.deepEqual(
+        await page.getByLabel("历史节点").locator("option").allTextContents(),
+        ["203.0.113.8", "Offline fixture node"],
+      );
+      // 切回管理员，操作按钮跟着回来。
+      await page.getByRole("button", { name: "WebSSH" }).first().waitFor();
       assert.equal(
         await page.locator(".probe-place").first().innerText(),
         "位置 中国香港·Hong Kong · 设备组 Fixture group",

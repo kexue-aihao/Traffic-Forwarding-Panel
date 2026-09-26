@@ -24,8 +24,9 @@ func (s *Server) exits(w http.ResponseWriter, r *http.Request) {
 	where := ""
 	args := []any{}
 	if actor.Role != "admin" {
-		where = " WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=e.group_id AND iu.id=?)"
+		where = " WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=e.group_id AND iu.id=?"
 		args = append(args, actor.ID)
+		where += tokenGroupScope(actor, "gig.group_id", &args) + ")"
 	}
 	var total int
 	if err := s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT COUNT(*) FROM cp_exits e"+where), args...).Scan(&total); err != nil {

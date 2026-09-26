@@ -234,8 +234,11 @@ menu() {
         printf '  0) 退出\n'
         read -r -p '请选择 [0-5]：' choice || return 0
         case "$choice" in
-            1) run_installer ;;
-            2) run_installer ;;
+            1 | 2)
+                # 失败要说话：静默回到菜单会让人以为「升级没反应」。
+                run_installer ||
+                    printf '安装或升级未完成（退出码 %s），服务保持原状。\n' "$?" >&2
+                ;;
             3)
                 read -r -p "账号 [$admin]：" username
                 [[ -z $username ]] || admin=$username

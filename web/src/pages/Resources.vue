@@ -37,6 +37,15 @@ const total = ref(0);
 const loading = ref(false);
 const error = ref("");
 const search = ref(String(route.query.q || ""));
+// 规则分类：运营方自己定的分组。筛选值走 URL（和搜索一样），选中的规则只活到
+// 下一次加载 —— 换页之后还留着一批看不见的选中项，是最容易误改的东西。
+const UNCATEGORIZED = "__uncategorized__";
+const categoryFilter = ref(String(route.query.category || ""));
+const ruleCategories = ref<string[]>([]);
+const checkedRules = ref<string[]>([]);
+const categoryDraft = ref("");
+const categoryBusy = ref(false);
+const categoryError = ref("");
 const page = computed(() => Math.max(1, Number(route.query.page) || 1));
 const canManage = computed(() => adminSite && state.user?.role === "admin");
 const allowed = computed(
@@ -120,6 +129,18 @@ interface UserToken {
 const tokenUser = ref<Row | null>(null);
 const userTokens = ref<UserToken[]>([]);
 const issueTokenName = ref("");
+// 签给谁的凭据可以只覆盖他的部分设备组：范围只可能变窄，服务端还会按账号自己
+// 的授权再校验一次。
+const issueGroups = ref<string[]>([]);
+const issueGroupChoices = ref<Row[]>([]);
+async function loadIssueGroups() {
+  if (issueGroupChoices.value.length) return;
+  try {
+    issueGroupChoices.value = await choices("/groups");
+  } catch (e) {
+    formError.value = errorText(e);
+  }
+}
 const issuePermanent = ref(false);
 const issueTokenDays = ref(30);
 const issuedSecret = ref("");
@@ -129,6 +150,8 @@ async function openUserTokens(row: Row) {
   tokenUser.value = row;
   userTokens.value = [];
   issueTokenName.value = "";
+  issueGroups.value = [];
+  void loadIssueGroups();
   issuePermanent.value = false;
   issueTokenDays.value = 30;
   issuedSecret.value = "";
@@ -157,6 +180,7 @@ async function issueUserToken() {
       "POST",
       {
         name: issueTokenName.value,
+        ...(issueGroups.value.length ? { group_ids: [...issueGroups.value] } : {}),
         ...(issuePermanent.value
           ? { permanent: true }
           : {
@@ -446,11 +470,26 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const result = await api<{ items: Row[]; total: number }>(
-      `/${resource}?page=${page.value}&page_size=20&q=${encodeURIComponent(String(route.query.q || ""))}`,
+    // 分类筛选只有规则有；未分类用单独的参数表达，不给「空」编一个会和真实
+    // 分类撞车的取值。
+    let filter = "";
+    if (resource === "rules" && categoryFilter.value) {
+      filter =
+        categoryFilter.value === UNCATEGORIZED
+          ? "&uncategorized=true"
+          : `&category=${encodeURIComponent(categoryFilter.value)}`;
+    }
+    const result = await api<{
+      items: Row[];
+      total: number;
+      categories?: string[];
+    }>(
+      `/${resource}?page=${page.value}&page_size=20&q=${encodeURIComponent(String(route.query.q || ""))}${filter}`,
     );
     rows.value = result.items;
     total.value = result.total;
+    ruleCategories.value = result.categories || [];
+    checkedRules.value = [];
   } catch (e) {
     if (!(e instanceof DOMException && e.name === "AbortError"))
       error.value = errorText(e);
@@ -804,8 +843,53 @@ async function remove() {
 }
 function query(next: number) {
   void router.replace({
-    query: { q: search.value || undefined, page: String(next) },
+    query: {
+      q: search.value || undefined,
+      page: String(next),
+      category: categoryFilter.value || undefined,
+    },
   });
+}
+// 全选只覆盖当前这一页：跨页的「全选」在分页列表里没人能一眼看全。
+const allRulesChecked = computed(
+  () =>
+    rows.value.length > 0 && checkedRules.value.length === rows.value.length,
+);
+function toggleAllRules() {
+  checkedRules.value = allRulesChecked.value
+    ? []
+    : rows.value.map((row) => String(row.id));
+}
+// 模板里的 $event.target 是 EventTarget，取 checked 要在这里收窄一次。
+function toggleRuleFrom(id: string, event: Event) {
+  toggleRule(id, (event.target as HTMLInputElement).checked);
+}
+function toggleRule(id: string, checked: boolean) {
+  const next = new Set(checkedRules.value);
+  if (checked) next.add(id);
+  else next.delete(id);
+  checkedRules.value = [...next];
+}
+// 分类只是一个标签：服务端不会因此惊动节点，也不动规则版本。
+async function applyCategory(category: string) {
+  if (!checkedRules.value.length) return;
+  categoryBusy.value = true;
+  categoryError.value = "";
+  try {
+    const result = await api<{ updated: number }>("/rules/category", "POST", {
+      ids: checkedRules.value,
+      category,
+    });
+    notice(
+      `已把 ${result.updated} 条规则归到「${category || "未分类"}」。`,
+    );
+    categoryDraft.value = "";
+    await load();
+  } catch (e) {
+    categoryError.value = errorText(e);
+  } finally {
+    categoryBusy.value = false;
+  }
 }
 watch(() => route.query, load);
 onMounted(load);
@@ -887,7 +971,7 @@ function value(v: unknown, column: string) {
 }
 const columns = computed(() =>
   resource === "rules"
-    ? ["name", "transport", "listen", "target", "enabled", "version"]
+    ? ["name", "category", "transport", "listen", "target", "enabled", "version"]
     : resource === "groups"
         ? [
             "name",
@@ -922,6 +1006,7 @@ const labels: Record<string, string> = {
   target: "目标",
   enabled: "启用",
   version: "版本",
+  category: "分类",
   agent_version: "Agent 版本",
   last_seen: "最后心跳",
   desired_version: "期望版本",
@@ -986,7 +1071,51 @@ const labels: Record<string, string> = {
           aria-label="搜索资源"
           placeholder="搜索名称…"
         /><button>搜索</button><button type="button" @click="load">刷新</button>
+        <Select
+          v-if="resource === 'rules'"
+          :value="categoryFilter"
+          aria-label="规则分类筛选"
+          @change="
+            categoryFilter = $event;
+            query(1);
+          "
+        >
+          <option value="">全部分类</option>
+          <option :value="UNCATEGORIZED">未分类</option>
+          <option v-for="item in ruleCategories" :key="item" :value="item">
+            {{ item }}
+          </option>
+        </Select>
       </form>
+      <div
+        v-if="resource === 'rules' && checkedRules.length"
+        class="card bulk-bar"
+      >
+        <span>已选 {{ checkedRules.length }} 条</span>
+        <label
+          >归到分类<input
+            v-model="categoryDraft"
+            list="rule-categories"
+            maxlength="32"
+            aria-label="规则分类"
+            placeholder="留空即取消分类"
+        /></label>
+        <datalist id="rule-categories">
+          <option v-for="item in ruleCategories" :key="item" :value="item" />
+        </datalist>
+        <button
+          type="button"
+          class="primary"
+          :disabled="categoryBusy"
+          @click="applyCategory(categoryDraft.trim())"
+        >
+          应用分类
+        </button>
+        <button type="button" @click="checkedRules = []">取消选择</button>
+        <p v-if="categoryError" class="error" role="alert">
+          {{ categoryError }}
+        </p>
+      </div>
       <p v-if="error" role="alert" class="error">{{ error }}</p>
       <div class="card table-wrap" :aria-busy="loading">
         <p v-if="loading" class="empty">正在加载…</p>
@@ -994,6 +1123,14 @@ const labels: Record<string, string> = {
         <table v-else>
           <thead>
             <tr>
+              <th v-if="resource === 'rules'" class="select-column">
+                <input
+                  type="checkbox"
+                  aria-label="全选本页规则"
+                  :checked="allRulesChecked"
+                  @change="toggleAllRules"
+                />
+              </th>
               <th v-for="col in columns" :key="col">
                 {{ labels[col] || col }}
               </th>
@@ -1016,6 +1153,18 @@ const labels: Record<string, string> = {
               :key="String(row.id)"
               :class="{ 'sweep-in': highlighted === String(row.id) }"
             >
+              <td
+                v-if="resource === 'rules'"
+                class="select-column"
+                data-label="选择"
+              >
+                <input
+                  type="checkbox"
+                  :aria-label="`选择规则 ${row.name}`"
+                  :checked="checkedRules.includes(String(row.id))"
+                  @change="toggleRuleFrom(String(row.id), $event)"
+                />
+              </td>
               <td
                 v-for="col in columns"
                 :key="col"
@@ -1303,7 +1452,24 @@ const labels: Record<string, string> = {
               v-model="issuePermanent"
               type="checkbox"
             />永久有效（不过期）</label
-          ><label v-if="!issuePermanent"
+          ><fieldset v-if="issueGroupChoices.length">
+            <legend>限定设备组（可多选）</legend>
+            <label
+              v-for="item in issueGroupChoices"
+              :key="String(item.id)"
+              class="check"
+              ><input
+                v-model="issueGroups"
+                type="checkbox"
+                :value="String(item.id)"
+                :aria-label="`限定到 ${item.name}`"
+              />{{ item.name }}</label
+            >
+            <p class="small muted">
+              不勾选表示跟随该账号的全部授权；勾了之后这把凭据只覆盖这几个设备组。
+            </p>
+          </fieldset>
+          <label v-if="!issuePermanent"
             >有效天数<input
               v-model.number="issueTokenDays"
               type="number"

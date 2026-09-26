@@ -54,7 +54,7 @@ func (s *Server) deviceAddresses(w http.ResponseWriter, r *http.Request, list bo
 	}
 }
 
-// deviceRow 是排序用的中间形态：设备名可能重名，定序的最后一位得靠节点 id，
+// deviceRow 是排序用的中间形态：组名可能重名，定序的最后一位得靠节点 id，
 // 而 id 不上接口。
 type deviceRow struct {
 	item            contract.DeviceIP
@@ -79,8 +79,9 @@ func (s *Server) ownerDeviceIPs(ctx context.Context, u contract.User, group stri
 	query := `SELECT n.id,n.payload,g.id,g.payload FROM cp_nodes n JOIN cp_node_groups ng ON ng.node_id=n.id JOIN cp_groups g ON g.id=ng.group_id`
 	args := []any{}
 	if u.Role != "admin" {
-		query += ` WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=ng.group_id AND iu.id=?)`
+		query += ` WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=ng.group_id AND iu.id=?`
 		args = append(args, u.ID)
+		query += tokenGroupScope(u, "gig.group_id", &args) + ")"
 	}
 	if group != "" {
 		if len(args) == 0 {
@@ -108,9 +109,10 @@ func (s *Server) ownerDeviceIPs(ctx context.Context, u contract.User, group stri
 			continue
 		}
 		seen[nodeID+"\x00"+groupID] = true
-		var node contract.Node
-		json.Unmarshal([]byte(nodePayload), &node)
-		row := deviceRow{item: contract.DeviceIP{NodeName: node.Name}, groupID: groupID, nodeID: nodeID}
+		// 对外只给设备组名：客户脚本按组认机器，机器名是它自己报上来的主机名。
+		var group contract.Group
+		json.Unmarshal([]byte(groupPayload), &group)
+		row := deviceRow{item: contract.DeviceIP{GroupName: group.Name}, groupID: groupID, nodeID: nodeID}
 		// 地址取各家族最近一次的观测：两个都取，不做「优先 IPv4」的取舍 ——
 		// 取舍留给调用方，接口把机器实际有的地址照实给出。
 		s.mu.RLock()
@@ -131,8 +133,8 @@ func (s *Server) ownerDeviceIPs(ctx context.Context, u contract.User, group stri
 		if a.groupID != b.groupID {
 			return a.groupID < b.groupID
 		}
-		if a.item.NodeName != b.item.NodeName {
-			return a.item.NodeName < b.item.NodeName
+		if a.item.GroupName != b.item.GroupName {
+			return a.item.GroupName < b.item.GroupName
 		}
 		return a.nodeID < b.nodeID
 	})

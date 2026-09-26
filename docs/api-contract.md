@@ -41,15 +41,18 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 | POST /nodes/{id}/rotate-token | `{}` | 管理员；返回新凭据，旧节点凭据失效 |
 | POST /nodes/{id}/looking-glass | `{method,target}` | 管理员（Cookie 会话）；在节点上跑 ping / tcping / mtr，返回 `{id,status}`，结果用下面那条轮询 |
 | GET /looking-glass/{id} | —— | 创建者或管理员；`{status,output,error}`，两分钟内没被节点领走即 `expired` |
-| GET /rules | 分页 | 管理员全局/用户自有 Rule；无 tunnel.token、chain各跳token、lease |
+| GET /rules | 分页；可选 `category=<分类>` 或 `uncategorized=true` | 管理员全局/用户自有 Rule；无 tunnel.token、chain各跳token、lease。响应另带 `categories`：当前身份可见的分类清单，界面上的筛选器用它 |
 | POST /rules | `{name,node_id,group_id,network,transport,listen,target,enabled,tunnel?}` | Rule；管理员可指定 user_id |
+
+> 规则分类是**控制台自己的分组**：它存在 `cp_rules.category` 这一列，不进发给 Agent 的配置，归类既不 bump 规则版本也不 bump 节点期望版本 —— 归个类不该惊动节点，也因此不会和别处的编辑互相覆盖（payload 里没有它）。分类名最长 32 字符，按账号隔离。
 
 > 规则的 `listen` 留空时，面板会从**设备组允许的端口范围**里随机分配一个尚未预留的端口（随机起点 + 环形扫描，避免总挑到同一个或撞上端口预留）；显式给出则原样使用。
 | PUT /rules/{id} | 规则字段加 version | 乐观锁 |
+| POST /rules/category | `{ids:[],category}` | 批量归类最多 500 条（普通用户只能改自己的，改不到的不计入 `updated`）；`category` 留空即取消分类 |
 | DELETE /rules/{id}?version=N | 无 | 204；待节点确认解绑才释放端口 |
 | GET /probes | 可选 `group_id` | `{items: Probe[]}`；付费能力，需有效权益；只含授权设备组的机器，`group_id` 非本人所属组时 403。补 `node_name/group_ids/location`；新客户端可按地址族读取 `ipv4_location/ipv6_location`，管理员响应另含 `public_ips`，普通用户隐藏地址但保留位置图标 |
 | GET /probes/events | 可选 `group_id` | SSE `event: probes` + 同上 JSON，每 5 秒重校验身份/授权 |
-| GET /online/device/ip | 可选 `group_id` | 探针页面预留的脚本接口：当前可见范围内**唯一**那台设备的 `{device:{node_name,ipv4?,ipv6?}}`；多台返回 409 并提示改用列表，无设备返回 404 |
+| GET /online/device/ip | 可选 `group_id` | 探针页面预留的脚本接口：当前可见范围内**唯一**那台设备的 `{device:{group_name,ipv4?,ipv6?}}`；多台返回 409 并提示改用列表，无设备返回 404 |
 | GET /online/device/ip/list | 可选 `group_id` | `{items:[DeviceIP],total}`；一组多台时用它。**一台设备一条记录**，机器被换掉/少了一族地址都只体现在同一份列表里，调用方无需改代码 |
 | GET /probes/{node_id}/history | `resolution=minute\|hour&from=RFC3339&to=RFC3339` | 授权节点聚合历史；无权限与节点不存在均404 |
 | GET /audit | 分页 | 管理员审计列表 |
@@ -75,7 +78,7 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 
 当前 Agent 的配置与探针默认各每5秒同步，用量每1秒或待报记录达到100条时主动上报，每批最多500条；三者独立运行，单通道失败不会阻止其他通道。租约退还成功后立即触发配置拉取。仅租约/配置有效期刷新保留现有连接，后续计量切换到当前租约；退租仍须先持久停止旧租约并确认全部用量。TCP 遇到临时额度/待报队列不足最多等待30秒，UDP 丢弃当前未计费报文并保留会话，不使用过期或未签发额度。详细时序及边界见 [流量连续性修复](traffic-continuity.md)。这些改动保持现有 API 与 WAL 格式兼容。
 
-`DeviceIP`：`{node_name,ipv4?,ipv6?}`。**一台设备一条记录**，两个地址各取该节点最近一次的观测值：只有一族时只出现那一个字段，两族都有就都给 —— 客户脚本不必先判断机器是单栈还是双栈。地址是 Agent 上报的观测值而不是面板主动探测，机器没上报过地址时两个字段都不出现，客户端要能接受缺失（包含 `node_name` 在内，只有它为必填）。接口带 `Authorization: Bearer <API Token>`，也接受同源 Cookie 会话；`/online/device/ip` 与 `/online/device/ip/list` 两个不带 `/api/v1` 前缀的路径是为客户脚本保留的稳定入口，与带前缀的同名接口等价。
+`DeviceIP`：`{group_name,ipv4?,ipv6?}`。`group_name` 是**设备组名**（不是机器自报的主机名）—— 客户脚本按设备组认机器。**一台设备一条记录**，两个地址各取该节点最近一次的观测值：只有一族时只出现那一个字段，两族都有就都给 —— 客户脚本不必先判断机器是单栈还是双栈。地址是 Agent 上报的观测值而不是面板主动探测，机器没上报过地址时两个字段都不出现，客户端要能接受缺失（包含 `group_name` 在内，只有它为必填）。接口带 `Authorization: Bearer <API Token>`，也接受同源 Cookie 会话；`/online/device/ip` 与 `/online/device/ip/list` 两个不带 `/api/v1` 前缀的路径是为客户脚本保留的稳定入口，与带前缀的同名接口等价。
 
 已挂载商业接口：`GET/POST /plans`（创建仅管理员）、`GET /wallet`、`GET /ledger`、`GET /orders`、`POST /orders`、`POST /purchases`、`GET /entitlement`、`GET /payment-channels`、`GET/PUT /payment-settings`（通道配置，仅管理员）。plans/orders/ledger 使用统一分页，钱包/订单/账本/权益只能读当前用户。购买请求 `{plan_id,expected_version,idempotency_key}`；充值 `{channel,amount,idempotency_key}`，金额**以元计**（`amount_cents` 仍兼容旧客户端，两者只能给一个）。先充值钱包，再余额购买，立即新周期/新有效期，旧事实不删除。
 
@@ -89,7 +92,7 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 
 Token 目前固定 `owner-resources` 范围：即使创建者是管理员，Bearer 请求也按普通用户资源权限处理；不提供管理员自动化权限或任意自定义 scope。
 
-Token 明文只在**创建或重置**的那一次响应里出现（库里只有 SHA-256 摘要），列表只给 `prefix`（明文前 8 位）用于辨认是哪一把。丢失或泄露的唯一补救是重置（同一行换新密钥、旧密钥立刻失效）或撤销重发。有效期二选一：`expires_at`（一年以内）或 `permanent:true`；两者都不给或都给一律 400，避免"忘了填就发了一把不过期的钥匙"。永久凭据在库里写 `expires_at=0`。`last_used_at` 按分钟节流更新，供运营方判断哪把凭据还在被使用。管理员在后台创建账号后即可代发凭据交给用户（`POST /users/{id}/tokens`），账号列表页直接展示前缀、有效期与最近使用，可就地重置或撤销。
+Token 明文只在**创建或重置**的那一次响应里出现（库里只有 SHA-256 摘要），列表只给 `prefix`（明文前 8 位）用于辨认是哪一把。丢失或泄露的唯一补救是重置（同一行换新密钥、旧密钥立刻失效）或撤销重发。有效期二选一：`expires_at`（一年以内）或 `permanent:true`；两者都不给或都给一律 400，避免"忘了填就发了一把不过期的钥匙"。永久凭据在库里写 `expires_at=0`。`last_used_at` 按分钟节流更新，供运营方判断哪把凭据还在被使用。凭据可以带 `group_ids`：**只覆盖账号有权访问的一部分设备组**，范围外的机器、规则、设备组与设备地址接口对它都不可见（指名范围外的组返回 403）。范围只能变窄 —— 列进来的组必须是账号自己也能看到的，否则 400；不填表示跟随账号的全部授权，升级上来的旧凭据就是这个行为。管理员在后台创建账号后即可代发凭据交给用户（`POST /users/{id}/tokens`），账号列表页直接展示前缀、有效期与最近使用，可就地重置或撤销。
 
 **规则与隧道**
 

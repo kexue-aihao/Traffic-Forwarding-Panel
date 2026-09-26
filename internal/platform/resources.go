@@ -171,8 +171,9 @@ func (s *Server) groups(w http.ResponseWriter, r *http.Request) {
 	where := ""
 	args := []any{}
 	if u.Role != "admin" {
-		where = " WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=g.id AND iu.id=?)"
+		where = " WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=g.id AND iu.id=?"
 		args = append(args, u.ID)
+		where += tokenGroupScope(u, "gig.group_id", &args) + ")"
 	}
 	n, o := pages(r)
 	var total int
@@ -448,6 +449,14 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 		where += " AND user_id=?"
 		args = append(args, u.ID)
 	}
+	// 分类筛选在 SQL 里做：它是一列，不是 payload 里的字段。（未分类用
+	// uncategorized=true 表达，省得给「空」编一个会和真实分类撞车的取值。）
+	if category := strings.TrimSpace(r.URL.Query().Get("category")); category != "" {
+		where += " AND category=?"
+		args = append(args, category)
+	} else if r.URL.Query().Get("uncategorized") == "true" {
+		where += " AND category=''"
+	}
 	n, o := pages(r)
 	var total int
 	if s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT COUNT(*) FROM cp_rules"+where), args...).Scan(&total) != nil {
@@ -455,7 +464,7 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args = append(args, n, o)
-	rows, e := s.Store.DB.QueryContext(r.Context(), s.q("SELECT payload FROM cp_rules"+where+" ORDER BY id LIMIT ? OFFSET ?"), args...)
+	rows, e := s.Store.DB.QueryContext(r.Context(), s.q("SELECT payload,category FROM cp_rules"+where+" ORDER BY id LIMIT ? OFFSET ?"), args...)
 	if e != nil {
 		fail(w, 500, "query failed")
 		return
@@ -463,17 +472,94 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []contract.Rule{}
 	for rows.Next() {
-		var p string
+		var p, category string
 		var rule contract.Rule
-		if rows.Scan(&p) != nil || json.Unmarshal([]byte(p), &rule) != nil {
+		if rows.Scan(&p, &category) != nil || json.Unmarshal([]byte(p), &rule) != nil {
 			fail(w, 500, "query failed")
 			return
 		}
+		// 分类来自那一列；payload 里不该有它，这里以列为准。
+		rule.Category = category
 		redact(&rule)
 		items = append(items, rule)
 	}
-	reply(w, 200, map[string]any{"items": items, "total": total})
+	page := map[string]any{"items": items, "total": total}
+	// 分类清单随列表一起回：界面上的筛选器要用它，为这个单开一个接口不值当。
+	if categories, e := s.ruleCategories(r.Context(), u); e == nil {
+		page["categories"] = categories
+	}
+	reply(w, 200, page)
 }
+
+// ruleCategories 列出这个身份能看到的规则分类（不含未分类）。
+func (s *Server) ruleCategories(ctx context.Context, u contract.User) ([]string, error) {
+	query := "SELECT DISTINCT category FROM cp_rules WHERE deleted=0 AND category<>''"
+	args := []any{}
+	if u.Role != "admin" {
+		query += " AND user_id=?"
+		args = append(args, u.ID)
+	}
+	query += " ORDER BY category"
+	rows, e := s.Store.DB.QueryContext(ctx, s.q(query), args...)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var category string
+		if e = rows.Scan(&category); e != nil {
+			return nil, e
+		}
+		items = append(items, category)
+	}
+	return items, rows.Err()
+}
+
+// setRuleCategory 批量给规则归类。分类只影响控制台怎么分组：它不进发给 Agent 的
+// 配置，所以既不 bump version 也不 bump desired_version —— 归个类不该惊动节点，
+// 也因此不会和别处的编辑互相覆盖（payload 里没有它）。
+func (s *Server) setRuleCategory(w http.ResponseWriter, r *http.Request) {
+	u, _ := UserFromContext(r.Context())
+	var in struct {
+		IDs      []string `json:"ids"`
+		Category string   `json:"category"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	category := strings.TrimSpace(in.Category)
+	if len(in.IDs) == 0 || len(in.IDs) > 500 || len(category) > 32 {
+		fail(w, 400, "invalid rule category")
+		return
+	}
+	// 归属交给 SQL：普通用户改不到别人的规则，改不到就是没改到。
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(in.IDs)), ",")
+	args := []any{category}
+	for _, ruleID := range in.IDs {
+		args = append(args, ruleID)
+	}
+	query := "UPDATE cp_rules SET category=? WHERE deleted=0 AND id IN (" + placeholders + ")"
+	if u.Role != "admin" {
+		query += " AND user_id=?"
+		args = append(args, u.ID)
+	}
+	var affected int64
+	err := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		res, e := tx.ExecContext(r.Context(), s.q(query), args...)
+		if e != nil {
+			return e
+		}
+		affected, _ = res.RowsAffected()
+		return s.AuditTx(r.Context(), tx, u.ID, "rule.category", category)
+	})
+	if err != nil {
+		fail(w, 500, "rule category update failed")
+		return
+	}
+	reply(w, 200, map[string]any{"updated": affected, "category": category})
+}
+
 func redact(rule *contract.Rule) {
 	if rule.ExitGroupID != "" {
 		rule.Tunnel = nil
@@ -593,6 +679,8 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User, rule *contract.Rule, create bool) error {
 	oldVersion := rule.Version
+	// 分类存在列里，不进 payload —— 那是发给 Agent 的配置，归类和它无关。
+	rule.Category = ""
 	if err := s.lockRuleOwner(ctx, tx, rule.UserID); err != nil {
 		return err
 	}

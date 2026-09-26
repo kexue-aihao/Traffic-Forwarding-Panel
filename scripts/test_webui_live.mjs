@@ -795,6 +795,27 @@ try {
       await user.getByLabel("目标地址", { exact: true }).fill("127.0.0.1:8080");
       await user.getByLabel("启用规则", { exact: true }).uncheck();
       await save(user);
+      // 规则分类：多选之后归到一类，走的是真实接口 —— 请求体的字段名对不上会被
+      // 严格解码挡回来，假后端验不出这一点。
+      const classifiedRow = user.locator("tr", {
+        hasText: "disabled-integration-rule",
+      });
+      await classifiedRow.getByRole("checkbox").check();
+      await user.getByLabel("规则分类", { exact: true }).fill("日本线路");
+      await user
+        .getByRole("button", { name: "应用分类", exact: true })
+        .click();
+      await user
+        .getByText("已把 1 条规则归到「日本线路」。", { exact: false })
+        .waitFor();
+      await classifiedRow.getByText("日本线路", { exact: true }).waitFor();
+      const classified = await (
+        await user.request.get(
+          base + "/api/v1/rules?category=" + encodeURIComponent("日本线路"),
+        )
+      ).json();
+      assert.equal(classified.total, 1, "分类要能在接口上筛出来");
+      assert.deepEqual(classified.categories, ["日本线路"]);
       await user.getByRole("button", { name: "编辑", exact: true }).click();
       assert.equal(await user.getByLabel("入口服务器").isDisabled(), true);
       assert.equal(
@@ -1002,6 +1023,13 @@ try {
       // 线上的样点是实时的，面板还要等聚合跑完才落桶，形状本身不稳定。这里确认
       // 历史这一块渲染得出来，下面几条再确认接口答 200。
       await history.getByText("分钟采样保留 7 天", { exact: false }).waitFor();
+      // 普通账号看不到机器地址，历史节点改用设备组名认机器。这一组只有一台，
+      // 所以就是组名本身（同组多台时才补序号，那条由受控数据的用例验）。
+      assert.deepEqual(
+        await user.getByLabel("历史节点").locator("option").allTextContents(),
+        [savedGroup.name],
+        "用户视角的历史节点应当读作设备组名",
+      );
       assert.equal(
         (
           await user.request.get(
@@ -1520,7 +1548,8 @@ try {
       ).json();
       const simulated = devices.items.find((d) => d.ipv4 === "203.0.113.99");
       assert.ok(simulated, "设备地址接口必须给出本组机器当前的 IP");
-      assert.equal(simulated.node_name, `simulated-${browserName}`);
+      // 对外给的是设备组名，不是机器自报的主机名。
+      assert.equal(simulated.group_name, `group-${browserName}`);
       // 一台设备一条记录：这台机器只上报了 IPv4，就不编造一个空的 IPv6 字段。
       assert.equal("ipv6" in simulated, false, "没有 IPv6 却给出了 ipv6 字段");
       assert.equal(

@@ -28,6 +28,8 @@ const days = ref(30);
 // 永久凭据是明确的选择，不是默认值：忘了填有效期不该悄悄发一把不过期的钥匙。
 const permanent = ref(false);
 const secret = ref("");
+const scopeGroups = ref<string[]>([]);
+const groups = ref<{ id: string; name: string }[]>([]);
 const revoke = ref<Token | null>(null);
 const dirty = computed(
   () =>
@@ -61,6 +63,21 @@ function open(next: "password" | "token") {
   permanent.value = false;
   secret.value = "";
   formError.value = "";
+  scopeGroups.value = [];
+  if (next === "token") void loadGroups();
+}
+// 凭据可以只覆盖一部分设备组：脚本只碰一个组时，没必要给它账号的全量权限。
+// 不勾就是跟随账号（默认，也是升级上来的旧凭据的行为）。
+async function loadGroups() {
+  if (groups.value.length) return;
+  try {
+    const result = await api<{ items: { id: string; name: string }[] }>(
+      "/groups?page=1&page_size=100",
+    );
+    groups.value = result.items;
+  } catch (e) {
+    formError.value = errorText(e);
+  }
 }
 async function save() {
   if (busy.value) return;
@@ -92,6 +109,9 @@ async function save() {
     } else {
       const result = await api<{ token: string }>("/auth/tokens", "POST", {
         name: name.value,
+        ...(scopeGroups.value.length
+          ? { group_ids: [...scopeGroups.value] }
+          : {}),
         ...(permanent.value
           ? { permanent: true }
           : {
@@ -272,7 +292,22 @@ onMounted(load);
                 required /></label
             ><p v-else class="warning">
               永久 Token 不会自动失效，泄露后风险一直存在。脚本用不上了要记得撤销。
-            </p></template
+            </p>
+            <fieldset v-if="groups.length">
+              <legend>限定设备组（可多选）</legend>
+              <label v-for="item in groups" :key="item.id" class="check">
+                <input
+                  v-model="scopeGroups"
+                  type="checkbox"
+                  :value="item.id"
+                  :aria-label="`限定到 ${item.name}`"
+                />{{ item.name }}
+              </label>
+              <p class="small muted">
+                不勾选表示这把凭据跟随账号的全部授权；勾了之后就只覆盖这几个设备组，
+                范围外的机器、规则与设备地址接口都对它不可见。
+              </p>
+            </fieldset></template
           ><div class="form-actions">
             <button
               class="primary"

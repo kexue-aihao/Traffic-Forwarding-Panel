@@ -7,6 +7,7 @@ import {
   ref,
 } from "vue";
 import { api, errorText, ApiError } from "../core/api";
+import { groupLabels } from "../core/nodes";
 import ProbeHistory from "../components/ProbeHistory.vue";
 import LocationFlag from "../components/LocationFlag.vue";
 import Icon from "../components/Icon.vue";
@@ -65,6 +66,8 @@ interface Node {
   id: string;
   name: string;
   capabilities?: string[];
+  // 节点列表里带的是「这个账号有权访问的」组归属，用户视角下用它认机器。
+  group_ids?: string[];
 }
 const nodes = ref<Node[]>([]);
 const operation = ref<{
@@ -171,26 +174,31 @@ function probeState(p: Probe) {
 // 探针页面的视角开关：管理员能直接看到普通账号眼里的样子 —— 位置图标照旧，
 // 机器地址换成「已隐藏」。非管理员没有这个开关，本来就是用户视角。
 const viewAsUser = ref(false);
+// 用户视角不只是把地址换成「已隐藏」：能不能对机器动手也是要区分开的一部分。
+// 管理员自己在看用户视角时同样收起这些入口，否则预览出来的不是用户真正看到的
+// 那一屏。视角开关自己不在其列 —— 收起来就切不回去了。
+const canOperate = computed(() => canManage.value && !viewAsUser.value);
 function visibleIPs(p: Probe) {
   return viewAsUser.value ? [] : p.public_ips || [];
 }
-// 历史趋势按机器选：同一个设备组里可能有好几台，光看名字认不出是哪一台，
-// 地址认得出来。用户视角下地址是隐藏的，那就退回名字 —— 与页面其它地方同口径。
-const historyNodes = computed(() =>
-  nodes.value.map((node) => {
+// 历史趋势按机器选。管理员看得到地址，用地址最准；用户视角下地址是隐藏的，
+// 改用设备组名 —— 取名的规则（组名、多台时补序号）与网络诊断页共用一份。
+const historyNodes = computed(() => {
+  const labels = groupLabels(nodes.value, groups.value, group.value);
+  return nodes.value.map((node) => {
     const probe = probes.value.find((item) => item.node_id === node.id);
-    return {
-      id: node.id,
-      name: node.name,
-      address: probe && !viewAsUser.value ? addressFor(probe, "ipv4") : "",
-    };
-  }),
-);
+    const label =
+      canManage.value && !viewAsUser.value
+        ? (probe && addressFor(probe, "ipv4")) || node.name
+        : labels.get(node.id) || node.name;
+    return { id: node.id, name: node.name, label };
+  });
+});
 function addressLabel(p: Probe, family: "ipv4" | "ipv6") {
   if (viewAsUser.value) return "已隐藏";
   const address = addressFor(p, family);
   if (address) return address;
-  if (p.public_ips === undefined) return canManage.value ? "未上报" : "已隐藏";
+  if (p.public_ips === undefined) return canOperate.value ? "未上报" : "已隐藏";
   return "未知";
 }
 const error = ref("");
@@ -475,7 +483,7 @@ onUnmounted(() => {
               :detail="`${formatBytes(p.disk_used)} / ${formatBytes(p.disk_total)}`"
             />
           </div>
-          <div v-if="canManage" class="probe-actions">
+          <div v-if="canOperate" class="probe-actions">
             <button @click="act(p, 'shell')">WebSSH</button>
             <button class="danger" @click="act(p, 'uninstall')">
               卸载设备

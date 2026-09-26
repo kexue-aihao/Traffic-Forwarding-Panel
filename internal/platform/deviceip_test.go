@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -102,7 +103,8 @@ func TestDeviceIPSingleDeviceAndList(t *testing.T) {
 
 	single := read[map[string]any](t, f.req("GET", "/online/device/ip", nil, raw), 200)
 	device := single["device"].(map[string]any)
-	if device["ipv4"] != "198.51.100.7" || device["node_name"] != "hk-1" {
+	// 对外的设备名是**设备组名**：机器自报的 ip-172-… 客户认不出来。
+	if device["ipv4"] != "198.51.100.7" || device["group_name"] != "香港" {
 		t.Fatalf("单台机器的地址不对: %v", device)
 	}
 	// 一台设备一条记录：只有 IPv4 时不编造一个空的 IPv6 字段。
@@ -121,12 +123,17 @@ func TestDeviceIPSingleDeviceAndList(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("列表条数不对: %v", items)
 	}
-	addresses := map[string]string{}
+	// 两台机器同属一个组，所以两条记录的名字一样 —— 靠地址区分，不靠名字。
+	addresses := []string{}
 	for _, item := range items {
 		entry := item.(map[string]any)
-		addresses[entry["node_name"].(string)] = entry["ipv4"].(string)
+		if entry["group_name"] != "香港" {
+			t.Fatalf("设备名应当是设备组名: %v", entry)
+		}
+		addresses = append(addresses, entry["ipv4"].(string))
 	}
-	if addresses["hk-1"] != "198.51.100.7" || addresses["hk-2"] != "198.51.100.8" {
+	sort.Strings(addresses)
+	if len(addresses) != 2 || addresses[0] != "198.51.100.7" || addresses[1] != "198.51.100.8" {
 		t.Fatalf("列表里的地址不对: %v", addresses)
 	}
 	scoped := read[map[string]any](t, f.req("GET", "/online/device/ip/list?group_id="+group.ID, nil, raw), 200)
@@ -178,8 +185,8 @@ func TestDeviceIPReturnsBothFamilies(t *testing.T) {
 	}
 	page := read[map[string]any](t, f.req("GET", "/online/device/ip/list", nil, secret["token"].(string)), 200)
 	entry := page["items"].([]any)[0].(map[string]any)
-	if entry["node_name"] != "dual" {
-		t.Fatalf("设备名不对: %v", entry)
+	if entry["group_name"] != "双栈" {
+		t.Fatalf("设备名应当是设备组名: %v", entry)
 	}
 	// 双栈机器一条记录里给两个地址，调用方不必先问这台机器是哪一族。
 	if entry["ipv4"] != "198.51.100.20" || entry["ipv6"] != "2001:db8::1" {

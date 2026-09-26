@@ -25,6 +25,9 @@ type tokenRequest struct {
 	Name      string     `json:"name"`
 	ExpiresAt *time.Time `json:"expires_at"`
 	Permanent bool       `json:"permanent"`
+	// GroupIDs 把凭据限定到这几个设备组，留空表示不限制（跟随账号自己的可见
+	// 范围）。范围只可能变窄：列进来的组必须是账号自己也能看到的。
+	GroupIDs []string `json:"group_ids"`
 }
 
 // validate 要求调用方明确选择有效期：要么给一个一年以内的时刻，要么显式
@@ -38,6 +41,16 @@ func (t tokenRequest) validate(now time.Time) error {
 	}
 	if t.ExpiresAt != nil && (!t.ExpiresAt.After(now) || t.ExpiresAt.After(now.Add(contract.MaxTokenLifetime))) {
 		return errors.New("有效期必须在将来，且不超过一年")
+	}
+	if len(t.GroupIDs) > 100 {
+		return errors.New("设备组范围最多 100 个")
+	}
+	seen := map[string]bool{}
+	for _, group := range t.GroupIDs {
+		if strings.TrimSpace(group) == "" || len(group) > 64 || seen[group] {
+			return errors.New("设备组范围里有重复或无效的组")
+		}
+		seen[group] = true
 	}
 	return nil
 }
@@ -91,10 +104,31 @@ func (s *Server) issueToken(w http.ResponseWriter, r *http.Request, user string,
 	expiry := in.expiry(time.Now())
 	actor, _ := UserFromContext(r.Context())
 	created := time.Now().UTC()
+	// 范围只能变窄：凭据能看到的组必须是账号自己也能看到的，否则等于绕开账号的
+	// 授权另发一把钥匙。管理员给自己发的凭据同样按这条校验（管理员的可见范围
+	// 本来就是全部）。
+	if len(in.GroupIDs) > 0 {
+		allowed, e := s.userGroups(r.Context(), user)
+		if e != nil {
+			fail(w, 500, "token creation failed")
+			return
+		}
+		for _, group := range in.GroupIDs {
+			if !allowed[group] {
+				fail(w, 400, "凭据的设备组范围不能超出账号自己的授权")
+				return
+			}
+		}
+	}
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
 		_, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_tokens(id,token_hash,user_id,name,expires_at,prefix,created_at,last_used_at) VALUES(?,?,?,?,?,?,?,0)`), tid, digest(raw), user, in.Name, expiry, raw[:tokenPrefixLen], created.Unix())
 		if e != nil {
 			return e
+		}
+		for _, group := range in.GroupIDs {
+			if _, e := tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_token_groups(token_id,group_id) VALUES(?,?)`), tid, group); e != nil {
+				return e
+			}
 		}
 		return s.AuditTx(r.Context(), tx, actor.ID, action, tid)
 	})
@@ -110,6 +144,9 @@ func (s *Server) issueToken(w http.ResponseWriter, r *http.Request, user string,
 	}
 	if !self {
 		out["user_id"] = user
+	}
+	if len(in.GroupIDs) > 0 {
+		out["group_ids"] = in.GroupIDs
 	}
 	reply(w, 201, out)
 }
@@ -331,7 +368,55 @@ func (s *Server) bearerUser(r *http.Request) (contract.User, error) {
 		})
 	}
 	u.Role = "user"
-	return u, nil
+	// 凭据自带的设备组范围：读一次，后续所有可见性判断都按它收窄。
+	rows, e := s.Store.DB.QueryContext(r.Context(), s.q(`SELECT group_id FROM cp_token_groups WHERE token_id=?`), tokenID)
+	if e != nil {
+		return contract.User{}, errors.New("authentication required")
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var group string
+		if e = rows.Scan(&group); e != nil {
+			return contract.User{}, errors.New("authentication required")
+		}
+		u.TokenGroups = append(u.TokenGroups, group)
+	}
+	return u, rows.Err()
+}
+
+// queryRower 让可见性判断既能在连接上跑，也能在事务里跑（诊断的鉴权在事务内）。
+type queryRower interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// groupVisible 判断这个身份能不能看到某个设备组：先是账号自己的可见范围，再
+// 收窄到本次请求所用凭据自带的那些组。管理员不受限。
+func (s *Server) groupVisible(ctx context.Context, q queryRower, u contract.User, group string) (bool, error) {
+	if u.Role == "admin" {
+		return true, nil
+	}
+	args := []any{group, u.ID}
+	query := `SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?` + tokenGroupScope(u, "gig.group_id", &args)
+	var n int
+	if err := q.QueryRowContext(ctx, s.q(query), args...).Scan(&n); err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// tokenGroupScope 把「这个身份能看到哪些设备组」再收窄到凭据自己带的那些组。
+//
+// column 是引用设备组 id 的 SQL 片段（如 gig.group_id）。没有范围的凭据返回
+// 空串，SQL 一个字都不变 —— 绝大多数凭据都是这种。
+func tokenGroupScope(u contract.User, column string, args *[]any) string {
+	if len(u.TokenGroups) == 0 {
+		return ""
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(u.TokenGroups)), ",")
+	for _, group := range u.TokenGroups {
+		*args = append(*args, group)
+	}
+	return " AND " + column + " IN (" + placeholders + ")"
 }
 
 // ResetPassword is an operator-local recovery API, never an unauthenticated HTTP
@@ -384,6 +469,25 @@ func (s *Server) rotateNodeToken(w http.ResponseWriter, r *http.Request) {
 
 // accessTokens 读出一批凭据的公开字段。明文与摘要都不在这里 —— 这个函数的
 // 返回值会被直接序列化给管理员看。
+// userGroups 列出某个账号有权访问的设备组。只用于校验凭据范围 —— 这条判断问的
+// 是「这个账号能不能看到」，与调用方自己的身份无关。
+func (s *Server) userGroups(ctx context.Context, user string) (map[string]bool, error) {
+	rows, e := s.Store.DB.QueryContext(ctx, s.q(`SELECT gig.group_id FROM cp_group_identity_groups gig JOIN cp_users u ON u.identity_group_id=gig.identity_group_id WHERE u.id=?`), user)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	allowed := map[string]bool{}
+	for rows.Next() {
+		var group string
+		if e = rows.Scan(&group); e != nil {
+			return nil, e
+		}
+		allowed[group] = true
+	}
+	return allowed, rows.Err()
+}
+
 func (s *Server) accessTokens(ctx context.Context, user string, n, o int) ([]contract.APIToken, int, error) {
 	var total int
 	if e := s.Store.DB.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_tokens WHERE user_id=?`), user).Scan(&total); e != nil {
@@ -413,6 +517,21 @@ func (s *Server) accessTokens(ctx context.Context, user string, n, o int) ([]con
 			at := time.Unix(used, 0).UTC()
 			t.LastUsedAt = &at
 		}
+		// 凭据的设备组范围：一条小查询，一页最多几十把钥匙，不值得为它拼一个
+		// 三库通吃的聚合。
+		groupRows, e := s.Store.DB.QueryContext(ctx, s.q(`SELECT group_id FROM cp_token_groups WHERE token_id=? ORDER BY group_id`), t.ID)
+		if e != nil {
+			return nil, 0, e
+		}
+		for groupRows.Next() {
+			var group string
+			if e = groupRows.Scan(&group); e != nil {
+				groupRows.Close()
+				return nil, 0, e
+			}
+			t.GroupIDs = append(t.GroupIDs, group)
+		}
+		groupRows.Close()
 		items = append(items, t)
 	}
 	return items, total, rows.Err()

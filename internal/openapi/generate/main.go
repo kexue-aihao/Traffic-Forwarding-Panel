@@ -132,7 +132,7 @@ func main() {
 	model("PasswordChange", schema{"current_password": str, "password": schema{"type": "string", "minLength": 12, "maxLength": 72}}, "current_password", "password")
 	// 有效期二选一：给出 expires_at（一年以内），或声明 permanent。凭据明文
 	// 只在创建与重置的响应里出现一次，之后任何接口都取不回来。
-	model("TokenCreate", schema{"name": str, "expires_at": date, "permanent": flag}, "name")
+	model("TokenCreate", schema{"name": str, "expires_at": date, "permanent": flag, "group_ids": array(str)}, "name")
 	tokenFields := schemas["APIToken"].(schema)["properties"].(schema)
 	secret := schema{"token": str, "user_id": str}
 	for key, value := range tokenFields {
@@ -224,6 +224,9 @@ func main() {
 		"configured": flag, "key_set": flag,
 	})
 	model("PaymentSettings", schema{"version": num, "channels": schema{"type": "object", "additionalProperties": ref("PaymentChannelSettings")}}, "version", "channels")
+	// 规则分类：只影响控制台怎么分组，不进发给 Agent 的配置，也不动规则版本。
+	model("RuleCategory", schema{"ids": schema{"type": "array", "items": str, "minItems": 1, "maxItems": 500}, "category": schema{"type": "string", "maxLength": 32}}, "ids", "category")
+	model("RuleCategoryResult", schema{"updated": num, "category": str}, "updated", "category")
 	model("ExportTask", schema{"rule_ids": schema{"type": "array", "items": str, "maxItems": 500}, "idempotency_key": schema{"type": "string", "minLength": 1, "maxLength": 128}}, "idempotency_key")
 	model("ImportTask", schema{"mode": schema{"type": "string", "enum": []string{"create", "update_by_port"}}, "rules": schema{"type": "array", "items": ref("Rule"), "minItems": 1, "maxItems": 1000}, "idempotency_key": schema{"type": "string", "minLength": 1, "maxLength": 128}}, "rules", "idempotency_key")
 	model("TaskCancel", schema{"status": schema{"const": "cancel_requested"}}, "status")
@@ -296,10 +299,10 @@ func main() {
 		{"POST", "/auth/logout", "Empty", "", "204", "user", "End cookie session", false},
 		{"POST", "/auth/password", "PasswordChange", "", "204", "user", "Change password and revoke sessions/tokens", false},
 		{"GET", "/auth/tokens", "", "TokenPage", "200", "user", "List own API tokens; no secrets", true},
-		{"POST", "/auth/tokens", "TokenCreate", "TokenSecret", "201", "user", "Issue owner-resources token; expiry within one year", false},
+		{"POST", "/auth/tokens", "TokenCreate", "TokenSecret", "201", "user", "Issue owner-resources token; expiry within one year, optional group_ids narrow it to those device groups", false},
 		{"DELETE", "/auth/tokens/{id}", "", "", "204", "user", "Revoke own token", false},
 		{"GET", "/users/{id}/tokens", "", "TokenPage", "200", "admin", "List one account's API tokens with prefixes and last use; never secrets", true},
-		{"POST", "/users/{id}/tokens", "TokenCreate", "TokenSecret", "201", "admin", "Issue an API token for an account; the secret is returned exactly once", false},
+		{"POST", "/users/{id}/tokens", "TokenCreate", "TokenSecret", "201", "admin", "Issue an API token for an account; the secret is returned exactly once, optional group_ids narrow it to those device groups", false},
 		{"POST", "/users/{id}/tokens/{token_id}/reset", "Empty", "TokenSecret", "200", "admin", "Replace a token secret in place; the new secret is returned exactly once", false},
 		{"DELETE", "/users/{id}/tokens/{token_id}", "", "", "204", "admin", "Revoke an account's API token", false},
 		{"GET", "/online/device/ip", "", "DeviceIPView", "200", "user", "The single device visible to this API token with its latest IPv4 and IPv6; 409 when the group has several", false},
@@ -336,6 +339,7 @@ func main() {
 		{"GET", "/node-operations/{id}/commands", "", "CommandAuditList", "200", "admin", "List terminal command audit records", false},
 		{"GET", "/rules", "", "RulePage", "200", "user", "Own rules; admin sees all. Credentials and lease removed", true},
 		{"POST", "/rules", "RuleCreate", "Rule", "201", "user", "Create rule, reserve port and finite allowance", false},
+		{"POST", "/rules/category", "RuleCategory", "RuleCategoryResult", "200", "user", "Classify up to 500 rules at once; the category is control-plane only and never reaches the Agent", false},
 		{"PUT", "/rules/{id}", "RuleUpdate", "Rule", "200", "user", "Update rule with optimistic version; placement immutable", false},
 		{"DELETE", "/rules/{id}", "", "", "204", "user", "Delete at expected version; port held until Agent ACK", false},
 		{"GET", "/rules/{id}/diagnose", "", "Diagnostic", "200", "user", "Control-plane status checks; does not probe network targets", false},

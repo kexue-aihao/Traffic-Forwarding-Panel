@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import Select from "../components/Select.vue";
 import { api, errorText } from "../core/api";
+import { groupLabels } from "../core/nodes";
 import { notice } from "../core/state";
 
 /**
@@ -19,6 +20,7 @@ interface Node {
   id: string;
   name: string;
   capabilities?: string[];
+  group_ids?: string[];
 }
 interface Request {
   id: string;
@@ -29,6 +31,9 @@ interface Request {
 
 const nodes = ref<Node[]>([]);
 const nodeID = ref("");
+const groups = ref<{ id: string; name: string }[]>([]);
+// 下拉里显示设备组名，不是 ip-172-… 那种主机名 —— 与探针页的历史节点同一套取名规则。
+const nodeLabels = computed(() => groupLabels(nodes.value, groups.value));
 const method = ref("ping");
 const target = ref("");
 const output = ref("");
@@ -81,6 +86,12 @@ async function load() {
       if (!next.items.length || items.length >= next.total) break;
     }
     nodes.value = items;
+    // 组名要另外取：节点列表只带组 id。
+    const groupPage = await api<{ items: { id: string; name: string }[] }>(
+      "/groups?page=1&page_size=100",
+    );
+    if (!alive) return;
+    groups.value = groupPage.items;
     const first =
       items.find((n) => (n.capabilities || []).includes("looking-glass-v1")) ||
       items[0];
@@ -184,7 +195,7 @@ onUnmounted(() => {
           <label
             >节点<Select v-model="nodeID" aria-label="诊断节点">
               <option v-for="n in nodes" :key="n.id" :value="n.id">
-                {{ n.name
+                {{ nodeLabels.get(n.id) || n.name
                 }}{{
                   (n.capabilities || []).includes("looking-glass-v1")
                     ? ""
