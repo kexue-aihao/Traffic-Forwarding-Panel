@@ -51,7 +51,7 @@ func TestDefaultPublicIPProbe(t *testing.T) {
 	if p.PublicIPs[0].Family != "ipv4" || p.PublicIPs[0].Address != "198.51.100.8" || p.PublicIPs[1].Family != "ipv6" || p.PublicIPs[1].Address != "2001:db8::8" {
 		t.Fatalf("unexpected public IP observations: %+v", p.PublicIPs)
 	}
-	if p.PublicIPs[0].Source != publicIPEchoURL || p.PublicIPs[0].ObservedAt.IsZero() {
+	if p.PublicIPs[0].Source != publicIP4EchoURL || p.PublicIPs[1].Source != publicIP6EchoURL || p.PublicIPs[0].ObservedAt.IsZero() {
 		t.Fatalf("missing source/time: %+v", p.PublicIPs[0])
 	}
 }
@@ -109,5 +109,19 @@ func TestIPObservationPreservesCustomSource(t *testing.T) {
 	}
 	if p.PublicIPs[0].ObservedAt.IsZero() {
 		t.Fatalf("unexpected observation time: %+v", p.PublicIPs[0])
+	}
+}
+
+func TestDefaultEchoURLCarriesTheAddressFamily(t *testing.T) {
+	// api.ipify.org 没有 AAAA 记录。这一条守着「IPv6 问 IPv4-only 的域名」这类
+	// 缺陷：它不会让编译失败，只会让 IPv6 那一路永远停在 DNS 解析失败上。
+	if got := defaultEchoURL("4"); got != "https://api.ipify.org" {
+		t.Fatalf("IPv4 回显地址: %q", got)
+	}
+	if got := defaultEchoURL("6"); got != "https://api6.ipify.org" {
+		t.Fatalf("IPv6 回显地址: %q", got)
+	}
+	if defaultEchoURL("6") == defaultEchoURL("4") {
+		t.Fatal("两个地址族不能问同一个域名：api.ipify.org 解析不出 AAAA")
 	}
 }

@@ -38,15 +38,27 @@ type Collector struct {
 }
 
 const (
-	publicIPEchoURL = "https://api.ipify.org"
-	publicIPTimeout = 6 * time.Second
-	publicIPMaxTime = "5"
+	// api.ipify.org 只有 A 记录、api6.ipify.org 只有 AAAA。要拿哪个地址族的
+	// 地址就得问解析得出那个族的域名 —— 两个族都问 api.ipify.org 的话，
+	// IPv6 那一路每次都停在 DNS 解析失败上，永远拿不到地址。
+	publicIP4EchoURL = "https://api.ipify.org"
+	publicIP6EchoURL = "https://api6.ipify.org"
+	publicIPTimeout  = 6 * time.Second
+	publicIPMaxTime  = "5"
 )
+
+// defaultEchoURL 是某个地址族默认要问的回显地址。
+func defaultEchoURL(family string) string {
+	if family == "6" {
+		return publicIP6EchoURL
+	}
+	return publicIP4EchoURL
+}
 
 // runPublicIPCommand is a variable so probe tests can exercise command output
 // without requiring network access or a local curl installation.
 var runPublicIPCommand = func(ctx context.Context, family string) ([]byte, error) {
-	return exec.CommandContext(ctx, "curl", "-"+family+"fsS", "--max-time", publicIPMaxTime, publicIPEchoURL).Output()
+	return exec.CommandContext(ctx, "curl", "-"+family+"fsS", "--max-time", publicIPMaxTime, defaultEchoURL(family)).Output()
 }
 
 func (c *Collector) Sample(ctx context.Context, nodeID string) contract.Probe {
@@ -162,7 +174,7 @@ func (c *Collector) observeDefault(ctx context.Context) []contract.IPObservation
 				return
 			}
 			results <- result{family: family, ip: contract.IPObservation{
-				Address: ip.String(), Family: "ipv" + family, Source: publicIPEchoURL, ObservedAt: time.Now().UTC(),
+				Address: ip.String(), Family: "ipv" + family, Source: defaultEchoURL(family), ObservedAt: time.Now().UTC(),
 			}}
 		}(family)
 	}
