@@ -8,6 +8,8 @@ import { state, adminSite } from "./core/state";
 import type { User } from "./core/state";
 const route = useRoute();
 const router = useRouter();
+// 探针页是独立窗口：没有侧栏与顶栏，内容铺满整屏。
+const standalone = computed(() => route.meta.standalone === true);
 const username = ref("");
 const password = ref("");
 const busy = ref(false);
@@ -44,12 +46,14 @@ async function loadSite() {
   } catch {}
   await loadCaptcha();
 }
-const menus = computed(() => [
+const menus = computed<
+  { path: string; label: string; icon: string; blank?: boolean }[]
+>(() => [
   { path: "/overview", label: "概览", icon: "activity" },
   { path: "/rules", label: "转发规则", icon: "arrow-right-left" },
   { path: "/exits", label: "出口管理", icon: "arrow-right-left" },
   { path: "/nodes", label: "服务器", icon: "server" },
-  { path: "/probes", label: "实时探针", icon: "activity" },
+  { path: "/probes", label: "实时探针", icon: "activity", blank: true },
   { path: "/diagnostics", label: "网络诊断", icon: "radar" },
   { path: "/commerce", label: "套餐与钱包", icon: "wallet" },
   { path: "/operations", label: "运营与任务", icon: "layers" },
@@ -235,15 +239,15 @@ onMounted(async () => {
   <div class="shell">
     <!-- 环境光晕：磨砂能读得出来的前提。光斑必须落在侧栏与顶栏覆盖的
          区域上，否则那两处背后什么都没有，玻璃就只是「深色块」。 -->
-    <div class="ambient" aria-hidden="true">
+    <div v-if="!standalone" class="ambient" aria-hidden="true">
       <div class="ambient-orb ambient-orb-a" />
       <div class="ambient-orb ambient-orb-b" />
       <div class="ambient-orb ambient-orb-c" />
       <div class="ambient-orb ambient-orb-d" />
     </div>
-    <a class="skip-link" href="#view">跳到主要内容</a>
+    <a v-if="!standalone" class="skip-link" href="#view">跳到主要内容</a>
     <div class="layout">
-      <aside class="sidebar glass">
+      <aside v-if="!standalone" class="sidebar glass">
         <a class="brand" href="#/overview">
           <span class="brand-mark brand-gradient">
             <Icon name="arrow-right-left" />
@@ -264,21 +268,30 @@ onMounted(async () => {
             }"
             aria-hidden="true"
           />
-          <RouterLink
-            v-for="item in menus"
-            :key="item.path"
-            :ref="(el) => registerNav(item.path, el)"
-            :to="item.path"
-            :aria-current="route.path === item.path ? 'page' : undefined"
-            ><Icon :name="item.icon" />{{ item.label }}</RouterLink
-          >
+          <template v-for="item in menus" :key="item.path">
+            <!-- 独立窗口的页面不能在外壳里打开：这里新开一个标签页。 -->
+            <a
+              v-if="item.blank"
+              :href="`#${item.path}`"
+              target="_blank"
+              rel="noopener"
+              ><Icon :name="item.icon" />{{ item.label }}</a
+            >
+            <RouterLink
+              v-else
+              :ref="(el) => registerNav(item.path, el)"
+              :to="item.path"
+              :aria-current="route.path === item.path ? 'page' : undefined"
+              ><Icon :name="item.icon" />{{ item.label }}</RouterLink
+            >
+          </template>
         </nav>
         <div class="sidebar-foot">
           <span class="status-dot" /> 私有部署 · 自主掌控
         </div>
       </aside>
       <div class="content">
-        <header class="topbar glass">
+        <header v-if="!standalone" class="topbar glass">
           <span>{{ title }}</span>
           <div class="toolbar">
             <label class="sr-only" for="accent">品牌配色</label
@@ -310,7 +323,7 @@ onMounted(async () => {
             </button>
           </div>
         </header>
-        <main id="view" tabindex="-1">
+        <main id="view" :class="{ 'view-standalone': standalone }" tabindex="-1">
           <!-- 骨架屏按真实首页的比例摆：标题、说明、三张统计卡、一块内容卡。
                形状对上了，数据到达时是「填上」而不是「重排」。 -->
           <div v-if="!state.ready" class="page boot" aria-busy="true">

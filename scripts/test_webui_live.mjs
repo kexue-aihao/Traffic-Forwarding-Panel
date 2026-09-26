@@ -762,7 +762,7 @@ try {
       );
       // 探针是付费能力：这个账号此时还没有有效权益，列表与历史都要拒。
       // 内容断言放在下面购买套餐之后。
-      await user.getByRole("link", { name: "实时探针", exact: true }).click();
+      await user.evaluate(() => { location.hash = "#/probes"; });
       await user
         .getByText("需要有效的套餐权益才能查看探针", { exact: false })
         .waitFor();
@@ -778,6 +778,8 @@ try {
         ).status(),
         403,
       );
+      // 探针是独立窗口，没有侧栏；先回外壳再点导航。
+      await user.evaluate(() => { location.hash = "#/overview"; });
       await user.getByRole("link", { name: "转发规则", exact: true }).click();
       await user.getByRole("button", { name: "新增", exact: true }).click();
       await user
@@ -982,7 +984,7 @@ try {
       assert.equal(beforeAddon.limits.max_ips_per_node, 2);
       assert.equal(beforeAddon.limits.bytes_per_second_per_node, "1048576");
       // 有了权益，探针才可见：只包含本组设备，且对普通用户隐藏公网 IP。
-      await user.getByRole("link", { name: "实时探针", exact: true }).click();
+      await user.evaluate(() => { location.hash = "#/probes"; });
       await user
         .getByRole("heading", { name: `simulated-${browserName}` })
         .waitFor();
@@ -1073,8 +1075,9 @@ try {
         .getByRole("button", { name: "确认提交", exact: true })
         .click();
       await admin.locator("dialog").waitFor({ state: "detached" });
-      // 上面的探针断言把用户留在了探针页，这里回到套餐与钱包 —— 下面几条
-      // 断言都在这个页面上。
+      // 上面的探针断言把用户留在了独立窗口（没有侧栏），先回外壳，再去套餐与
+      // 钱包 —— 下面几条断言都在这个页面上。
+      await user.evaluate(() => { location.hash = "#/overview"; });
       await user.getByRole("link", { name: "套餐与钱包", exact: true }).click();
       await user.getByRole("button", { name: "刷新状态", exact: true }).click();
       const userAddon = user.locator("article").filter({
@@ -1558,7 +1561,12 @@ try {
             ["operations", "运营与任务"],
             ["probes", "实时探针"],
           ]) {
-            await page.getByRole("link", { name: label, exact: true }).click();
+            if (section === "probes") {
+              // 探针是独立窗口，导航项会新开标签页；截图这里直接切过去。
+              await page.evaluate(() => { location.hash = "#/probes"; });
+            } else {
+              await page.getByRole("link", { name: label, exact: true }).click();
+            }
             await page.waitForTimeout(180);
             for (const [viewport, size] of [
               ["desktop", { width: 1440, height: 1000 }],
@@ -1583,6 +1591,10 @@ try {
                   .evaluate((el) => el.clientHeight > 0),
                 "main is reachable",
               );
+            }
+            if (section === "probes") {
+              // 探针是独立窗口，没有侧栏：截完图回外壳，后面的用例还要点导航。
+              await page.evaluate(() => { location.hash = "#/overview"; });
             }
           }
         }

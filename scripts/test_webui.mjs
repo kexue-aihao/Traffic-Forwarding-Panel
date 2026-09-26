@@ -542,7 +542,25 @@ try {
         .getByText("<img src=x onerror=alert(1)>", { exact: true })
         .waitFor();
       assert.equal(await page.locator("td img").count(), 0);
-      await page.getByRole("link", { name: "实时探针", exact: true }).click();
+      // 实时探针是独立窗口：导航项新开标签页，外壳里不再有嵌入式版本。
+      {
+        const probeLink = page.getByRole("link", { name: "实时探针", exact: true });
+        assert.equal(await probeLink.getAttribute("target"), "_blank", "实时探针应当新开标签页");
+        assert.equal(await probeLink.getAttribute("href"), "#/probes");
+      }
+      // 点导航项要真的开出一个新标签页，且新标签页里是独立布局、会话仍然有效。
+      {
+        const [tab] = await Promise.all([
+          page.waitForEvent("popup"),
+          page.getByRole("link", { name: "实时探针", exact: true }).click(),
+        ]);
+        await tab.waitForLoadState("domcontentloaded");
+        assert.equal(await tab.locator(".sidebar").count(), 0, "新标签页里不该有侧栏");
+        await tab.getByRole("heading", { name: "Fixture node" }).waitFor();
+        await tab.close();
+      }
+      await page.evaluate(() => { location.hash = "#/probes"; });
+      assert.equal(await page.locator(".sidebar").count(), 0, "独立窗口里不该有侧栏");
       await page.getByRole("heading", { name: "Fixture node" }).waitFor();
       await page.locator(".probe-details summary").first().click();
       await page
@@ -930,6 +948,8 @@ try {
           ),
         });
       }
+      // 探针是独立窗口，没有侧栏；下面几条用例要回外壳里点导航。
+      await page.evaluate(() => { location.hash = "#/overview"; });
       await page.getByRole("link", { name: "套餐与钱包", exact: true }).click();
       await page
         .getByText("到期 2026-01-16 00:20:30", { exact: true })

@@ -19,7 +19,9 @@ export const router = createRouter({
     { path: "/exits", component: Exits },
     { path: "/", redirect: "/overview" },
     { path: "/overview", component: Dashboard },
-    { path: "/probes", component: Probes },
+    // 探针页在新标签页里独立打开：meta.standalone 让外壳跳过侧栏与顶栏，
+    // 页面因此铺满整屏（见 App.vue 与 .view-standalone）。
+    { path: "/probes", component: Probes, meta: { standalone: true } },
     { path: "/commerce", component: Commerce },
     { path: "/operations", component: Operations },
     { path: "/wallet", redirect: "/commerce" },

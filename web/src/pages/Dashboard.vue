@@ -61,7 +61,7 @@ onMounted(load);
       <p class="muted">
         实时探针展示节点实际采样数据。配置保存和节点实际应用分别显示，方便定位异常。
       </p>
-      <RouterLink to="/probes">打开实时探针 →</RouterLink>
+      <a href="#/probes" target="_blank" rel="noopener">打开实时探针 →</a>
     </div>
   </section>
 </template>

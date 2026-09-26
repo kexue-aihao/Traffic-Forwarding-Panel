@@ -515,6 +515,10 @@ nav a[aria-current="page"] .icon {
   max-width: var(--page-max);
   margin: 0 auto;
 }
+/* 独立打开的探针页没有侧栏，页面的宽度上限在这里放开，铺满整屏。 */
+.view-standalone .page {
+  max-width: none;
+}
 
 .page-heading {
   display: flex;
