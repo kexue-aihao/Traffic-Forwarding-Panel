@@ -591,6 +591,20 @@ try {
         "2001:db8::8",
       );
 
+      // 完整 IPv6 有 38 个字符，比这一列宽得多。折行可以，横向截断不行 ——
+      // 截掉的地址认不出是哪一台，而地址就是这一列的全部内容。
+      {
+        const ipv6 = page.locator(".probe-location-cell").nth(1).locator(".probe-ip");
+        const original = await ipv6.innerText();
+        await ipv6.evaluate((el) => { el.textContent = "2406:da14:158:2f00:1539:96b4:591e:777c"; });
+        assert.equal(
+          await ipv6.evaluate((el) => el.scrollWidth > el.clientWidth),
+          false,
+          "完整 IPv6 必须折行显示，不能横向截断",
+        );
+        await ipv6.evaluate((el, text) => { el.textContent = text; }, original);
+      }
+
       // 国旗要和状态标记一样高：两块挨着看，大小不一致会显得没对齐。
       const markBox = await page.locator(".probe-status-square .icon").first().boundingBox();
       const flagBox = await page

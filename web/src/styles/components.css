@@ -1106,7 +1106,7 @@ tbody tr:hover td {
   overflow-x: auto;
 }
 .probe-list .probe {
-  min-width: 1080px;
+  min-width: 1200px;
   margin: 0;
   padding: 18px 0 16px;
   border-radius: 0;
@@ -1119,7 +1119,7 @@ tbody tr:hover td {
   grid-template-columns: minmax(200px, 240px) minmax(220px, 280px) 1fr;
   align-items: center;
   gap: 16px;
-  min-width: 1080px;
+  min-width: 1200px;
   margin-bottom: 12px;
 }
 .probe-head-rate {
@@ -1139,12 +1139,12 @@ tbody tr:hover td {
 .probe-row {
   display: grid;
   grid-template-columns:
-    minmax(64px, 0.5fr) minmax(116px, 0.75fr) minmax(116px, 0.75fr)
+    minmax(64px, 0.5fr) minmax(140px, 0.9fr) minmax(180px, 1.3fr)
     minmax(168px, 1.1fr) minmax(100px, 0.72fr) minmax(140px, 0.92fr)
     repeat(3, minmax(102px, 0.8fr)) auto;
   align-items: center;
   gap: 12px;
-  min-width: 1080px;
+  min-width: 1200px;
 }
 .probe-name {
   display: block;
@@ -1262,13 +1262,13 @@ tbody tr:hover td {
   display: block;
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
   color: var(--color-ink);
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 完整 IPv6 有 39 个字符，比这一列宽得多。省略号会把地址截成认不出是哪
+     一台的串，而地址就是这一列的全部内容 —— 折行显示，多占一行没关系。 */
+  overflow-wrap: anywhere;
 }
 .probe-empty {
   color: var(--color-ink-subtle);
