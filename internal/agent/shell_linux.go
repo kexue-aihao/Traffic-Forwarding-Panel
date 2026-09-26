@@ -17,12 +17,22 @@ import (
 
 func runShell(ctx context.Context, conn *websocket.Conn) error {
 	cmd := exec.Command("/bin/bash", "--noprofile", "--norc", "-i")
-	cmd.Dir = "/"
-	if home, e := os.UserHomeDir(); e == nil {
+	// 默认落在 Agent 的配置目录：开 WebSSH 多半就是为了看它的配置、状态和单元
+	// 文件，落在 /root 还得自己 cd 过去。目录不在（非官方安装路径）就退回原来的
+	// 位置，别让一个探测失败把终端卡在 / 上。
+	cmd.Dir = "/etc/tfp-agent"
+	if _, e := os.Stat(cmd.Dir); e != nil {
+		cmd.Dir = "/"
+	}
+	home, e := os.UserHomeDir()
+	if e == nil && cmd.Dir == "/" {
 		cmd.Dir = home
 	}
+	if e != nil {
+		home = "/"
+	}
 	// Do not expose enrollment/exit tokens from the service environment.
-	cmd.Env = []string{"TERM=xterm-256color", "LANG=C.UTF-8", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=" + cmd.Dir}
+	cmd.Env = []string{"TERM=xterm-256color", "LANG=C.UTF-8", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=" + home}
 	terminal, e := pty.StartWithSize(cmd, &pty.Winsize{Cols: 100, Rows: 30})
 	if e != nil {
 		return e

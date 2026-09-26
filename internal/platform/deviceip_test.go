@@ -102,11 +102,12 @@ func TestDeviceIPSingleDeviceAndList(t *testing.T) {
 
 	single := read[map[string]any](t, f.req("GET", "/online/device/ip", nil, raw), 200)
 	device := single["device"].(map[string]any)
-	if device["address"] != "198.51.100.7" || device["group_id"] != group.ID || device["online"] != true {
+	if device["ipv4"] != "198.51.100.7" || device["node_name"] != "hk-1" {
 		t.Fatalf("单台机器的地址不对: %v", device)
 	}
-	if device["node_id"] != first.NodeID || device["node_name"] != "hk-1" {
-		t.Fatalf("单台机器的身份不对: %v", device)
+	// 一台设备一条记录：只有 IPv4 时不编造一个空的 IPv6 字段。
+	if _, invented := device["ipv6"]; invented {
+		t.Fatalf("没有 IPv6 却给出了 ipv6 字段: %v", device)
 	}
 
 	// 机器被替换：新节点接管同一组，列表里给出的是新节点的新地址。
@@ -123,7 +124,7 @@ func TestDeviceIPSingleDeviceAndList(t *testing.T) {
 	addresses := map[string]string{}
 	for _, item := range items {
 		entry := item.(map[string]any)
-		addresses[entry["node_name"].(string)] = entry["address"].(string)
+		addresses[entry["node_name"].(string)] = entry["ipv4"].(string)
 	}
 	if addresses["hk-1"] != "198.51.100.7" || addresses["hk-2"] != "198.51.100.8" {
 		t.Fatalf("列表里的地址不对: %v", addresses)
@@ -160,7 +161,7 @@ func TestDeviceIPIsolatedBetweenGroups(t *testing.T) {
 	}
 }
 
-func TestDeviceIPPrefersIPv4(t *testing.T) {
+func TestDeviceIPReturnsBothFamilies(t *testing.T) {
 	f := setup(t)
 	f.offlineGeo()
 	f.entitled()
@@ -177,8 +178,12 @@ func TestDeviceIPPrefersIPv4(t *testing.T) {
 	}
 	page := read[map[string]any](t, f.req("GET", "/online/device/ip/list", nil, secret["token"].(string)), 200)
 	entry := page["items"].([]any)[0].(map[string]any)
-	if entry["address"] != "198.51.100.20" || entry["family"] != "ipv4" {
-		t.Fatalf("没有优先选择 IPv4: %v", entry)
+	if entry["node_name"] != "dual" {
+		t.Fatalf("设备名不对: %v", entry)
+	}
+	// 双栈机器一条记录里给两个地址，调用方不必先问这台机器是哪一族。
+	if entry["ipv4"] != "198.51.100.20" || entry["ipv6"] != "2001:db8::1" {
+		t.Fatalf("双栈地址没有一起返回: %v", entry)
 	}
 }
 

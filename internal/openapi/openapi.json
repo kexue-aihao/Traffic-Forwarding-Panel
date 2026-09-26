@@ -457,66 +457,18 @@
       "DeviceIP": {
         "additionalProperties": false,
         "properties": {
-          "address": {
+          "ipv4": {
             "type": "string"
           },
-          "family": {
-            "type": "string"
-          },
-          "group_id": {
-            "type": "string"
-          },
-          "group_name": {
-            "type": "string"
-          },
-          "last_seen": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "location": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GeoLocation"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "node_id": {
+          "ipv6": {
             "type": "string"
           },
           "node_name": {
             "type": "string"
-          },
-          "observed_at": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "online": {
-            "type": "boolean"
-          },
-          "source": {
-            "type": "string"
           }
         },
         "required": [
-          "node_id",
-          "node_name",
-          "group_id",
-          "group_name",
-          "address",
-          "family",
-          "source",
-          "observed_at",
-          "online"
+          "node_name"
         ],
         "type": "object"
       },
@@ -4942,7 +4894,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -4987,7 +4939,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5026,7 +4978,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5065,7 +5017,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5107,7 +5059,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5149,7 +5101,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5188,7 +5140,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5230,7 +5182,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5272,7 +5224,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5311,7 +5263,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5353,7 +5305,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5395,7 +5347,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5444,7 +5396,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [],
@@ -5489,7 +5441,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5528,7 +5480,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5588,7 +5540,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5647,7 +5599,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5686,7 +5638,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [],
@@ -5731,7 +5683,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [],
@@ -5779,7 +5731,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5834,7 +5786,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5886,7 +5838,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [],
@@ -5921,7 +5873,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -5983,7 +5935,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6043,7 +5995,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6096,7 +6048,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6138,7 +6090,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6198,7 +6150,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6240,7 +6192,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6297,7 +6249,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6336,7 +6288,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6406,7 +6358,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6455,7 +6407,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6497,7 +6449,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6551,7 +6503,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6613,7 +6565,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6673,7 +6625,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6740,7 +6692,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6799,7 +6751,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6859,7 +6811,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6917,7 +6869,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -6982,7 +6934,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7031,7 +6983,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7096,7 +7048,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7135,7 +7087,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [],
@@ -7190,7 +7142,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7247,7 +7199,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7297,7 +7249,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7362,7 +7314,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7421,7 +7373,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7473,7 +7425,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7536,7 +7488,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7585,7 +7537,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7627,7 +7579,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7686,7 +7638,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7748,7 +7700,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7815,7 +7767,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7882,7 +7834,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7931,7 +7883,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -7998,7 +7950,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8065,7 +8017,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8132,7 +8084,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8199,7 +8151,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8266,7 +8218,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8305,7 +8257,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8316,7 +8268,7 @@
             "ownerBearer": []
           }
         ],
-        "summary": "Latest address of the single device visible to this API token; 409 when the group has several",
+        "summary": "The single device visible to this API token with its latest IPv4 and IPv6; 409 when the group has several",
         "x-aliases": [
           "/online/device/ip"
         ],
@@ -8350,7 +8302,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8361,7 +8313,7 @@
             "ownerBearer": []
           }
         ],
-        "summary": "Latest addresses of every device visible to this API token, grouped and ordered",
+        "summary": "One record per visible device carrying its latest IPv4 and IPv6, grouped and ordered",
         "x-aliases": [
           "/online/device/ip/list"
         ],
@@ -8395,7 +8347,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [],
@@ -8450,7 +8402,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8510,7 +8462,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8580,7 +8532,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8650,7 +8602,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8661,7 +8613,7 @@
             "ownerBearer": []
           }
         ],
-        "summary": "Query verified provider status; unsupported protocols return 422",
+        "summary": "Query verified provider status; protocols without query support return 500 not_implemented",
         "x-role": "user"
       }
     },
@@ -8720,7 +8672,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8769,7 +8721,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8811,7 +8763,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -8853,7 +8805,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [],
@@ -8901,7 +8853,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [],
@@ -8961,7 +8913,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [],
@@ -9016,7 +8968,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9076,7 +9028,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9143,7 +9095,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9208,7 +9160,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9247,7 +9199,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9290,7 +9242,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9366,7 +9318,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9408,7 +9360,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9468,7 +9420,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9520,7 +9472,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9590,7 +9542,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9649,7 +9601,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9691,7 +9643,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9748,7 +9700,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9805,7 +9757,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9864,7 +9816,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9926,7 +9878,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -9996,7 +9948,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10055,7 +10007,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10114,7 +10066,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10174,7 +10126,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10235,7 +10187,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10303,7 +10255,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10355,7 +10307,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10425,7 +10377,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10467,7 +10419,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [],
@@ -10520,7 +10472,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10559,7 +10511,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10621,7 +10573,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10683,7 +10635,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10745,7 +10697,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10797,7 +10749,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10867,7 +10819,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10929,7 +10881,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -10986,7 +10938,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11046,7 +10998,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11113,7 +11065,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11173,7 +11125,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11240,7 +11192,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11305,7 +11257,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11363,7 +11315,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11438,7 +11390,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11477,7 +11429,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11519,7 +11471,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11561,7 +11513,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11621,7 +11573,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11681,7 +11633,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [
@@ -11749,7 +11701,7 @@
                 }
               }
             },
-            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation."
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
           }
         },
         "security": [

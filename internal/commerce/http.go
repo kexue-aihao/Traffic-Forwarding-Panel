@@ -31,10 +31,13 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 			status := http.StatusBadRequest
 			message := "Request could not be completed"
 			code := "commerce_error"
+			// 接口在、功能不在：该协议没有这条能力（原版 EPUSDT 就没有查单）。
+			// 这是服务端缺实现，不是调用方把请求写错了 —— 按 500 报，别让人以为
+			// 改改参数就能成功。
 			if errors.Is(e, payment.ErrUnsupported) {
-				status = 422
-				code = "unsupported"
-				message = "该支付协议不支持此操作"
+				status = http.StatusInternalServerError
+				code = "not_implemented"
+				message = "该支付协议未实现此操作"
 			}
 			if errors.Is(e, ErrPaymentUncertain) {
 				status = 409

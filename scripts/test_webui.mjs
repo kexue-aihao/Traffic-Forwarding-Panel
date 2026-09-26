@@ -182,7 +182,8 @@ const server = createServer(async (req, res) => {
     }
     if (path === "/orders/uncertain-fixture/reconcile") {
       reconcileCalls++;
-      return json({ code: "unsupported", error: "查询不支持" }, 422);
+      // 该协议没有查单能力：接口在、功能不在，后端按 500 报。
+      return json({ code: "not_implemented", error: "该支付协议未实现此操作" }, 500);
     }
     if (path === "/rules" && req.method === "POST") {
       rules.push({ ...body, id: "r1", version: 1 });
@@ -425,7 +426,12 @@ try {
       const errors = [];
       page.on("pageerror", (e) => errors.push(e.message));
       page.on("console", (m) => {
-        if (m.type() === "error") errors.push(m.text());
+        if (m.type() !== "error") return;
+        // 支付核对那条用例故意让后端回 500（该协议没有查单能力：接口在、功能不在），
+        // 浏览器会把 5xx 记成控制台错误。只放过这一个响应，别的 5xx 照旧算失败。
+        const failed = m.location()?.url ?? "";
+        if (failed.includes("/orders/") && failed.endsWith("/reconcile")) return;
+        errors.push(m.text());
       });
       await page.goto(base + "/admin");
       await page
@@ -806,28 +812,35 @@ try {
         .locator(".history-selection")
         .getByText("0 %", { exact: true })
         .waitFor();
-      await page.getByLabel("历史指标").selectOption("load1");
-      await history.getByText("该指标在此时间范围没有有效值。").waitFor();
-      assert.equal(
-        await history.locator("svg").count(),
-        0,
-        "unknown metrics have no synthetic zero chart",
+      // 上下行合并成一条曲线之后不再有「1 分钟负载」这个指标位，选项里也不该
+      // 再有它；留下的四个指标就是面板会画的全部。
+      assert.deepEqual(
+        await page.getByLabel("历史指标").locator("option").allTextContents(),
+        ["CPU (%)", "内存 (%)", "磁盘 (%)", "上行/下行 (MB/s)"],
       );
-      await page.getByLabel("历史指标").selectOption("upload_bps");
+      // 合并之前发出去的链接带的是 upload_bps：改指标不该让旧链接变成空白页，
+      // 它落到合并后的那条曲线上。
+      await page.evaluate(() => {
+        location.replace("#/probes?metric=upload_bps");
+      });
+      await history.getByText("6 个采样桶 · 6 个上行/下行有效值").waitFor();
+      assert.equal(await page.getByLabel("历史指标").inputValue(), "traffic");
+      await page.getByLabel("历史指标").selectOption("traffic");
       const slider = page.getByRole("slider", { name: "查看历史采样" });
       await slider.focus();
       await slider.press("Home");
-      await history
-        .locator(".history-selection")
-        .getByText("0 B/s", { exact: true })
-        .waitFor();
-      await slider.press("ArrowRight");
-      await history
-        .locator(".history-selection")
-        .getByText("1 KB/s", { exact: true })
-        .waitFor();
-      for (const expected of ["1 MB/s", "1 GB/s", "1023.99 GB/s", "1 TB/s"]) {
-        await slider.press("ArrowRight");
+      // 单位固定为 MB/s：1 TB/s 的采样点读作 1048576 MB/s，而不是自适应成
+      // 「1 TB/s」—— 两条曲线共用一条纵轴，单位不能随数值跳。
+      const readings = [
+        "上行 0 MB/s · 下行 0 MB/s",
+        "上行 0.001 MB/s · 下行 0.002 MB/s",
+        "上行 1 MB/s · 下行 0.004 MB/s",
+        "上行 1024 MB/s · 下行 0.006 MB/s",
+        "上行 1048576 MB/s · 下行 0.008 MB/s",
+        "上行 1048576 MB/s · 下行 0.01 MB/s",
+      ];
+      for (const [index, expected] of readings.entries()) {
+        if (index > 0) await slider.press("ArrowRight");
         await history
           .locator(".history-selection")
           .getByText(expected, { exact: true })
@@ -835,7 +848,7 @@ try {
       }
       assert.equal(
         await history.locator(".history-y span").first().innerText(),
-        "1 TB/s",
+        "1048576 MB/s",
       );
       if (name === "chromium") {
         await mkdir(resolve(import.meta.dirname, "../.gocache/screens"), {
@@ -864,7 +877,7 @@ try {
       }
       await page.getByLabel("历史时间范围").selectOption("180d");
       await page.waitForURL(/range=180d/);
-      await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();
+      await history.getByText("6 个采样桶 · 6 个上行/下行有效值").waitFor();
       assert.equal(
         historyRequests.at(-1).searchParams.get("resolution"),
         "hour",
@@ -889,11 +902,11 @@ try {
         "history filters replace the URL",
       );
       await page.reload();
-      await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();
+      await history.getByText("6 个采样桶 · 6 个上行/下行有效值").waitFor();
       assert.equal(await page.getByLabel("历史时间范围").inputValue(), "180d");
       assert.equal(
         await page.getByLabel("历史指标").inputValue(),
-        "upload_bps",
+        "traffic",
       );
       await page.getByLabel("历史节点").selectOption("n2");
       await history.getByText("此时间范围暂无历史采样。").waitFor();
@@ -906,7 +919,7 @@ try {
         .waitFor();
       historyMode = "samples";
       await history.getByRole("button", { name: "重试历史查询" }).click();
-      await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();
+      await history.getByText("6 个采样桶 · 6 个上行/下行有效值").waitFor();
       historyMode = "hold";
       // Wait for the fixture to hold the response before changing its mode.
       const heldRequest = once(server, "history-held", {
@@ -920,11 +933,11 @@ try {
         predicate: (request) => request.url().includes("/history?"),
       });
       await page.getByLabel("历史时间范围").selectOption("7d");
-      await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();
+      await history.getByText("6 个采样桶 · 6 个上行/下行有效值").waitFor();
       await cancelledHistory;
       releaseHistory();
       await page.waitForTimeout(100);
-      await history.getByText("6 个采样桶 · 6 个上行有效值").waitFor();
+      await history.getByText("6 个采样桶 · 6 个上行/下行有效值").waitFor();
       assert.equal(
         await page.getByLabel("历史时间范围").inputValue(),
         "7d",
@@ -943,10 +956,15 @@ try {
       // 的唯一信号，不能被平均抹平。
       historyMode = "partial";
       await page.getByLabel("历史时间范围").selectOption("24h");
-      await history.getByText("1 个采样桶 · 1 个上行有效值").waitFor();
+      await history.getByText("1 个采样桶 · 1 个上行/下行有效值").waitFor();
       await pickOption(page, "历史指标", "cpu_percent");
       await history.getByText("该指标在此时间范围没有有效值。").waitFor();
-      await pickOption(page, "历史指标", "upload_bps");
+      assert.equal(
+        await history.locator("svg").count(),
+        0,
+        "unknown metrics have no synthetic zero chart",
+      );
+      await pickOption(page, "历史指标", "traffic");
       historyMode = "samples";
       if (name === "chromium") {
         await page.getByLabel("历史时间范围").selectOption("1h");

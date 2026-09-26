@@ -6,26 +6,21 @@ import (
 	"errors"
 	"net/http"
 	"sort"
-	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
-
-// nodeOnlineWindow 是「这台机器还在线吗」的判定窗口。Agent 的心跳写入是按
-// 分钟节流的（见 probe 处理里的 heartbeat 限流），所以窗口要比一分钟宽出
-// 余量，否则在线机器会周期性地显示成离线。
-const nodeOnlineWindow = 150 * time.Second
 
 var errProbeRequired = errors.New("entitlement required")
 
 // deviceIP / deviceIPList 是探针页面对外预留的地址接口。
 //
-// 客户脚本要的是「我那组机器现在连哪个地址」。一组只有一台机器时看
-// /online/device/ip，多台时看 /online/device/ip/list —— 两个接口读同一份
-// 数据，区别只在单台时的形状：单台返回一台，多台仍然是列表。
+// 客户脚本要的是「我那组机器现在连哪个地址」。一台设备一条记录，记录里同时带
+// IPv4 与 IPv6 —— 有哪一族给哪一族，两族都有就都给，因此调用方不必先判断这台
+// 机器是双栈还是单栈。一组只有一台机器时看 /online/device/ip，多台时看
+// /online/device/ip/list：两个接口读同一份数据，区别只在单台时的形状。
 //
-// 机器被替换（node_id 变了）或只换了 IP（address/observed_at 变了）都体现在
-// 同一份列表里，客户不需要为这两种情况分别写代码。
+// 机器被替换或只换了 IP，都体现在同一份列表里，客户不需要为这两种情况分别写
+// 代码。
 func (s *Server) deviceIP(w http.ResponseWriter, r *http.Request) {
 	s.deviceAddresses(w, r, false)
 }
@@ -59,6 +54,13 @@ func (s *Server) deviceAddresses(w http.ResponseWriter, r *http.Request, list bo
 	}
 }
 
+// deviceRow 是排序用的中间形态：设备名可能重名，定序的最后一位得靠节点 id，
+// 而 id 不上接口。
+type deviceRow struct {
+	item            contract.DeviceIP
+	groupID, nodeID string
+}
+
 // ownerDeviceIPs 列出这个身份能看到的设备及其最新地址。
 //
 // 与探针页面同一套可见性：普通用户必须在组里、且有未过期的权益；管理员不受
@@ -74,7 +76,7 @@ func (s *Server) ownerDeviceIPs(ctx context.Context, u contract.User, group stri
 			return nil, errProbeRequired
 		}
 	}
-	query := `SELECT n.id,n.payload,n.last_seen,g.id,g.payload FROM cp_nodes n JOIN cp_node_groups ng ON ng.node_id=n.id JOIN cp_groups g ON g.id=ng.group_id`
+	query := `SELECT n.id,n.payload,g.id,g.payload FROM cp_nodes n JOIN cp_node_groups ng ON ng.node_id=n.id JOIN cp_groups g ON g.id=ng.group_id`
 	args := []any{}
 	if u.Role != "admin" {
 		query += ` WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=ng.group_id AND iu.id=?)`
@@ -93,12 +95,11 @@ func (s *Server) ownerDeviceIPs(ctx context.Context, u contract.User, group stri
 		return nil, e
 	}
 	defer rows.Close()
-	items := []contract.DeviceIP{}
+	table := []deviceRow{}
 	seen := map[string]bool{}
 	for rows.Next() {
 		var nodeID, nodePayload, groupID, groupPayload string
-		var lastSeen int64
-		if e = rows.Scan(&nodeID, &nodePayload, &lastSeen, &groupID, &groupPayload); e != nil {
+		if e = rows.Scan(&nodeID, &nodePayload, &groupID, &groupPayload); e != nil {
 			return nil, e
 		}
 		// 一台机器可能同时属于多个组，而列表是按组展示的：用节点+组做键去重，
@@ -109,81 +110,35 @@ func (s *Server) ownerDeviceIPs(ctx context.Context, u contract.User, group stri
 		seen[nodeID+"\x00"+groupID] = true
 		var node contract.Node
 		json.Unmarshal([]byte(nodePayload), &node)
-		var g contract.Group
-		json.Unmarshal([]byte(groupPayload), &g)
-		item := contract.DeviceIP{NodeID: nodeID, NodeName: node.Name, GroupID: groupID, GroupName: g.Name}
-		if lastSeen > 0 {
-			at := time.Unix(lastSeen, 0).UTC()
-			s.mu.RLock()
-			if contact := s.lastContact[nodeID]; contact.After(at) {
-				at = contact
-			}
-			s.mu.RUnlock()
-			item.LastSeen = &at
-			window := nodeOnlineWindow
-			if s.opts.OfflineNodeTime > 0 {
-				window = s.opts.OfflineNodeTime
-			}
-			item.Online = time.Since(at) <= window
+		row := deviceRow{item: contract.DeviceIP{NodeName: node.Name}, groupID: groupID, nodeID: nodeID}
+		// 地址取各家族最近一次的观测：两个都取，不做「优先 IPv4」的取舍 ——
+		// 取舍留给调用方，接口把机器实际有的地址照实给出。
+		s.mu.RLock()
+		probe, ok := s.probes[nodeID]
+		s.mu.RUnlock()
+		if ok {
+			row.item.IPv4 = probeAddressForFamily(probe, "ipv4")
+			row.item.IPv6 = probeAddressForFamily(probe, "ipv6")
 		}
-		if ip, family, source, at, ok := s.latestAddress(nodeID); ok {
-			item.Address, item.Family, item.Source, item.ObservedAt = ip, family, source, at
-			item.Location = s.locationFor(ctx, ip)
-		}
-		items = append(items, item)
+		table = append(table, row)
 	}
 	if e = rows.Err(); e != nil {
 		return nil, e
 	}
-	// 稳定顺序：先按分组，再按节点名。客户脚本按序取用不会因为 map 顺序抖动。
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].GroupID != items[j].GroupID {
-			return items[i].GroupID < items[j].GroupID
+	// 稳定顺序：先按分组，再按设备名。客户脚本按序取用不会因为 map 顺序抖动。
+	sort.Slice(table, func(i, j int) bool {
+		a, b := table[i], table[j]
+		if a.groupID != b.groupID {
+			return a.groupID < b.groupID
 		}
-		if items[i].NodeName != items[j].NodeName {
-			return items[i].NodeName < items[j].NodeName
+		if a.item.NodeName != b.item.NodeName {
+			return a.item.NodeName < b.item.NodeName
 		}
-		return items[i].NodeID < items[j].NodeID
+		return a.nodeID < b.nodeID
 	})
+	items := make([]contract.DeviceIP, 0, len(table))
+	for _, row := range table {
+		items = append(items, row.item)
+	}
 	return items, nil
-}
-
-// latestAddress 取一台机器最近一次观测到的对外地址。
-//
-// 优先 IPv4：客户拿这个地址去连服务，而多数入口只监听 v4；机器同时有 v6 时
-// 也仍然把 v6 观测留在探针页面上。两者都没有就返回 false —— 那表示这台机器
-// 还没有上报过地址，而不是「地址是空字符串」。
-func (s *Server) latestAddress(node string) (string, string, string, time.Time, bool) {
-	s.mu.RLock()
-	probe, ok := s.probes[node]
-	s.mu.RUnlock()
-	if !ok || len(probe.PublicIPs) == 0 {
-		return "", "", "", time.Time{}, false
-	}
-	best := contract.IPObservation{}
-	found := false
-	for _, ip := range probe.PublicIPs {
-		if ip.Address == "" {
-			continue
-		}
-		if !found || newerAddress(ip, best) {
-			best, found = ip, true
-		}
-	}
-	if !found {
-		return "", "", "", time.Time{}, false
-	}
-	at := best.ObservedAt
-	if at.IsZero() {
-		at = probe.SampledAt
-	}
-	return best.Address, best.Family, best.Source, at.UTC(), true
-}
-
-// newerAddress 是地址的择优顺序：先看是不是 IPv4，再看观测时间。
-func newerAddress(candidate, best contract.IPObservation) bool {
-	if (candidate.Family == "ipv4") != (best.Family == "ipv4") {
-		return candidate.Family == "ipv4"
-	}
-	return candidate.ObservedAt.After(best.ObservedAt)
 }

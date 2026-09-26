@@ -49,8 +49,8 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 | DELETE /rules/{id}?version=N | 无 | 204；待节点确认解绑才释放端口 |
 | GET /probes | 可选 `group_id` | `{items: Probe[]}`；付费能力，需有效权益；只含授权设备组的机器，`group_id` 非本人所属组时 403。补 `node_name/group_ids/location`；新客户端可按地址族读取 `ipv4_location/ipv6_location`，管理员响应另含 `public_ips`，普通用户隐藏地址但保留位置图标 |
 | GET /probes/events | 可选 `group_id` | SSE `event: probes` + 同上 JSON，每 5 秒重校验身份/授权 |
-| GET /online/device/ip | 可选 `group_id` | 探针页面预留的脚本接口：当前可见范围内**唯一**那台设备的 `{device:{...}}`；多台返回 409 并提示改用列表，无设备返回 404 |
-| GET /online/device/ip/list | 可选 `group_id` | `{items:[DeviceIP],total}`；一组多台时用它。机器被替换 `node_id` 变、只换 IP 时 `address/observed_at` 变，调用方无需改代码 |
+| GET /online/device/ip | 可选 `group_id` | 探针页面预留的脚本接口：当前可见范围内**唯一**那台设备的 `{device:{node_name,ipv4?,ipv6?}}`；多台返回 409 并提示改用列表，无设备返回 404 |
+| GET /online/device/ip/list | 可选 `group_id` | `{items:[DeviceIP],total}`；一组多台时用它。**一台设备一条记录**，机器被换掉/少了一族地址都只体现在同一份列表里，调用方无需改代码 |
 | GET /probes/{node_id}/history | `resolution=minute\|hour&from=RFC3339&to=RFC3339` | 授权节点聚合历史；无权限与节点不存在均404 |
 | GET /audit | 分页 | 管理员审计列表 |
 | GET /health | 无 | `{status,database,version}`，不含 DSN |
@@ -75,13 +75,13 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 
 当前 Agent 的配置与探针默认各每5秒同步，用量每1秒或待报记录达到100条时主动上报，每批最多500条；三者独立运行，单通道失败不会阻止其他通道。租约退还成功后立即触发配置拉取。仅租约/配置有效期刷新保留现有连接，后续计量切换到当前租约；退租仍须先持久停止旧租约并确认全部用量。TCP 遇到临时额度/待报队列不足最多等待30秒，UDP 丢弃当前未计费报文并保留会话，不使用过期或未签发额度。详细时序及边界见 [流量连续性修复](traffic-continuity.md)。这些改动保持现有 API 与 WAL 格式兼容。
 
-`DeviceIP`：`{node_id,node_name,group_id,group_name,address,family,source,observed_at,online,last_seen?,location?}`。`address` 取该节点最近一次观测到的对外地址，**优先 IPv4**（客户拿它去连服务）；`online` 按最近心跳判断；`location` 是 `{country_code,country_name?,region?,city?,source}`，来自站点设置里的地区查询服务，查不到就没有这个字段 —— 客户端要能接受缺失。接口带 `Authorization: Bearer <API Token>`，也接受同源 Cookie 会话；`/online/device/ip` 与 `/online/device/ip/list` 两个不带 `/api/v1` 前缀的路径是为客户脚本保留的稳定入口，与带前缀的同名接口等价。
+`DeviceIP`：`{node_name,ipv4?,ipv6?}`。**一台设备一条记录**，两个地址各取该节点最近一次的观测值：只有一族时只出现那一个字段，两族都有就都给 —— 客户脚本不必先判断机器是单栈还是双栈。地址是 Agent 上报的观测值而不是面板主动探测，机器没上报过地址时两个字段都不出现，客户端要能接受缺失（包含 `node_name` 在内，只有它为必填）。接口带 `Authorization: Bearer <API Token>`，也接受同源 Cookie 会话；`/online/device/ip` 与 `/online/device/ip/list` 两个不带 `/api/v1` 前缀的路径是为客户脚本保留的稳定入口，与带前缀的同名接口等价。
 
 已挂载商业接口：`GET/POST /plans`（创建仅管理员）、`GET /wallet`、`GET /ledger`、`GET /orders`、`POST /orders`、`POST /purchases`、`GET /entitlement`、`GET /payment-channels`。plans/orders/ledger 使用统一分页，钱包/订单/账本/权益只能读当前用户。购买请求 `{plan_id,expected_version,idempotency_key}`；充值 `{channel,amount,idempotency_key}`，金额**以元计**（`amount_cents` 仍兼容旧客户端，两者只能给一个）。先充值钱包，再余额购买，立即新周期/新有效期，旧事实不删除。
 
 通道级手续费与汇率：`payments.json` 的每条通道可设 `fee_percent`（百分数，最多两位小数）与 `fee_fixed`（元），手续费**加在充值金额之上** —— 钱包到账仍是用户填写的金额，实付是 `到账 + 手续费`，两者分别记在订单的 `amount_cents` 与 `payable_cents/fee_cents` 上，回调按实付核对、按到账入账。`rate` 是「1 单位加密货币折多少人民币」，`crypto_currency` 指定币种，用于给用户折算应付的 USDT（订单里是 `payable_crypto`）：Cryptomus/BEpusdt 下单时只收人民币金额由网关换算，TokenPay 以 `BaseCurrency` 计价，所以**网关侧要配同一个汇率**，报价与实收才会一致。`GET /payment-channels` 会返回 `fee_percent/fee_fixed/crypto_currency/rate` 供前端报价。
 
-`POST /orders/{id}/reconcile` 主动核对本人订单。`payment_uncertain` HTTP409 表示创建结果待核实，应保留原幂等键并查询订单；同键改金额或渠道冲突，不新建外部付款。`unsupported` HTTP422 表示该协议没有查单能力，不代表已付或失败。金额/订单号/币种验证与回调共用唯一入账事务。`POST /payments/{channel}/notify` 为供应商验签通知；EPay 还接受 GET。不得用浏览器返回页当作到账凭据。
+`POST /orders/{id}/reconcile` 主动核对本人订单。`payment_uncertain` HTTP409 表示创建结果待核实，应保留原幂等键并查询订单；同键改金额或渠道冲突，不新建外部付款。`not_implemented` HTTP500 表示该协议没有查单能力（接口在、功能不在），不代表已付或失败。金额/订单号/币种验证与回调共用唯一入账事务。`POST /payments/{channel}/notify` 为供应商验签通知；EPay 还接受 GET。不得用浏览器返回页当作到账凭据。
 
 服务模式同时运行后台核对：每轮最多20单，查单每次15秒超时，重试按30秒起步至1小时退避且持久保存。没有查单能力的协议不调度；未知或查单失败保留pending，未伪装成已付/失败。恢复旧备份后的缺失调度记录会有界补齐。服务退出取消worker，数据库关闭前等待退出；本机管理命令不启动worker。
 

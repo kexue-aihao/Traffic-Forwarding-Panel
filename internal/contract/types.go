@@ -254,21 +254,13 @@ type GeoLocation struct {
 	Source string `json:"source,omitempty"`
 }
 
-// DeviceIP 是探针页面归属组在某一刻对外暴露的地址。
+// DeviceIP 是一台设备当前对外暴露的地址。
 //
-// 机器被替换或换 IP 之后，客户脚本要拿到的是「现在这一个」。所以响应里
-// 同时给出节点身份与观测时间：换了机器看 node_id，只换 IP 看 address 与
-// observed_at，两者都是同一个列表的字段，不需要另外的接口。
+// 一台设备一条记录，记录里同时带 IPv4 与 IPv6：有哪一族给哪一族，两族都有就
+// 都给。客户脚本要的是「我那组机器现在连哪个地址」，所以这里只留设备名与两个
+// 地址 —— 机器被替换或换 IP 都体现在同一份列表里，不需要另外的接口或身份字段。
 type DeviceIP struct {
-	NodeID     string       `json:"node_id"`
-	NodeName   string       `json:"node_name"`
-	GroupID    string       `json:"group_id"`
-	GroupName  string       `json:"group_name"`
-	Address    string       `json:"address"`
-	Family     string       `json:"family"`
-	Source     string       `json:"source"`
-	ObservedAt time.Time    `json:"observed_at"`
-	Online     bool         `json:"online"`
-	LastSeen   *time.Time   `json:"last_seen,omitempty"`
-	Location   *GeoLocation `json:"location,omitempty"`
+	NodeName string `json:"node_name"`
+	IPv4     string `json:"ipv4,omitempty"`
+	IPv6     string `json:"ipv6,omitempty"`
 }

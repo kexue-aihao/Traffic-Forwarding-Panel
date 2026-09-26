@@ -221,7 +221,7 @@ function orderState(order: Order) {
   );
 }
 function businessError(error: unknown) {
-  if (error instanceof ApiError && error.code === "unsupported")
+  if (error instanceof ApiError && error.code === "not_implemented")
     return "该支付渠道不支持主动查单，请联系管理员核实，勿重复付款。";
   const message = errorText(error);
   return (

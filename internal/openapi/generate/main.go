@@ -292,8 +292,8 @@ func main() {
 		{"POST", "/users/{id}/tokens", "TokenCreate", "TokenSecret", "201", "admin", "Issue an API token for an account; the secret is returned exactly once", false},
 		{"POST", "/users/{id}/tokens/{token_id}/reset", "Empty", "TokenSecret", "200", "admin", "Replace a token secret in place; the new secret is returned exactly once", false},
 		{"DELETE", "/users/{id}/tokens/{token_id}", "", "", "204", "admin", "Revoke an account's API token", false},
-		{"GET", "/online/device/ip", "", "DeviceIPView", "200", "user", "Latest address of the single device visible to this API token; 409 when the group has several", false},
-		{"GET", "/online/device/ip/list", "", "DeviceIPPage", "200", "user", "Latest addresses of every device visible to this API token, grouped and ordered", false},
+		{"GET", "/online/device/ip", "", "DeviceIPView", "200", "user", "The single device visible to this API token with its latest IPv4 and IPv6; 409 when the group has several", false},
+		{"GET", "/online/device/ip/list", "", "DeviceIPPage", "200", "user", "One record per visible device carrying its latest IPv4 and IPv6, grouped and ordered", false},
 		{"GET", "/health", "", "Health", "200", "public", "Health and database kind", false},
 		{"GET", "/users", "", "UserPage", "200", "admin", "List users", true},
 		{"POST", "/users", "UserCreate", "UserCreated", "201", "admin", "Create user and return the system-generated initial password exactly once", false},
@@ -355,7 +355,7 @@ func main() {
 		{"GET", "/ledger", "", "LedgerPage", "200", "user", "Own immutable wallet ledger", true},
 		{"GET", "/orders", "", "OrderPage", "200", "user", "Own recharge orders", true},
 		{"POST", "/orders", "OrderCreate", "Order", "200", "user", "Create/replay recharge intent; payment_uncertain retains original key", false},
-		{"POST", "/orders/{id}/reconcile", "Empty", "Order", "200", "user", "Query verified provider status; unsupported protocols return 422", false},
+		{"POST", "/orders/{id}/reconcile", "Empty", "Order", "200", "user", "Query verified provider status; protocols without query support return 500 not_implemented", false},
 		{"POST", "/orders/{id}/close", "Empty", "Order", "200", "user", "Close locally; valid late receipt still credits wallet", false},
 		{"POST", "/orders/{id}/refund", "RefundRequest", "Refund", "200", "admin", "Reserve wallet funds for manual external refund", false},
 		{"GET", "/orders/{id}/refunds", "", "RefundList", "200", "user", "Owner or admin; owner cannot read internal evidence or actor ids", false},
@@ -403,7 +403,7 @@ func main() {
 		} else if r.path == "/probes/events" {
 			success["content"] = schema{"text/event-stream": schema{"schema": scalar("string"), "example": "event: probes\ndata: {\"items\":[]}\n\n"}}
 		}
-		responses["default"] = schema{"description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation.", "content": schema{"application/json": schema{"schema": ref("APIError")}, "text/plain": schema{"schema": scalar("string")}}}
+		responses["default"] = schema{"description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability.", "content": schema{"application/json": schema{"schema": ref("APIError")}, "text/plain": schema{"schema": scalar("string")}}}
 		operation["responses"] = responses
 		switch r.auth {
 		case "public", "provider":

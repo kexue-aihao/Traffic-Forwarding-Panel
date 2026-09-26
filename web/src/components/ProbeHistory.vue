@@ -8,9 +8,10 @@ import {
   formatDateTime,
   formatDate,
   formatTime,
-  formatBytes,
 } from "../core/format";
 
+// 面板只画这几列。接口仍然返回 load1（一分钟负载），但上下行合并成一张图之后
+// 不再需要一个单独的指标位，所以这里连类型都不留。
 interface HistorySample {
   sampled_at: string;
   resolution: "minute" | "hour";
@@ -18,9 +19,25 @@ interface HistorySample {
   cpu_percent: number | null;
   memory_percent: number | null;
   disk_percent: number | null;
-  load1: number | null;
   upload_bps: number | null;
   download_bps: number | null;
+}
+type SeriesKey =
+  | "cpu_percent"
+  | "memory_percent"
+  | "disk_percent"
+  | "upload_bps"
+  | "download_bps";
+interface Series {
+  key: SeriesKey;
+  label: string;
+}
+// 一个指标可以有多条曲线：上行与下行画在同一张图上，共用一条纵轴。
+interface Metric {
+  id: string;
+  label: string;
+  unit: "" | "%" | "MB/s";
+  series: Series[];
 }
 // address 是这台机器当前的公网 IPv4。取不到（普通账号看不到地址）时退回名字。
 const props = defineProps<{
@@ -38,14 +55,44 @@ const ranges = [
   { id: "30d", label: "最近 30 天", hours: 720, resolution: "hour" },
   { id: "180d", label: "最近 180 天", hours: 4320, resolution: "hour" },
 ] as const;
-const metrics = [
-  { key: "cpu_percent", label: "CPU", unit: "%" },
-  { key: "memory_percent", label: "内存", unit: "%" },
-  { key: "disk_percent", label: "磁盘", unit: "%" },
-  { key: "load1", label: "1 分钟负载", unit: "" },
-  { key: "upload_bps", label: "上行", unit: "B/s" },
-  { key: "download_bps", label: "下行", unit: "B/s" },
-] as const;
+const metrics: Metric[] = [
+  {
+    id: "cpu_percent",
+    label: "CPU",
+    unit: "%",
+    series: [{ key: "cpu_percent", label: "CPU" }],
+  },
+  {
+    id: "memory_percent",
+    label: "内存",
+    unit: "%",
+    series: [{ key: "memory_percent", label: "内存" }],
+  },
+  {
+    id: "disk_percent",
+    label: "磁盘",
+    unit: "%",
+    series: [{ key: "disk_percent", label: "磁盘" }],
+  },
+  {
+    id: "traffic",
+    label: "上行/下行",
+    unit: "MB/s",
+    series: [
+      { key: "upload_bps", label: "上行" },
+      { key: "download_bps", label: "下行" },
+    ],
+  },
+];
+// 上下行合并之前，链接里留下的是 upload_bps / download_bps。那些链接已经发给
+// 运维过，改指标不该让它们变成空白页，所以这两个值都落到合并后的曲线上；其余
+// 认不出的值照旧退回第一个指标。
+const mergedInto = new Set(["upload_bps", "download_bps"]);
+const metric = computed(() => {
+  const wanted = String(route.query.metric ?? "");
+  const id = mergedInto.has(wanted) ? "traffic" : wanted;
+  return metrics.find((item) => item.id === id) || metrics[0];
+});
 const selectedNode = computed(
   () =>
     props.nodes.find((node) => node.id === route.query.node) || props.nodes[0],
@@ -53,19 +100,16 @@ const selectedNode = computed(
 const range = computed(
   () => ranges.find((item) => item.id === route.query.range) || ranges[1],
 );
-const metric = computed(
-  () => metrics.find((item) => item.key === route.query.metric) || metrics[0],
-);
-const rateMetric = computed(() => metric.value.unit === "B/s");
 const raw = ref<HistorySample[]>([]);
-const metricKeys = [
+// 5 分钟一个点只合并这里列出的指标：列在里面的才会被画出来，也就只有它们的
+// 缺测该让整个点留空。
+const sampleKeys: SeriesKey[] = [
   "cpu_percent",
   "memory_percent",
   "disk_percent",
-  "load1",
   "upload_bps",
   "download_bps",
-] as const;
+];
 // 波形图五分钟一个点。一分钟一个点时 24 小时窗口有 1440 个点，图上挤成一团
 // 噪声，7 天窗口更是上万个。组内只要缺一分钟，这个点就整点留空 —— 断线是图上
 // 「这里没测到」的唯一信号，取平均会把它抹平成一条平滑的线。
@@ -74,17 +118,17 @@ function plotBucket(at: number) {
   return Math.floor(at / plotStep) * plotStep;
 }
 function mergeGroup(group: HistorySample[]): HistorySample {
-  const merged: HistorySample = { ...group[0] };
-  merged.samples = group.reduce((sum, item) => sum + item.samples, 0);
-  for (const key of metricKeys) {
+  const point: HistorySample = { ...group[0] };
+  point.samples = group.reduce((sum, item) => sum + item.samples, 0);
+  for (const key of sampleKeys) {
     if (group.some((item) => item[key] === null)) {
-      merged[key] = null;
+      point[key] = null;
       continue;
     }
-    merged[key] =
+    point[key] =
       group.reduce((sum, item) => sum + (item[key] ?? 0), 0) / group.length;
   }
-  return merged;
+  return point;
 }
 const items = computed(() => {
   if (range.value.resolution !== "minute" || raw.value.length === 0)
@@ -113,14 +157,27 @@ const selected = computed(() => items.value[selectedIndex.value]);
 const interval = computed(() =>
   range.value.resolution === "minute" ? plotStep : 3600000,
 );
+const plotted = computed(() =>
+  metric.value.series.map((series, index) => ({
+    ...series,
+    index,
+    segments: segmentsFor(series.key),
+  })),
+);
 const valid = computed(() =>
-  items.value.filter((item) => item[metric.value.key] !== null),
+  items.value.filter((item) =>
+    metric.value.series.some((series) => item[series.key] !== null),
+  ),
 );
-const ceiling = computed(() =>
-  metric.value.unit === "%"
-    ? Math.max(100, ...valid.value.map((item) => item[metric.value.key] || 0))
-    : Math.max(1, ...valid.value.map((item) => item[metric.value.key] || 0)),
-);
+// 速率的纵轴下限给 1 KB/s：全零或极小的流量不该把刻度压成 0，而按 1 MB/s 起步
+// 又会让几百 KB/s 的机器整条线贴在底部。
+const ceiling = computed(() => {
+  let top = metric.value.unit === "MB/s" ? 1024 : 1;
+  for (const item of items.value)
+    for (const series of metric.value.series)
+      top = Math.max(top, item[series.key] || 0);
+  return metric.value.unit === "%" ? Math.max(100, top) : top;
+});
 function x(item: HistorySample) {
   return (
     6 +
@@ -128,40 +185,61 @@ function x(item: HistorySample) {
       Math.max(windowEnd.value - windowStart.value, 1)
   );
 }
-function y(item: HistorySample) {
-  return 160 - (146 * (item[metric.value.key] || 0)) / ceiling.value;
+function y(item: HistorySample, key: SeriesKey) {
+  return 160 - (146 * (item[key] || 0)) / ceiling.value;
 }
-const segments = computed(() => {
+function segmentsFor(key: SeriesKey) {
   const lines: { points: string; count: number; x: number; y: number }[] = [];
   let lastTime = 0;
   let line: (typeof lines)[number] | undefined;
   for (const item of items.value) {
     const time = Date.parse(item.sampled_at);
-    if (item[metric.value.key] === null) {
+    if (item[key] === null) {
       line = undefined;
     } else {
       if (!line || time - lastTime > interval.value) {
-        line = { points: "", count: 0, x: x(item), y: y(item) };
+        line = { points: "", count: 0, x: x(item), y: y(item, key) };
         lines.push(line);
       }
-      line.points += `${x(item).toFixed(2)},${y(item).toFixed(2)} `;
+      line.points += `${x(item).toFixed(2)},${y(item, key).toFixed(2)} `;
       line.count++;
     }
     lastTime = time;
   }
   return lines;
-});
+}
 const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const compact = new Intl.NumberFormat(undefined, {
   notation: "compact",
   maximumFractionDigits: 1,
 });
+// 速率一律按 MB/s 显示。两条曲线共用一条纵轴，自适应换单位会让它们看起来不在
+// 同一量纲上；MB 与面板其余位置的 formatBytes 一样按 1024 进位，同一个数在
+// 面板各处读出来是一致的。不加千位分隔符，也是为了与 formatBytes 的读法一致。
+const rates = new Intl.NumberFormat(undefined, {
+  maximumFractionDigits: 3,
+  useGrouping: false,
+});
+function formatRate(bytesPerSecond: number) {
+  return `${rates.format(bytesPerSecond / (1024 * 1024))} MB/s`;
+}
+function amount(item: HistorySample, key: SeriesKey) {
+  const value = item[key];
+  if (value === null) return "未知";
+  return metric.value.unit === "MB/s"
+    ? formatRate(value)
+    : `${number.format(value)}${metric.value.unit ? " " + metric.value.unit : ""}`;
+}
+// 多曲线指标把每条曲线都读出来：读数行与滑块提示共用这一段。
 function value(item: HistorySample | undefined) {
-  const amount = item?.[metric.value.key];
-  if (amount === undefined || amount === null) return "未知";
-  return rateMetric.value
-    ? formatBytes(amount, "/s")
-    : `${number.format(amount)}${metric.value.unit ? " " + metric.value.unit : ""}`;
+  if (!item) return "未知";
+  return metric.value.series
+    .map((series) =>
+      metric.value.series.length > 1
+        ? `${series.label} ${amount(item, series.key)}`
+        : amount(item, series.key),
+    )
+    .join(" · ");
 }
 function axisTime(timestamp: number) {
   return range.value.hours <= 24
@@ -230,7 +308,8 @@ onUnmounted(() => {
     </div>
     <p class="small muted">
       分钟采样保留 7 天，小时汇总保留 180 天。波形图每 5
-      分钟一个点，5 分钟内只要缺一次采样这个点就留空；缺失不代表零用量或计费流量。
+      分钟一个点，5 分钟内只要缺一次采样这个点就留空；缺失不代表零用量或计费流量。速率按
+      MB/s 显示，上行与下行画在同一张图上。
     </p>
     <div v-if="nodes.length" class="history-controls">
       <label
@@ -254,8 +333,8 @@ onUnmounted(() => {
         </Select></label
       >
       <label
-        >历史指标<Select :value="metric.key" @change="select('metric', $event)">
-          <option v-for="item in metrics" :key="item.key" :value="item.key">
+        >历史指标<Select :value="metric.id" @change="select('metric', $event)">
+          <option v-for="item in metrics" :key="item.id" :value="item.id">
             {{ item.label }}{{ item.unit ? ` (${item.unit})` : "" }}
           </option>
         </Select></label
@@ -284,7 +363,9 @@ onUnmounted(() => {
         <div v-if="valid.length" class="history-plot">
           <div class="history-y" aria-hidden="true">
             <span>{{
-              rateMetric ? formatBytes(ceiling, "/s") : compact.format(ceiling)
+              metric.unit === "MB/s"
+                ? formatRate(ceiling)
+                : compact.format(ceiling)
             }}</span
             ><span>0</span>
           </div>
@@ -297,30 +378,39 @@ onUnmounted(() => {
           >
             <line x1="6" y1="14" x2="598" y2="14" class="history-guide" />
             <line x1="6" y1="160" x2="598" y2="160" class="history-guide" />
-            <g v-for="(segment, index) in segments" :key="index">
-              <polyline
-                v-if="segment.count > 1"
-                :points="segment.points"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                vector-effect="non-scaling-stroke"
-              />
+            <g
+              v-for="series in plotted"
+              :key="series.key"
+              :class="`history-series-${series.index}`"
+            >
+              <template v-for="(segment, index) in series.segments" :key="index">
+                <polyline
+                  v-if="segment.count > 1"
+                  :points="segment.points"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  vector-effect="non-scaling-stroke"
+                />
+                <circle
+                  v-else
+                  :cx="segment.x"
+                  :cy="segment.y"
+                  r="3"
+                  fill="currentColor"
+                />
+              </template>
+            </g>
+            <template v-for="series in plotted" :key="`point-${series.key}`">
               <circle
-                v-else
-                :cx="segment.x"
-                :cy="segment.y"
-                r="3"
+                v-if="selected && selected[series.key] !== null"
+                :class="`history-series-${series.index}`"
+                :cx="x(selected)"
+                :cy="y(selected, series.key)"
+                r="4"
                 fill="currentColor"
               />
-            </g>
-            <circle
-              v-if="selected && selected[metric.key] !== null"
-              :cx="x(selected)"
-              :cy="y(selected)"
-              r="4"
-              fill="currentColor"
-            />
+            </template>
           </svg>
           <div class="history-x" aria-hidden="true">
             <span>{{ axisTime(windowStart) }}</span
@@ -328,6 +418,14 @@ onUnmounted(() => {
           </div>
         </div>
         <p v-else class="empty">该指标在此时间范围没有有效值。</p>
+        <p v-if="metric.series.length > 1" class="history-legend">
+          <span
+            v-for="series in plotted"
+            :key="series.key"
+            :class="`history-series-${series.index}`"
+            ><i aria-hidden="true"></i>{{ series.label }}</span
+          >
+        </p>
         <label v-if="items.length > 1" class="history-scrubber"
           >查看历史采样<input
             v-model.number="selectedIndex"
@@ -368,6 +466,17 @@ onUnmounted(() => {
   display: block;
   color: var(--color-accent);
 }
+/* 上行用品牌色，下行用绿色：任何主题下都分得开。下行再加一条虚线，颜色之外
+   还有一条独立线索，高对比模式下两条线也还能区分。 */
+.history-series-0 {
+  color: var(--color-accent);
+}
+.history-series-1 {
+  color: var(--color-success);
+}
+.history-series-1 polyline {
+  stroke-dasharray: 6 3;
+}
 .history-plot {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
@@ -392,6 +501,29 @@ onUnmounted(() => {
 .history-guide {
   stroke: var(--color-line);
   stroke-dasharray: 4 4;
+}
+.history-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--color-ink-muted);
+}
+.history-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.history-legend i {
+  width: 14px;
+  height: 2px;
+  background: currentColor;
+}
+.history-legend .history-series-1 i {
+  background: repeating-linear-gradient(
+    to right,
+    currentColor 0 6px,
+    transparent 6px 9px
+  );
 }
 .history-scrubber {
   font-size: 12px;

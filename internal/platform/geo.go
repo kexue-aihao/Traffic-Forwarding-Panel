@@ -208,11 +208,6 @@ func (s *Server) geoTemplate(ctx context.Context) string {
 	return settings.GeoLookupURL
 }
 
-// locationFor 返回某台机器当前已知的位置，没有就返回 nil。
-func (s *Server) locationFor(ctx context.Context, ip string) *contract.GeoLocation {
-	return s.locationWith(ctx, ip, s.geoTemplate(ctx))
-}
-
 // locationWith 用调用方已经取好的查询地址模板取位置。探针推送在持有
 // 服务锁的时候调它 —— 模板要提前取，免得在锁里做一次数据库查询。
 func (s *Server) locationWith(ctx context.Context, ip, template string) *contract.GeoLocation {

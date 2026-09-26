@@ -1411,11 +1411,11 @@ try {
           headers: { Authorization: `Bearer ${apiToken}` },
         })
       ).json();
-      const simulated = devices.items.find((d) => d.address === "203.0.113.99");
+      const simulated = devices.items.find((d) => d.ipv4 === "203.0.113.99");
       assert.ok(simulated, "设备地址接口必须给出本组机器当前的 IP");
-      assert.equal(simulated.node_id, registered.node_id);
-      assert.equal(simulated.online, true);
-      assert.equal(simulated.family, "ipv4");
+      assert.equal(simulated.node_name, `simulated-${browserName}`);
+      // 一台设备一条记录：这台机器只上报了 IPv4，就不编造一个空的 IPv6 字段。
+      assert.equal("ipv6" in simulated, false, "没有 IPv6 却给出了 ipv6 字段");
       assert.equal(
         (
           await fetch(base + "/online/device/ip/list", {
