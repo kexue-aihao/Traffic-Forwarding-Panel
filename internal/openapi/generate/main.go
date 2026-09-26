@@ -214,6 +214,16 @@ func main() {
 	model("WebhookSecret", schema{"id": str, "url": str, "events": array(str), "secret": str, "created_at": date}, "id", "url", "events", "secret", "created_at")
 	model("WebhookDelivery", schema{"event_id": str, "subscription_id": str, "attempts": num, "status": schema{"type": "string", "enum": []string{"pending", "failed", "delivered", "suppressed", "access_revoked"}}, "next_at": date, "last_error": str, "delivered_at": str}, "event_id", "subscription_id", "attempts", "status", "next_at", "last_error", "delivered_at")
 	model("PaymentChannel", schema{"id": str, "name": str, "enabled": flag, "status": str, "reason": str}, "id", "name", "enabled", "status", "reason")
+	// 面板上配置的支付通道。商户密钥只写不读：响应里只有一个 key_set，保存时
+	// 留空表示沿用已经存下来的那一把。
+	model("PaymentChannelSettings", schema{
+		"gateway": str, "merchant_id": str,
+		"key":             schema{"type": "string", "writeOnly": true, "description": "Merchant key; never returned, leave empty to keep the stored one"},
+		"crypto_currency": str, "signature_algorithm": str, "epay_mode": str, "method": str,
+		"notify_url": str, "return_url": str, "fee_percent": str, "fee_fixed": str, "rate": str,
+		"configured": flag, "key_set": flag,
+	})
+	model("PaymentSettings", schema{"version": num, "channels": schema{"type": "object", "additionalProperties": ref("PaymentChannelSettings")}}, "version", "channels")
 	model("ExportTask", schema{"rule_ids": schema{"type": "array", "items": str, "maxItems": 500}, "idempotency_key": schema{"type": "string", "minLength": 1, "maxLength": 128}}, "idempotency_key")
 	model("ImportTask", schema{"mode": schema{"type": "string", "enum": []string{"create", "update_by_port"}}, "rules": schema{"type": "array", "items": ref("Rule"), "minItems": 1, "maxItems": 1000}, "idempotency_key": schema{"type": "string", "minLength": 1, "maxLength": 128}}, "rules", "idempotency_key")
 	model("TaskCancel", schema{"status": schema{"const": "cancel_requested"}}, "status")
@@ -385,6 +395,8 @@ func main() {
 		{"GET", "/webhook-deliveries", "", "WebhookDeliveryList", "200", "user", "Last 100 attempts; at most 12 tries per delivery", false},
 		{"GET", "/events", "", "EventList", "200", "user", "Own events; 30 day retention, signed payload preserved", false},
 		{"GET", "/payment-channels", "", "PaymentChannelPage", "200", "user", "Five supported payment protocols; Cyber excluded", false},
+		{"GET", "/payment-settings", "", "PaymentSettings", "200", "admin", "Saved channel configuration; merchant keys are never returned, only whether one is stored", false},
+		{"PUT", "/payment-settings", "PaymentSettings", "PaymentSettings", "200", "admin", "Versioned channel configuration; an empty key keeps the stored one and an omitted channel is removed", false},
 		{"GET", "/payments/epay/notify", "", "", "200", "provider", "EPay signed query parameters; literal provider acknowledgement", false},
 		{"POST", "/payments/epay/notify", "PaymentNotify", "", "200", "provider", "EPay signed form callback", false},
 		{"POST", "/payments/{channel}/notify", "PaymentNotify", "", "200", "provider", "Configured provider signed callback; literal provider acknowledgement", false},

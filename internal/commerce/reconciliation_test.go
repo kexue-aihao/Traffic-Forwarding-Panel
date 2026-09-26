@@ -195,7 +195,8 @@ func TestReconciliationRestoredOrdersAndUnsupported(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := s.RunReconciliation(canceled, channels); !errors.Is(err, context.Canceled) {
+	s.SetChannels(channels)
+	if err := s.RunReconciliation(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 }

@@ -107,6 +107,7 @@ const categories: Record<string, string> = {
   orders: "钱包与支付",
   refunds: "钱包与支付",
   "payment-channels": "钱包与支付",
+  "payment-settings": "钱包与支付",
   payments: "钱包与支付",
   "redeem-codes": "兑换与邀请",
   redeem: "兑换与邀请",
@@ -179,6 +180,7 @@ const actions: Record<string, string> = {
   "/agent/looking-glass": "领取网络诊断任务",
   "/agent/control": "领取节点操作任务",
   "/nodes/{id}/looking-glass": "发起网络诊断",
+  "/payment-settings": "支付通道配置",
   "/looking-glass/{id}": "查询网络诊断结果",
 };
 const actionNames: Record<string, string> = {

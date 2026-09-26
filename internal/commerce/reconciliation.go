@@ -216,11 +216,12 @@ func (s *Service) repairReconciliation(ctx context.Context, channels []string, l
 
 // RunReconciliation runs immediately on startup, then periodically until ctx
 // is canceled. Transient query/database errors leave durable retries intact.
-func (s *Service) RunReconciliation(ctx context.Context, channels map[string]Channel) error {
+func (s *Service) RunReconciliation(ctx context.Context) error {
 	ticker := time.NewTicker(reconciliationInterval)
 	defer ticker.Stop()
 	for {
-		count, err := s.ReconcilePending(ctx, channels, reconciliationBatch)
+		// 每个周期取一次当前配置：运营方在面板上改完通道，下一个周期就用新的。
+		count, err := s.ReconcilePending(ctx, s.Channels(), reconciliationBatch)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

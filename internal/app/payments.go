@@ -33,9 +33,11 @@ type PaymentConfiguration struct {
 	Rate string `json:"rate"`
 }
 
-// PaymentChannels loads operator-owned settings. No config secrets are returned
-// by public channel or order APIs, nor included in validation errors.
-func PaymentChannels(r io.Reader, origin string) (map[string]commerce.Channel, error) {
+// ParsePaymentConfigs 读一份运营方写的通道配置文件。
+//
+// 拆成「解析」与「构建」两步：配置要存进数据库供面板展示与编辑，能拿到原始
+// 字段才谈得上回显 —— 已经建好的 Adapter 是取不回商户密钥的。
+func ParsePaymentConfigs(r io.Reader) (map[string]PaymentConfiguration, error) {
 	d := json.NewDecoder(io.LimitReader(r, 1<<20))
 	d.DisallowUnknownFields()
 	var input map[string]PaymentConfiguration
@@ -45,6 +47,12 @@ func PaymentChannels(r io.Reader, origin string) (map[string]commerce.Channel, e
 	if d.Decode(new(any)) != io.EOF {
 		return nil, errors.New("payment configuration requires one JSON object")
 	}
+	return input, nil
+}
+
+// BuildPaymentChannels 校验配置并建成可用的通道。校验失败时只报是哪条通道，
+// 不带任何字段值 —— 这些错误会一路回到界面上。
+func BuildPaymentChannels(input map[string]PaymentConfiguration, origin string) (map[string]commerce.Channel, error) {
 	result := map[string]commerce.Channel{}
 	for name, cfg := range input {
 		adapter, err := payment.NewAdapter(payment.Configuration{Kind: name, Gateway: cfg.Gateway, MerchantID: cfg.MerchantID, Key: cfg.Key, CryptoCurrency: cfg.CryptoCurrency, SignatureAlgorithm: cfg.SignatureAlgorithm, EPayMode: cfg.EPayMode})
@@ -116,4 +124,28 @@ func validRate(raw string) error {
 func validPaymentURL(raw string, fragment bool) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && (fragment || u.Fragment == "")
+}
+
+// startupPaymentConfigs 把启动时的两种来源并成一份原始配置：配置文件里的那些，
+// 加上旧环境变量等价的那条 epay —— 显式写在文件里的 epay 优先。
+//
+// 环境变量那条在下面被补全回调地址后才算完整，所以这里拼的是原始字段，后面统一
+// 走同一套校验与构建。
+func startupPaymentConfigs(opts Options) map[string]PaymentConfiguration {
+	configs := map[string]PaymentConfiguration{}
+	for name, cfg := range opts.PaymentConfigs {
+		configs[name] = cfg
+	}
+	if _, exists := configs["epay"]; exists || opts.EPay.Gateway == "" || opts.EPay.Key == "" {
+		return configs
+	}
+	notify, returned := opts.EPay.NotifyURL, opts.EPay.ReturnURL
+	if notify == "" {
+		notify = strings.TrimRight(opts.Origin, "/") + "/api/v1/payments/epay/notify"
+	}
+	if returned == "" {
+		returned = strings.TrimRight(opts.Origin, "/") + "/#/commerce"
+	}
+	configs["epay"] = PaymentConfiguration{Gateway: opts.EPay.Gateway, MerchantID: opts.EPay.PID, Key: opts.EPay.Key, NotifyURL: notify, ReturnURL: returned}
+	return configs
 }

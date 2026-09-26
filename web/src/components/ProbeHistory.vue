@@ -152,10 +152,16 @@ const selectedIndex = ref(0);
 let generation = 0;
 let alive = true;
 const selected = computed(() => items.value[selectedIndex.value]);
-// 窗口取整与「这里断线了」的判定共用这个间隔：两者都该跟着绘图粒度走，
-// 否则窗口末尾会把最后一个点切成半格。
+// 「这里断线了」的判定间隔：跟着绘图粒度走，缺一个点就断开。
 const interval = computed(() =>
   range.value.resolution === "minute" ? plotStep : 3600000,
+);
+// 窗口右端的落格粒度：分钟档按整分、小时档按整点 —— 也就是服务端自己用的那条
+// 上界（历史接口的 to 最远只到「下一个整分 / 整点」）。这里不能跟着绘图粒度
+// 走：向上取整到下一个 5 分钟整点会越过上界，接口返回 400
+// history range outside retention，整块图变成一行报错。
+const windowStep = computed(() =>
+  range.value.resolution === "minute" ? 60000 : 3600000,
 );
 const plotted = computed(() =>
   metric.value.series.map((series, index) => ({
@@ -259,7 +265,7 @@ async function load() {
   }
   loading.value = true;
   windowEnd.value =
-    (Math.floor(Date.now() / interval.value) + 1) * interval.value;
+    (Math.floor(Date.now() / windowStep.value) + 1) * windowStep.value;
   windowStart.value = windowEnd.value - range.value.hours * 3600000;
   const query = new URLSearchParams({
     resolution: range.value.resolution,

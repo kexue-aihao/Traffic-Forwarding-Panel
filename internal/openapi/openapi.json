@@ -2312,9 +2312,78 @@
         ],
         "type": "object"
       },
+      "PaymentChannelSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "crypto_currency": {
+            "type": "string"
+          },
+          "epay_mode": {
+            "type": "string"
+          },
+          "fee_fixed": {
+            "type": "string"
+          },
+          "fee_percent": {
+            "type": "string"
+          },
+          "gateway": {
+            "type": "string"
+          },
+          "key": {
+            "description": "Merchant key; never returned, leave empty to keep the stored one",
+            "type": "string",
+            "writeOnly": true
+          },
+          "key_set": {
+            "type": "boolean"
+          },
+          "merchant_id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "notify_url": {
+            "type": "string"
+          },
+          "rate": {
+            "type": "string"
+          },
+          "return_url": {
+            "type": "string"
+          },
+          "signature_algorithm": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "PaymentNotify": {
         "additionalProperties": true,
         "description": "Provider-specific signed payload. See docs/payment/protocol-sources.md; values are validated by the configured protocol adapter.",
+        "type": "object"
+      },
+      "PaymentSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PaymentChannelSettings"
+            },
+            "type": "object"
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "channels"
+        ],
         "type": "object"
       },
       "Plan": {
@@ -8776,6 +8845,102 @@
         ],
         "summary": "Five supported payment protocols; Cyber excluded",
         "x-role": "user"
+      }
+    },
+    "/payment-settings": {
+      "get": {
+        "operationId": "get_payment-settings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentSettings"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Saved channel configuration; merchant keys are never returned, only whether one is stored",
+        "x-role": "admin"
+      },
+      "put": {
+        "operationId": "put_payment-settings",
+        "parameters": [
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentSettings"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Versioned channel configuration; an empty key keeps the stored one and an omitted channel is removed",
+        "x-role": "admin"
       }
     },
     "/payments/epay/notify": {

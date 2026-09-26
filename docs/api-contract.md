@@ -77,9 +77,11 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 
 `DeviceIP`：`{node_name,ipv4?,ipv6?}`。**一台设备一条记录**，两个地址各取该节点最近一次的观测值：只有一族时只出现那一个字段，两族都有就都给 —— 客户脚本不必先判断机器是单栈还是双栈。地址是 Agent 上报的观测值而不是面板主动探测，机器没上报过地址时两个字段都不出现，客户端要能接受缺失（包含 `node_name` 在内，只有它为必填）。接口带 `Authorization: Bearer <API Token>`，也接受同源 Cookie 会话；`/online/device/ip` 与 `/online/device/ip/list` 两个不带 `/api/v1` 前缀的路径是为客户脚本保留的稳定入口，与带前缀的同名接口等价。
 
-已挂载商业接口：`GET/POST /plans`（创建仅管理员）、`GET /wallet`、`GET /ledger`、`GET /orders`、`POST /orders`、`POST /purchases`、`GET /entitlement`、`GET /payment-channels`。plans/orders/ledger 使用统一分页，钱包/订单/账本/权益只能读当前用户。购买请求 `{plan_id,expected_version,idempotency_key}`；充值 `{channel,amount,idempotency_key}`，金额**以元计**（`amount_cents` 仍兼容旧客户端，两者只能给一个）。先充值钱包，再余额购买，立即新周期/新有效期，旧事实不删除。
+已挂载商业接口：`GET/POST /plans`（创建仅管理员）、`GET /wallet`、`GET /ledger`、`GET /orders`、`POST /orders`、`POST /purchases`、`GET /entitlement`、`GET /payment-channels`、`GET/PUT /payment-settings`（通道配置，仅管理员）。plans/orders/ledger 使用统一分页，钱包/订单/账本/权益只能读当前用户。购买请求 `{plan_id,expected_version,idempotency_key}`；充值 `{channel,amount,idempotency_key}`，金额**以元计**（`amount_cents` 仍兼容旧客户端，两者只能给一个）。先充值钱包，再余额购买，立即新周期/新有效期，旧事实不删除。
 
-通道级手续费与汇率：`payments.json` 的每条通道可设 `fee_percent`（百分数，最多两位小数）与 `fee_fixed`（元），手续费**加在充值金额之上** —— 钱包到账仍是用户填写的金额，实付是 `到账 + 手续费`，两者分别记在订单的 `amount_cents` 与 `payable_cents/fee_cents` 上，回调按实付核对、按到账入账。`rate` 是「1 单位加密货币折多少人民币」，`crypto_currency` 指定币种，用于给用户折算应付的 USDT（订单里是 `payable_crypto`）：Cryptomus/BEpusdt 下单时只收人民币金额由网关换算，TokenPay 以 `BaseCurrency` 计价，所以**网关侧要配同一个汇率**，报价与实收才会一致。`GET /payment-channels` 会返回 `fee_percent/fee_fixed/crypto_currency/rate` 供前端报价。
+通道配置存在数据库里，面板的「站点设置 → 支付通道」是唯一的编辑入口，保存后立即生效 —— 报价、下单与后台核对读的是同一份。`GET /payment-settings` 五种协议一个不少地列出，**商户密钥只回 `key_set`**；`PUT` 按 `version` 乐观锁保存，`key` 留空表示沿用已存下来的那一把，网关留空的通道视为删除，校验不过则整体不生效（400）。启动参数 `--payments-file` 与环境变量只在**第一次**启动时生效：那份配置会被写进数据库，此后以数据库为准。错误信息里只有通道名，不带任何字段值。
+
+通道级手续费与汇率：每条通道可设 `fee_percent`（百分数，最多两位小数）与 `fee_fixed`（元），手续费**加在充值金额之上** —— 钱包到账仍是用户填写的金额，实付是 `到账 + 手续费`，两者分别记在订单的 `amount_cents` 与 `payable_cents/fee_cents` 上，回调按实付核对、按到账入账。`rate` 是「1 单位加密货币折多少人民币」，`crypto_currency` 指定币种，用于给用户折算应付的 USDT（订单里是 `payable_crypto`）：Cryptomus/BEpusdt 下单时只收人民币金额由网关换算，TokenPay 以 `BaseCurrency` 计价，所以**网关侧要配同一个汇率**，报价与实收才会一致。`GET /payment-channels` 会返回 `fee_percent/fee_fixed/crypto_currency/rate` 供前端报价。
 
 `POST /orders/{id}/reconcile` 主动核对本人订单。`payment_uncertain` HTTP409 表示创建结果待核实，应保留原幂等键并查询订单；同键改金额或渠道冲突，不新建外部付款。`not_implemented` HTTP500 表示该协议没有查单能力（接口在、功能不在），不代表已付或失败。金额/订单号/币种验证与回调共用唯一入账事务。`POST /payments/{channel}/notify` 为供应商验签通知；EPay 还接受 GET。不得用浏览器返回页当作到账凭据。
 

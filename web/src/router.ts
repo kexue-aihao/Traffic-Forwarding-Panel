@@ -29,14 +29,14 @@ export const router = createRouter({
     { path: "/diagnostics", component: LookingGlass },
     { path: "/api-docs", component: ApiDocs },
     {
-      path: "/:resource(rules|nodes|groups|identity-groups|users|audit)",
+      path: "/:resource(rules|groups|identity-groups|users|audit)",
       component: Resources,
     },
     { path: "/:pathMatch(.*)*", redirect: "/overview" },
   ],
 });
 router.beforeEach((to, from) => {
-  if (state.modalOpen) return false;
+  if (state.modalDepth > 0) return false;
   if (to.path === "/api-docs" && from.path === to.path) return true;
   rotateRequests();
   clear();

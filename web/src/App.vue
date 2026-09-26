@@ -52,7 +52,6 @@ const menus = computed<
   { path: "/overview", label: "概览", icon: "activity" },
   { path: "/rules", label: "转发规则", icon: "arrow-right-left" },
   { path: "/exits", label: "出口管理", icon: "arrow-right-left" },
-  { path: "/nodes", label: "服务器", icon: "server" },
   { path: "/probes", label: "实时探针", icon: "activity", blank: true },
   { path: "/diagnostics", label: "网络诊断", icon: "radar" },
   { path: "/commerce", label: "套餐与钱包", icon: "wallet" },
@@ -316,7 +315,7 @@ onMounted(async () => {
             }}</span
             ><button
               v-if="state.user"
-              :disabled="busy || state.modalOpen"
+              :disabled="busy || state.modalDepth > 0"
               @click="logout"
             >
               退出

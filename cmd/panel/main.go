@@ -18,14 +18,13 @@ import (
 	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/app"
-	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/commerce"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/payment"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/webui"
 )
 
 // Version is injected at release build time using -ldflags -X.
-var Version = "0.1.20"
+var Version = "0.1.21"
 
 func main() {
 	if err := run(); err != nil {
@@ -89,20 +88,22 @@ func run() error {
 	if gateway.ReturnURL == "" && *origin != "" {
 		gateway.ReturnURL = *origin + "/#/commerce"
 	}
-	var channels map[string]commerce.Channel
+	// 配置文件只在这里读一次，作为初始配置交给 app：它会被写进数据库，之后
+	// 运营方在面板的站点设置里改。
+	var paymentConfigs map[string]app.PaymentConfiguration
 	if *paymentsFile != "" {
 		f, e := os.Open(*paymentsFile)
 		if e != nil {
 			return errors.New("cannot read payment configuration file")
 		}
-		channels, e = app.PaymentChannels(f, *origin)
+		paymentConfigs, e = app.ParsePaymentConfigs(f)
 		f.Close()
 		if e != nil {
 			return e
 		}
 	}
 	application, err := app.New(ctx, store, app.Options{
-		Origin: *origin, TrustProxy: *trustProxy, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, Channels: channels, AgentDir: *agentDir,
+		Origin: *origin, TrustProxy: *trustProxy, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, PaymentConfigs: paymentConfigs, AgentDir: *agentDir,
 		HTMLPath: opts.HTMLPath, DisableGzip: opts.DisableGzip,
 		OfflineNodeTime: time.Duration(opts.OfflineNodeTime) * time.Second, OfflineNodeRetention: time.Duration(opts.OfflineNodeRetentionTime) * time.Second,
 		UserRateLimit: rateLimit(opts.UserRateLimit), DefaultRateLimit: rateLimit(opts.DefaultRateLimit),

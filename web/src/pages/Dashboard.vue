@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { api, errorText } from "../core/api";
 import { state } from "../core/state";
 const stats = ref<{ label: string; value: number; to: string }[]>([]);
+// 设备组页只有管理员能进：普通账号点进去只会看到「无权访问」，那就把他带到
+// 探针页 —— 那里列的就是他有权查看的那几台机器。
+const groupsTo = computed(() => (state.user?.role === "admin" ? "/groups" : "/probes"));
 const error = ref("");
 const busy = ref(true);
 async function load() {
@@ -16,8 +19,8 @@ async function load() {
     ]);
     stats.value = [
       { label: "转发规则", value: rules.total, to: "/rules" },
-      { label: "授权服务器", value: nodes.total, to: "/nodes" },
-      { label: "设备组", value: groups.total, to: "/nodes" },
+      { label: "入口设备", value: nodes.total, to: "/probes" },
+      { label: "设备组", value: groups.total, to: groupsTo.value },
     ];
   } catch (e) {
     error.value = errorText(e);

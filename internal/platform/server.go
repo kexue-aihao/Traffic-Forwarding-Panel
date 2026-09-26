@@ -188,6 +188,11 @@ func (s *Server) RequireUser(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r.WithContext(context.WithValue(r.Context(), userKey{}, u)))
 	}
 }
+
+// Admin 与 RequireUser 一样先做鉴权与 CSRF 检查，再要求管理员角色。给组合根
+// （app）挂自己的管理接口用 —— 那里的路由不在这个包的路由表里。
+func (s *Server) Admin(next http.HandlerFunc) http.HandlerFunc { return s.admin(next) }
+
 func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 	return s.RequireUser(func(w http.ResponseWriter, r *http.Request) {
 		u, _ := UserFromContext(r.Context())

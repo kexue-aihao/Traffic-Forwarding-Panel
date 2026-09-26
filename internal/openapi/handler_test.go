@@ -22,7 +22,8 @@ func TestContractRouteCoverageAndReferences(t *testing.T) {
 	schemas := doc["components"].(map[string]any)["schemas"].(map[string]any)
 	routes := map[string]bool{}
 	pattern := regexp.MustCompile(`(?:HandleFunc|Handle)\("(GET|POST|PUT|PATCH|DELETE) /api/v1([^" ]+)"`)
-	for _, path := range []string{"../platform/server.go", "../commerce/http.go", "../alerts/http.go", "handler.go"} {
+	// app.go 是组合根，它自己也挂管理接口（支付通道配置）：文档里列了，就必须真的挂上。
+	for _, path := range []string{"../platform/server.go", "../commerce/http.go", "../alerts/http.go", "../app/app.go", "handler.go"} {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

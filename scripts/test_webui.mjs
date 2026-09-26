@@ -171,6 +171,9 @@ const server = createServer(async (req, res) => {
 
     if (path === "/nodes/enrollment")
       return json({ token: "fixture-enrollment", expires_at: winterUTC });
+    // 设备组的固定接入密钥：长期不变，命令里没有会过期的令牌。
+    if (/^\/groups\/[^/]+\/join-key$/.test(path))
+      return json({ group_id: "g1", join_key: "a".repeat(64) });
     if (path === "/auth/tokens" && req.method === "POST") {
       tokenExpiry = body.expires_at;
       return json({ token: "fixture-api-token" });
@@ -232,8 +235,9 @@ const server = createServer(async (req, res) => {
       if (historyMode === "partial") {
         // 五分钟一组里缺了一分钟：这一组必须整点留空。同一组的上行有值，所以
         // 这条验的是「按指标留空」，而不是「压根没有数据」。
+        const bucket = Math.floor((end - 60000) / 300000) * 300000;
         const partial = [0, 1].map((offset) => ({
-          sampled_at: new Date(end - (2 - offset) * 60000).toISOString(),
+          sampled_at: new Date(bucket + offset * 60000).toISOString(),
           resolution,
           samples: 1,
           cpu_percent: offset === 0 ? 42 : null,
@@ -489,28 +493,64 @@ try {
         ),
         "America/New_York",
       );
-      await page.getByRole("link", { name: "服务器", exact: true }).click();
-      await page.getByText("2026-07-15 00:20:30", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "生成接入凭据" }).click();
-      await page.getByLabel("名称", { exact: true }).fill("Timezone fixture");
-      await page.getByRole("button", { name: "保存", exact: true }).click();
-      // 接入凭据现在是一条自包含命令：令牌藏在里面，有效期直接显示在命令下方。
-      // 过期时间仍必须按上海时间渲染，不跟随浏览器所在时区。
-      const onboard = page.locator(".onboard");
-      await onboard.waitFor();
-      assert.match(
-        await onboard.innerText(),
-        /有效期至 2026-01-16 00:20:30（上海时间 UTC\+8）/,
+      await page.getByRole("link", { name: "设备组", exact: true }).click();
+      const groupRow = page.locator("tr", { hasText: "Fixture group" });
+      // 「设备」：这个组里有哪些机器、版本与心跳。服务器页去掉之后这些落在组上。
+      await groupRow.getByRole("button", { name: "设备", exact: true }).click();
+      await page.getByText("Fixture node", { exact: true }).waitFor();
+      // 心跳必须按上海时间渲染，不跟随浏览器所在时区。
+      assert.equal(
+        await page
+          .locator("dialog td[data-label='最后心跳']")
+          .first()
+          .innerText(),
+        "2026-07-15 00:20:30",
+        "设备清单要按上海时间给出心跳",
       );
-      assert.match(
-        await page.getByLabel("设备接入命令").textContent(),
-        /-t 'fixture-enrollment'/,
-        "命令必须带上本次生成的令牌",
+      // 从设备清单直接进节点运维：两个弹窗叠着开。关掉上面那个不能把下面那个的
+      // 滚动锁和路由离开守卫一起解掉 —— 这也是弹窗深度改成计数而不是布尔的原因。
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "节点运维" })
+        .first()
+        .click();
+      const operationsDialog = page
+        .locator("dialog")
+        .filter({ hasText: "节点运维 · Fixture node" });
+      await operationsDialog.waitFor();
+      assert.equal(
+        await page.locator("dialog").count(),
+        2,
+        "设备清单与节点运维要能同时开着",
       );
+      await page.keyboard.press("Escape");
+      await operationsDialog.waitFor({ state: "detached" });
+      await page
+        .locator("dialog")
+        .filter({ hasText: "设备 · Fixture group" })
+        .waitFor();
+      assert.equal(
+        await page.locator("dialog").count(),
+        1,
+        "关掉上面那个，设备清单还在",
+      );
+      await page
+        .locator("dialog")
+        .getByRole("button", { name: "关闭", exact: true })
+        .click();
+      await page.locator("dialog").waitFor({ state: "detached" });
+      // 接入设备：给的是这个组的固定接入密钥，不再是 15 分钟的一次性令牌。
+      await groupRow.getByRole("button", { name: "接入设备", exact: true }).click();
+      await page.locator(".onboard").waitFor();
       assert.match(
         await page.getByLabel("设备接入命令").textContent(),
         /\/download\/agent-install\.sh\) -t /,
         "命令必须指向面板自托管的接入脚本",
+      );
+      assert.match(
+        await page.locator(".onboard").innerText(),
+        /长期不变/,
+        "固定密钥的命令不该说 15 分钟过期",
       );
       await page
         .locator("dialog")
@@ -792,15 +832,15 @@ try {
       await history.getByText("6 个采样桶 · 5 个CPU有效值").waitFor();
       assert.match(
         await history.locator(".history-window").innerText(),
-        /2026-07-14 00:25:00 至 2026-07-15 00:25:00 · 上海时间 UTC\+8/,
+        /2026-07-14 00:21:00 至 2026-07-15 00:21:00 · 上海时间 UTC\+8/,
       );
       assert.match(
         await history.locator(".history-selection").innerText(),
-        /2026-07-15 00:20:00/,
+        /2026-07-15 00:16:00/,
       );
       assert.deepEqual(
         await history.locator(".history-x span").allTextContents(),
-        ["00:25", "00:25"],
+        ["00:21", "00:21"],
       );
       assert.equal(
         await history.locator("polyline").count(),

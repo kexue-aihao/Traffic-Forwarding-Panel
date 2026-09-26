@@ -36,7 +36,7 @@ docker compose logs --tail=100 caddy panel
 
 `panel_data` 保存数据库，`caddy_data` 保存证书与账户私钥，`caddy_config` 保存 Caddy 状态。更新时保留这些卷，不执行 `docker compose down -v`。修改面板 YAML 后 `docker compose restart panel`；更新源码后 `docker compose build panel && docker compose up -d --wait`。更新域名后 `docker compose up -d caddy`。
 
-支付配置需另行只读挂载到面板，并在 YAML 中设置 `payments-file`。回调地址用配置中的明确 URL，或设置 `origin: https://你的域名`，不从客户端请求生成支付回调地址。
+支付通道在面板的「站点设置 → 支付通道」里配置，保存即生效。也可以用 `payments-file` 挂载一份 JSON：它只在**首次启动**时作为初始配置写进数据库，之后以面板里的为准。回调地址用配置中的明确 URL，或设置 `origin: https://你的域名`，不从客户端请求生成支付回调地址。
 
 ## 方式二：同机二进制 + Caddy
 
@@ -139,7 +139,7 @@ API 的 404 不回退为前端 HTML。数据库、配置文件、证书私钥不
 | `offline-node-retention-time` | 默认 86400 秒，最小 600；超时后从实时探针列表隐藏，保留节点记录、历史和设备地址查询 |
 | `user-rate-limit` | 可选 `{rate: 秒, limit: 次数}`，登录账号的 API 请求共享额度；Cookie/API Token 及不同来源 IP 计入同一账号 |
 | `default-rate-limit` | 可选匿名 API 请求按客户端 IP 限流；健康检查、Agent API、签名支付通知不计入这两类额度 |
-| `payments-file` / `agent-dir` | 支付 JSON 配置、设备二进制发布目录 |
+| `payments-file` / `agent-dir` | 支付 JSON 初始配置（首次启动落库）、设备二进制发布目录 |
 | `key` | 不适用；填写时会提示移除，不将第三方商业授权码当作本项目凭据 |
 
 两项可选请求限流省略时保持既有接口保护；页面首次加载会并行读取多项 API，参考值 `5 次/5 秒` 可能过低。SSE/WebSocket 只统计建立连接的 HTTP 请求，不按消息累计额度。内置登录等敏感接口限流仍独立生效，达到任一限制会返回 429。

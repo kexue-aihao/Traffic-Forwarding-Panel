@@ -25,6 +25,8 @@ type HTTPOptions struct {
 }
 
 func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
+	// 启动时的那份配置就是当前值；运营方在面板上保存之后由 SetChannels 整体替换。
+	s.SetChannels(o.Channels)
 	send := func(w http.ResponseWriter, v any, e error) {
 		w.Header().Set("Content-Type", "application/json")
 		if e != nil {
@@ -188,7 +190,7 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		}
 		var v Order
 		var e error
-		if channel, ok := o.Channels[p.Channel]; ok {
+		if channel, ok := s.channel(p.Channel); ok {
 			ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 			v, e = s.CreateAdapterOrder(r.Context(), u.ID, p.Channel, p.Key, amount, channel, ip)
 		} else {
@@ -197,7 +199,7 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		send(w, v, e)
 	}))
 	mux.HandleFunc("POST /api/v1/orders/{id}/reconcile", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
-		v, e := s.ReconcileOrder(r.Context(), u.ID, r.PathValue("id"), o.Channels)
+		v, e := s.ReconcileOrder(r.Context(), u.ID, r.PathValue("id"), s.Channels())
 		send(w, v, e)
 	}))
 	mux.HandleFunc("POST /api/v1/orders/{id}/close", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
@@ -489,7 +491,7 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 					c.Reason = "merchant end-to-end verification not recorded"
 				}
 			}
-			if channel, ok := o.Channels[name]; ok && channel.Adapter != nil {
+			if channel, ok := s.channel(name); ok && channel.Adapter != nil {
 				c.Enabled = true
 				c.Status = "configured_unverified"
 				c.Reason = "merchant end-to-end verification not recorded"
@@ -512,7 +514,7 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 			http.Error(w, "fail", 400)
 			return
 		}
-		if channel, ok := o.Channels["epay"]; ok && channel.Adapter != nil {
+		if channel, ok := s.channel("epay"); ok && channel.Adapter != nil {
 			status, e := channel.Adapter.VerifyNotify([]byte(r.Form.Encode()), "application/x-www-form-urlencoded")
 			if e == nil {
 				e = s.ConfirmStatus(r.Context(), "epay", status)
@@ -538,7 +540,7 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 	mux.HandleFunc("POST /api/v1/payments/epay/notify", epayNotify)
 	mux.HandleFunc("POST /api/v1/payments/{channel}/notify", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("channel")
-		channel, ok := o.Channels[name]
+		channel, ok := s.channel(name)
 		if !ok || channel.Adapter == nil || name == "epay" {
 			http.NotFound(w, r)
 			return

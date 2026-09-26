@@ -437,21 +437,19 @@ try {
         "缺产物时必须说明是哪个平台，而不是回一个空 404",
       );
 
-      await admin.getByRole("link", { name: "服务器", exact: true }).click();
-      await admin.getByRole("button", { name: "生成接入凭据" }).click();
-      await admin
-        .getByLabel("名称", { exact: true })
-        .fill(`simulated-${browserName}`);
-      await admin.getByLabel(`group-${browserName}`, { exact: true }).check();
-      await admin.getByRole("button", { name: "保存", exact: true }).click();
-      // 交给运营方的是一条自包含命令，令牌藏在里面。从命令里取令牌，
-      // 顺带把命令本身的形状也钉住。
+      // 接入凭据从设备组页取。服务器页去掉之后，面板上只剩这一条接入路径：
+      // 给的是这个组的固定接入密钥，设备名由设备自报 —— 所以命令里没有 -n。
+      await admin.getByRole("link", { name: "设备组", exact: true }).click();
+      const enrollRow = admin.locator("tr", { hasText: `group-${browserName}` });
+      await enrollRow.getByRole("button", { name: "接入设备", exact: true }).click();
+      await admin.locator("dialog").waitFor();
       const onboardCommand = (
         await admin.getByLabel("设备接入命令").textContent()
       ).trim();
       assert.match(
         onboardCommand,
-        /^bash <\(curl -fLsS https?:\/\/[^\s]+\/download\/agent-install\.sh\) -t '[0-9a-f]{64}' -u 'https?:\/\/[^']+' -n 'simulated-[^']+'$/,
+        /^bash <\(curl -fLsS https?:\/\/[^\s]+\/download\/agent-install\.sh\) -t '[0-9a-f]{64}' -u 'https?:\/\/[^']+'$/,
+        "固定接入密钥的命令不带 -n：设备名由设备自报",
       );
       const enrollment = onboardCommand.match(/-t '([0-9a-f]{64})'/)[1];
       assert.ok(enrollment.length > 20);
@@ -1046,6 +1044,21 @@ try {
         await user.request.get(base + "/api/v1/nodes")
       ).json();
       assert.equal(userNodes.items.length, 1);
+      // 面板自己算的窗口必须落在服务端允许的范围内。分钟档的 to 最远只能到
+      // 「下一个整分」—— 曾经跟着绘图粒度按 5 分钟向上取整，越过上界之后接口
+      // 回 400 history range outside retention，整块图变成一行报错。这条断言
+      // 直接看面板发出去的那个请求的响应码。
+      const minuteWindow = user.waitForResponse(
+        (response) =>
+          response.url().includes("/history?") &&
+          response.url().includes("resolution=minute"),
+      );
+      await user.getByLabel("历史时间范围").selectOption("24h");
+      assert.equal(
+        (await minuteWindow).status(),
+        200,
+        "分钟档的历史窗口必须被服务端接受",
+      );
 
       await admin
         .getByRole("link", { name: "套餐与钱包", exact: true })
@@ -1153,6 +1166,99 @@ try {
       await admin
         .locator('button[data-busy="true"]')
         .waitFor({ state: "detached" });
+      // 支付通道：面板上填完就生效，商户密钥永远不回明文。
+      const beforePayment = await (
+        await admin.request.get(base + "/api/v1/payment-settings")
+      ).json();
+      assert.equal(beforePayment.channels.epay.configured, false, "初始没有配置任何支付通道");
+      const epayCard = admin
+        .locator("details.payment-channel")
+        .filter({ hasText: "易支付 EPay" });
+      await epayCard.locator("summary").first().click();
+      await epayCard.getByLabel("网关地址").fill("https://pay.example.test");
+      await epayCard.getByLabel("商户号").fill("merchant-1");
+      await epayCard.getByLabel("商户密钥").fill("merchant-secret-key");
+      await epayCard.getByLabel("手续费百分比").fill("1.50");
+      // 这个用例跑在 http://127.0.0.1 上，按站点地址推出来的回调地址不是 HTTPS，
+      // 会被校验挡住 —— 所以两条回调地址显式填成 HTTPS，和真实部署一致。
+      await epayCard
+        .locator("details summary")
+        .filter({ hasText: "回调地址" })
+        .click();
+      await epayCard
+        .getByLabel("异步通知地址")
+        .fill("https://panel.example.test/api/v1/payments/epay/notify");
+      await epayCard
+        .getByLabel("支付完成返回地址")
+        .fill("https://panel.example.test/#/commerce");
+      await admin
+        .getByRole("button", { name: "保存支付通道", exact: true })
+        .click();
+      await admin
+        .getByText("支付通道已保存，立即生效。", { exact: false })
+        .waitFor();
+      const afterPayment = await (
+        await admin.request.get(base + "/api/v1/payment-settings")
+      ).json();
+      assert.equal(afterPayment.channels.epay.configured, true);
+      assert.equal(afterPayment.channels.epay.key_set, true);
+      assert.equal(afterPayment.channels.epay.gateway, "https://pay.example.test");
+      assert.equal(afterPayment.channels.epay.fee_percent, "1.50");
+      assert.equal(
+        JSON.stringify(afterPayment).includes("merchant-secret-key"),
+        false,
+        "商户密钥不能回明文",
+      );
+      // 保存即生效：充值页读的通道状态就是这一份。
+      const liveChannels = await (
+        await admin.request.get(base + "/api/v1/payment-channels")
+      ).json();
+      const liveEpay = liveChannels.items.find((c) => c.id === "epay");
+      assert.equal(liveEpay.enabled, true, "保存之后通道立刻可用");
+      assert.equal(liveEpay.fee_percent, "1.50");
+      // 密钥留空表示沿用已存下来的那一把：再存一次不会把它清掉。
+      await epayCard.getByLabel("商户密钥").fill("");
+      await admin
+        .getByRole("button", { name: "保存支付通道", exact: true })
+        .click();
+      await admin
+        .getByText("支付通道已保存，立即生效。", { exact: false })
+        .waitFor();
+      const keptPayment = await (
+        await admin.request.get(base + "/api/v1/payment-settings")
+      ).json();
+      assert.equal(
+        keptPayment.channels.epay.key_set,
+        true,
+        "密钥留空必须沿用已保存的那把",
+      );
+      // 清空网关就是停用这条通道，也把面板恢复成用例开始前的样子：
+      // 三个引擎共用同一个面板实例，下一个引擎启动时读到的必须还是「没有
+      // 可用通道」—— 前面的用例正是这么断言充值按钮的。
+      // 清空用键盘：Playwright 的 fill("") 在这个受控输入上不会把空值传回组件，
+      // 请求体里带的还是旧地址；真实用户按删除键走的就是下面这条路。
+      const gatewayInput = epayCard.getByLabel("网关地址");
+      await gatewayInput.click();
+      await gatewayInput.press("Control+a");
+      await gatewayInput.press("Delete");
+      await admin
+        .getByRole("button", { name: "保存支付通道", exact: true })
+        .click();
+      // 等的是这张卡片自己变回「未配置」，而不是那条提示：上一次保存的提示还
+      // 在屏幕上，等同一条文案会立刻返回，之后的接口断言就会抢在保存前面。
+      await epayCard.getByText("未配置", { exact: true }).waitFor();
+      const clearedPayment = await (
+        await admin.request.get(base + "/api/v1/payment-settings")
+      ).json();
+      assert.equal(clearedPayment.channels.epay.configured, false, "清空网关应当停用这条通道");
+      const clearedChannels = await (
+        await admin.request.get(base + "/api/v1/payment-channels")
+      ).json();
+      assert.equal(
+        clearedChannels.items.find((c) => c.id === "epay").enabled,
+        false,
+        "停用之后通道立刻不可用",
+      );
       // 网络诊断（LookingGlass）：页面把请求排给节点，节点领走并回传结果。
       // 这里由测试自己扮演 Agent —— 面板侧并不知道对面是谁。
       await admin.getByRole("link", { name: "网络诊断", exact: true }).click();
@@ -1607,7 +1713,7 @@ try {
         .click();
       await admin.getByRole("button", { name: "确认修改状态" }).click();
       await admin.locator("dialog").waitFor({ state: "detached" });
-      await user.getByRole("link", { name: "服务器", exact: true }).click();
+      await user.getByRole("link", { name: "转发规则", exact: true }).click();
       await user.getByRole("button", { name: "登录控制台" }).waitFor();
       assert.deepEqual(exceptions, []);
       console.log(

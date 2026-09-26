@@ -49,12 +49,12 @@ function close() {
 }
 onMounted(() => {
   previous = document.activeElement;
-  state.modalOpen = true;
+  state.modalDepth++;
   dialog.value?.showModal();
 });
 onUnmounted(() => {
   clearTimeout(exitTimer);
-  state.modalOpen = false;
+  state.modalDepth = Math.max(0, state.modalDepth - 1);
   dialog.value?.close();
   if (previous instanceof HTMLElement) previous.focus();
 });

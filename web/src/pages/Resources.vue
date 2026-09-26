@@ -4,7 +4,6 @@ import Select from "../components/Select.vue";
 import { useRoute, useRouter } from "vue-router";
 import Modal from "../components/Modal.vue";
 import NodeOperations from "../components/NodeOperations.vue";
-import OnboardCommand from "../components/OnboardCommand.vue";
 import OnboardPanel from "../components/OnboardPanel.vue";
 import GroupAdvanced from "../components/GroupAdvanced.vue";
 import { api, errorText } from "../core/api";
@@ -28,7 +27,6 @@ const router = useRouter();
 const resource = String(route.params.resource);
 const titles: Record<string, string> = {
   rules: "转发规则",
-  nodes: "服务器",
   groups: "设备组",
   "identity-groups": "身份用户组",
   users: "用户管理",
@@ -51,7 +49,28 @@ const busy = ref(false);
 const formError = ref("");
 const selected = ref<Row | null>(null);
 const operationNode = ref<Row | null>(null);
-const token = ref("");
+// 设备组页的「设备」：这台组里有哪些机器、版本与心跳怎么样，并从这里进节点运维。
+// 服务器页去掉之后这些信息落在组上 —— 机器本来就是组的成员，不是另一份清单。
+const devicesGroup = ref<Row | null>(null);
+const devices = ref<Row[]>([]);
+const devicesError = ref("");
+const devicesBusy = ref(false);
+async function openDevices(group: Row) {
+  devicesGroup.value = group;
+  devices.value = [];
+  devicesError.value = "";
+  devicesBusy.value = true;
+  try {
+    devices.value = await choices(
+      "/nodes",
+      `&group_id=${encodeURIComponent(String(group.id))}`,
+    );
+  } catch (e) {
+    devicesError.value = errorText(e);
+  } finally {
+    devicesBusy.value = false;
+  }
+}
 const generatedPassword = ref("");
 const generatedUsername = ref("");
 const passwordCopied = ref(false);
@@ -203,20 +222,7 @@ function highlight(id: unknown) {
   highlightTimer = setTimeout(() => (highlighted.value = ""), 600);
 }
 onUnmounted(() => clearTimeout(highlightTimer));
-// 令牌与过期时间分开存：接入命令要用裸令牌拼，过期时间要单独渲染。
-const tokenExpiry = ref("");
-// 一次性令牌那条命令。地址取浏览器当前的 origin：面板在反向代理后面时，
-// 那正是设备应当访问到的公网地址。
-const origin = location.origin;
-const entryCommand = computed(
-  () =>
-    `bash <(curl -fLsS ${origin}/download/agent-install.sh) -t '${token.value}' -u '${origin}' -n '${tokenName.value}'`,
-);
-const entryManual = computed(
-  () =>
-    `TFP_ENROLLMENT_TOKEN='${token.value}' tfp-agent -panel '${origin}' -name '${tokenName.value}'`,
-);
-const tokenName = ref("");
+
 const diagnosis = ref<{
   checks: { name: string; ok: boolean; detail: string }[];
 } | null>(null);
@@ -452,12 +458,13 @@ async function load() {
     loading.value = false;
   }
 }
-async function choices(path: string) {
+// query 用来带上 group_id 之类的筛选，分页参数由这里自己拼。
+async function choices(path: string, query = "") {
   const items: Row[] = [];
   let p = 1;
   while (true) {
     const batch = await api<{ items: Row[]; total: number }>(
-      path + "?page_size=100&page=" + p,
+      path + "?page_size=100" + query + "&page=" + p,
     );
     items.push(...batch.items);
     if (!batch.items.length || items.length >= batch.total) return items;
@@ -467,12 +474,9 @@ async function choices(path: string) {
 async function open(row: Row | null = null) {
   selected.value = row;
   formError.value = "";
-  token.value = "";
   generatedPassword.value = "";
   generatedUsername.value = "";
   passwordCopied.value = false;
-  tokenExpiry.value = "";
-  tokenName.value = "";
   form.value = {
     group_type: String(row?.type || ""),
     direct_policy: String(row?.direct_policy || (row ? "allow" : "forbid")),
@@ -542,10 +546,6 @@ async function open(row: Row | null = null) {
       options.value.nodes = nodes;
       options.value.groups = groups;
     }
-    if (resource === "nodes")
-      options.value.groups = (await choices("/groups")).filter(
-        (g) => g.type !== "chain_exit",
-      );
     if (resource === "groups") {
       [options.value.identityGroups, options.value.groups] = await Promise.all([
         choices("/identity-groups"),
@@ -588,7 +588,6 @@ function payload(): Row {
       port_max: f.port_max,
       max_rules: f.max_rules,
     };
-  if (resource === "nodes") return { name: f.name, group_ids: f.group_ids };
   return {
     exit_group_id: f.exit_group_id,
     exit_id: f.exit_group_id
@@ -655,9 +654,7 @@ async function save() {
     const data = payload();
     if (selected.value) data.version = selected.value.version;
     const path =
-      resource === "nodes"
-        ? "/nodes/enrollment"
-        : resource === "users" && selected.value
+      resource === "users" && selected.value
           ? `/users/${encodeURIComponent(String(selected.value.id))}/identity-group`
           : `/${resource}${selected.value ? "/" + encodeURIComponent(String(selected.value.id)) : ""}`;
     const result = await api<{
@@ -667,12 +664,7 @@ async function save() {
       username?: string;
       initial_password?: string;
     }>(path, selected.value ? "PUT" : "POST", data);
-    if (resource === "nodes") {
-      token.value = String(result.token || "");
-      tokenExpiry.value = String(result.expires_at || "");
-      tokenName.value = String(form.value.name || "");
-      initial.value = JSON.stringify(form.value);
-    } else if (resource === "users" && !selected.value) {
+    if (resource === "users" && !selected.value) {
       generatedPassword.value = String(result.initial_password || "");
       generatedUsername.value = String(result.username || form.value.username);
       passwordCopied.value = false;
@@ -896,16 +888,7 @@ function value(v: unknown, column: string) {
 const columns = computed(() =>
   resource === "rules"
     ? ["name", "transport", "listen", "target", "enabled", "version"]
-    : resource === "nodes"
-      ? [
-          "name",
-          "agent_version",
-          "last_seen",
-          "desired_version",
-          "applied_version",
-          "apply_error",
-        ]
-      : resource === "groups"
+    : resource === "groups"
         ? [
             "name",
             "type",
@@ -971,9 +954,7 @@ const labels: Record<string, string> = {
         <h1>{{ titles[resource] }}</h1>
         <p class="muted">
           {{
-            resource === "nodes"
-              ? "在线心跳与配置应用状态分别展示。"
-              : resource === "identity-groups"
+            resource === "identity-groups"
                 ? "新建身份用户组后，在用户管理中分配。同组用户共享已授权的设备组。"
                 : resource === "users"
                   ? "通过身份用户组 ID 分配设备组访问权限，角色决定后台管理权限。"
@@ -981,7 +962,7 @@ const labels: Record<string, string> = {
                     ? "将设备组授权给身份用户组，该身份组内的用户即可访问。"
                     : "配置与权限由服务端统一校验。"
           }}
-          <span v-if="resource === 'nodes' || resource === 'audit'"
+          <span v-if="resource === 'audit'"
             >时间使用{{ displayTimeZoneLabel }}。</span
           >
         </p>
@@ -994,7 +975,7 @@ const labels: Record<string, string> = {
         class="primary"
         @click="open()"
       >
-        {{ resource === "nodes" ? "生成接入凭据" : "新增" }}
+        新增
       </button>
     </div>
     <p v-if="!allowed" class="card">无权访问此资源。</p>
@@ -1019,7 +1000,7 @@ const labels: Record<string, string> = {
               <th
                 v-if="
                   resource === 'rules' ||
-                  (['groups', 'identity-groups', 'users', 'nodes'].includes(
+                  (['groups', 'identity-groups', 'users'].includes(
                     resource,
                   ) &&
                     canManage)
@@ -1045,7 +1026,7 @@ const labels: Record<string, string> = {
               <td
                 v-if="
                   resource === 'rules' ||
-                  (['groups', 'identity-groups', 'users', 'nodes'].includes(
+                  (['groups', 'identity-groups', 'users'].includes(
                     resource,
                   ) &&
                     canManage)
@@ -1058,6 +1039,12 @@ const labels: Record<string, string> = {
                     @click="onboardGroup(row)"
                   >
                     接入设备
+                  </button>
+                  <button
+                    v-if="resource === 'groups'"
+                    @click="openDevices(row)"
+                  >
+                    设备
                   </button>
                   <button
                     v-if="resource === 'groups'"
@@ -1075,13 +1062,7 @@ const labels: Record<string, string> = {
                     网络诊断
                   </button>
                   <button
-                    v-if="resource === 'nodes'"
-                    @click="operationNode = row"
-                  >
-                    节点运维
-                  </button>
-                  <button
-                    v-if="!['users', 'nodes'].includes(resource)"
+                    v-if="resource !== 'users'"
                     @click="open(row)"
                   >
                     编辑</button
@@ -1177,6 +1158,61 @@ const labels: Record<string, string> = {
         规则；隧道检查包含出口到目标的握手，不发送业务数据。
       </p>
     </section>
+    <!-- 组的设备清单：版本、心跳、应用错误都在这儿，运维从每行的按钮进来。 -->
+    <Modal
+      v-if="devicesGroup"
+      :title="`设备 · ${devicesGroup.name}`"
+      @close="devicesGroup = null"
+    >
+      <p v-if="devicesError" class="error" role="alert">{{ devicesError }}</p>
+      <p v-else-if="devicesBusy" class="empty">正在读取设备…</p>
+      <p v-else-if="!devices.length" class="empty">
+        这个设备组下还没有机器。用「接入设备」把它接进来。
+      </p>
+      <div v-else class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>Agent 版本</th>
+              <th>最后心跳</th>
+              <th>期望版本</th>
+              <th>应用版本</th>
+              <th>应用错误</th>
+              <th v-if="canManage">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="node in devices" :key="String(node.id)">
+              <td data-label="名称">{{ node.name }}</td>
+              <td data-label="Agent 版本">
+                {{ value(node.agent_version, "agent_version") }}
+              </td>
+              <td data-label="最后心跳">
+                {{ value(node.last_seen, "last_seen") }}
+              </td>
+              <td data-label="期望版本">
+                {{ value(node.desired_version, "desired_version") }}
+              </td>
+              <td data-label="应用版本">
+                {{ value(node.applied_version, "applied_version") }}
+              </td>
+              <td data-label="应用错误">
+                {{ value(node.apply_error, "apply_error") }}
+              </td>
+              <td v-if="canManage" data-label="操作">
+                <div class="toolbar">
+                  <button @click="operationNode = node">节点运维</button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="form-actions">
+        <button type="button" @click="devicesGroup = null">关闭</button>
+      </div>
+    </Modal>
     <NodeOperations
       v-if="operationNode"
       :node="operationNode"
@@ -1292,30 +1328,16 @@ const labels: Record<string, string> = {
     <Modal
       v-if="editing"
       :title="
-        resource === 'nodes'
-          ? '一次性节点接入凭据'
-          : resource === 'users' && selected
-            ? '修改身份用户组 · ' + selected.username
-            : (selected ? '编辑' : '新增') + titles[resource]
+        resource === 'users' && selected
+          ? '修改身份用户组 · ' + selected.username
+          : (selected ? '编辑' : '新增') + titles[resource]
       "
       :busy="busy"
       :dirty="dirty"
       @close="closeEditing"
       ><form @submit.prevent="save">
         <p v-if="formError" class="error" role="alert">{{ formError }}</p>
-        <template v-if="token"
-          ><p class="muted small">
-            下面的接入命令只展示这一次，关闭后无法再次查看。不要发送给未授权人员。
-          </p>
-          <OnboardCommand
-            :command="entryCommand"
-            :manual="entryManual"
-            :expires-at="tokenExpiry"
-          />
-          <div class="form-actions">
-            <button type="button" @click="closeEditing">关闭</button>
-          </div></template
-        ><template v-else-if="generatedPassword"
+        <template v-if="generatedPassword"
           ><p class="warning">
             {{ generatedUsername }} 的初始密码只展示这一次，关闭后无法再次查看。
           </p>
@@ -1826,16 +1848,6 @@ const labels: Record<string, string> = {
               >
             </fieldset></template
           >
-          <fieldset v-if="resource === 'nodes'">
-            <legend>关联设备组</legend>
-            <label v-for="g in options.groups" :key="String(g.id)" class="check"
-              ><input
-                v-model="form.group_ids"
-                type="checkbox"
-                :value="g.id"
-              />{{ g.name }}</label
-            >
-          </fieldset>
           <div class="form-actions">
             <button
               class="primary"

@@ -5,8 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -25,7 +25,9 @@ type Options struct {
 	SecureCookies bool
 	TrustProxy    bool
 	EPay          payment.EPay
-	Channels      map[string]commerce.Channel
+	// PaymentConfigs 是启动时从配置文件读到的通道配置。它只当作初始值：写进
+	// 数据库之后就以数据库为准，面板上看到的就是生效的那一份。
+	PaymentConfigs map[string]PaymentConfiguration
 	// AgentDir 是发布给设备接入用的 Agent 产物目录，空值表示面板可执行文件
 	// 所在目录 —— 容器镜像正是把 /agent 放在 /panel 旁边。
 	AgentDir             string
@@ -42,31 +44,41 @@ type App struct {
 	Handler  http.Handler
 	Platform *platform.Server
 	Commerce *commerce.Service
-	channels map[string]commerce.Channel
+	// store 与 origin 留给支付通道的设置接口：它要读写自己的配置表，并按 origin
+	// 补出回调地址。
+	store  *storage.Store
+	origin string
 }
 
 func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) {
-	channels := make(map[string]commerce.Channel, len(opts.Channels)+1)
-	for name, channel := range opts.Channels {
-		channels[name] = channel
+	if err := migratePaymentSettings(ctx, store); err != nil {
+		return nil, err
 	}
-	// The legacy environment configuration uses the same adapter and retry
-	// worker as the operator-owned JSON file. Explicit file configuration wins.
-	if _, exists := channels["epay"]; !exists && opts.EPay.Gateway != "" && opts.EPay.Key != "" {
-		if opts.EPay.NotifyURL == "" {
-			opts.EPay.NotifyURL = strings.TrimRight(opts.Origin, "/") + "/api/v1/payments/epay/notify"
+	// 支付通道以数据库为准：启动参数只是第一次的初始值，之后都在面板上改。
+	configs := startupPaymentConfigs(opts)
+	stored, err := loadPaymentSettings(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	if len(stored.Channels) > 0 {
+		if len(configs) > 0 {
+			slog.WarnContext(ctx, "启动参数里的支付通道配置被数据库里的设置覆盖：改配置请到面板的站点设置")
 		}
-		if opts.EPay.ReturnURL == "" {
-			opts.EPay.ReturnURL = strings.TrimRight(opts.Origin, "/") + "/#/commerce"
+		configs = stored.Channels
+	} else if len(configs) > 0 {
+		// 第一次启动：把配置文件/环境变量里的通道落库，面板上就能直接看到并接着改。
+		if _, err := savePaymentSettings(ctx, store, 0, configs, nil); err != nil {
+			return nil, err
 		}
-		if !validPaymentURL(opts.EPay.NotifyURL, false) || !validPaymentURL(opts.EPay.ReturnURL, true) {
-			return nil, errors.New("public HTTPS EPay callback URLs required")
-		}
-		adapter, err := payment.NewAdapter(payment.Configuration{Kind: "epay", Gateway: opts.EPay.Gateway, MerchantID: opts.EPay.PID, Key: opts.EPay.Key})
-		if err != nil {
-			return nil, errors.New("invalid legacy EPay configuration")
-		}
-		channels["epay"] = commerce.Channel{Adapter: adapter, NotifyURL: opts.EPay.NotifyURL, ReturnURL: opts.EPay.ReturnURL}
+	}
+	channels, err := BuildPaymentChannels(configs, opts.Origin)
+	if err != nil {
+		return nil, err
+	}
+	// 旧路径（下单时找不到对应通道适配器）读的还是 opts.EPay：把回调地址补成
+	// 配置里的那一份，两条路给出的地址不会不一致。
+	if cfg, ok := configs["epay"]; ok {
+		opts.EPay.NotifyURL, opts.EPay.ReturnURL = cfg.NotifyURL, cfg.ReturnURL
 	}
 	billing := commerce.New(store.DB, store.Dialect, func(ctx context.Context, fn func(*sql.Tx) error) error { return store.Write(ctx, storage.Critical, fn) })
 	billing.CheckAccount = func(ctx context.Context, tx *sql.Tx, user string) error {
@@ -103,7 +115,11 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 		return nil, err
 	}
 	agentdist.Register(mux, opts.AgentDir)
-	return &App{Alerts: monitor, Handler: webui.Security(control.RequestLimits(mux)), Platform: control, Commerce: billing, channels: channels}, nil
+	application := &App{Alerts: monitor, Handler: webui.Security(control.RequestLimits(mux)), Platform: control, Commerce: billing, store: store, origin: opts.Origin}
+	// 支付通道配置：面板上保存之后立刻生效，不必重启进程。
+	mux.HandleFunc("GET /api/v1/payment-settings", control.Admin(application.getPaymentSettings))
+	mux.HandleFunc("PUT /api/v1/payment-settings", control.Admin(application.putPaymentSettings))
+	return application, nil
 }
 
 // RunBackground is started only in server mode, never during restore or local
@@ -114,7 +130,7 @@ func (a *App) RunBackground(ctx context.Context) {
 	workers.Go(func() { a.Platform.RunProbeHistory(ctx) })
 	workers.Go(func() { a.Platform.RunOperationLoop(ctx) })
 	workers.Go(func() { _ = a.Platform.RunTaskLoop(ctx) })
-	workers.Go(func() { _ = a.Commerce.RunReconciliation(ctx, a.channels) })
+	workers.Go(func() { _ = a.Commerce.RunReconciliation(ctx) })
 	workers.Go(func() { _ = a.Commerce.RunAutoRenewLoop(ctx) })
 	workers.Go(func() { _ = a.Commerce.RunWebhookLoop(ctx) })
 	workers.Wait()

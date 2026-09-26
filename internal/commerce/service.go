@@ -80,6 +80,7 @@ type Service struct {
 	reconcileMu    sync.Mutex
 	CheckAccount   func(context.Context, *sql.Tx, string) error
 	webhookClient  *http.Client
+	channelSet     channelSet
 	EventVisible   func(context.Context, *sql.Tx, string, string, string, bool) (bool, error)
 }
 

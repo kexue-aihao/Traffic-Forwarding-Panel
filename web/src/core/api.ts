@@ -47,7 +47,7 @@ export async function api<T>(
   if (!response.ok) {
     if (response.status === 401) {
       state.user = null;
-      state.modalOpen = false;
+      state.modalDepth = 0;
       if (state.ready) notice("登录已过期，请重新登录。");
     }
     throw new ApiError(
