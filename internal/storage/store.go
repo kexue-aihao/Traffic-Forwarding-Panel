@@ -342,7 +342,7 @@ func (s *Store) migrate(ctx context.Context) error {
 
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS cp_terminal_commands(id VARCHAR(64) PRIMARY KEY,operation_id VARCHAR(64) NOT NULL,command TEXT NOT NULL,created_at BIGINT NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS cp_operation_access(token_hash VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,node_id VARCHAR(64) NOT NULL,session_hash VARCHAR(64) NOT NULL,expires_at BIGINT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS cp_operation_access(token_hash VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,node_id VARCHAR(64) NOT NULL,session_hash VARCHAR(64) NOT NULL,expires_at BIGINT NOT NULL,scope VARCHAR(16) NOT NULL DEFAULT 'sensitive')`,
 		`CREATE TABLE IF NOT EXISTS cp_node_operations(id VARCHAR(64) PRIMARY KEY,node_id VARCHAR(64) NOT NULL,user_id VARCHAR(64) NOT NULL,kind VARCHAR(32) NOT NULL,status VARCHAR(32) NOT NULL,payload TEXT NOT NULL,payload_hash VARCHAR(64) NOT NULL,claim_token VARCHAR(64) NOT NULL,access_hash VARCHAR(64) NOT NULL,idempotency_key VARCHAR(128) NOT NULL,error TEXT NOT NULL,created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL,expires_at BIGINT NOT NULL,UNIQUE(user_id,idempotency_key))`,
 	} {
 		if s.Dialect == "mysql" {
@@ -448,6 +448,19 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(8)"); err != nil {
+			return err
+		}
+	}
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=9").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		// 授权要带上「够干什么」：WebSSH 的授权不再要求密码，所以它只能开终端，
+		// 密码换来的 sensitive 授权才允许卸载和升级。旧行按 sensitive 补，行为不变。
+		if err = EnsureColumn(ctx, conn, s.Dialect, "cp_operation_access", "scope", "VARCHAR(16) NOT NULL DEFAULT 'sensitive'"); err != nil {
+			return err
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(9)"); err != nil {
 			return err
 		}
 	}

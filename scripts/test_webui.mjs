@@ -590,6 +590,36 @@ try {
         await page.locator(".probe-location-cell").nth(1).locator(".probe-ip").innerText(),
         "2001:db8::8",
       );
+
+      // 国旗要和状态标记一样高：两块挨着看，大小不一致会显得没对齐。
+      const markBox = await page.locator(".probe-status-square .icon").first().boundingBox();
+      const flagBox = await page
+        .locator(".probe-location-cell")
+        .nth(0)
+        .locator(".probe-address .location-flag svg")
+        .boundingBox();
+      assert.equal(
+        Math.round(flagBox.height),
+        Math.round(markBox.height),
+        "国旗应当和状态标记一样高",
+      );
+
+      // 视角开关：切到用户视角，机器地址换成「已隐藏」，位置图标照旧可见。
+      await pickOption(page, "视角", "user");
+      assert.equal(
+        await page.locator(".probe-location-cell").nth(0).locator(".probe-ip").innerText(),
+        "已隐藏",
+      );
+      assert.equal(
+        await page.locator(".probe-location-cell").nth(0).locator(".location-flag").count(),
+        1,
+        "用户视角仍然看得到位置图标",
+      );
+      await pickOption(page, "视角", "admin");
+      assert.equal(
+        await page.locator(".probe-location-cell").nth(0).locator(".probe-ip").innerText(),
+        "203.0.113.8",
+      );
       assert.equal(
         await page.locator(".probe-place").first().innerText(),
         "位置 中国香港·Hong Kong · 设备组 Fixture group",
@@ -646,7 +676,7 @@ try {
       if (new URL(page.url()).pathname.startsWith("/admin")) {
         await page.getByRole("button", { name: "WebSSH", exact: true }).click();
         await page.getByText("此 Agent 尚不支持该功能。", { exact: false }).waitFor();
-        assert.equal(await page.getByRole("button", { name: "验证并连接" }).count(), 0);
+        assert.equal(await page.getByRole("button", { name: "连接", exact: true }).count(), 0);
         await page.getByRole("button", { name: "关闭对话框" }).click();
         await page.locator("dialog").waitFor({ state: "detached" });
         await page.getByRole("button", { name: "卸载设备", exact: true }).click();
@@ -659,14 +689,15 @@ try {
       await page.getByRole("button", { name: "重新连接", exact: true }).click();
       await nodesRefreshed;
       await page.getByRole("button", { name: "WebSSH", exact: true }).click();
-      await page.getByLabel("管理员密码", { exact: true }).fill("fixture-password");
-      await page.getByRole("button", { name: "验证并连接", exact: true }).click();
+      // WebSSH 不问密码：终端直接可开，密码框不该出现。
+      assert.equal(await page.getByLabel("管理员密码", { exact: true }).count(), 0, "WebSSH 不该再要管理员密码");
+      await page.getByRole("button", { name: "连接", exact: true }).click();
       await page.getByRole("button", { name: "断开连接", exact: true }).waitFor().catch(async e => { throw new Error(`${e.message}\n${await page.getByRole("dialog").innerText()}\n${errors.join("\n")}`); });
       await page.locator(".xterm-helper-textarea").press("a");
       await page.locator(".xterm-helper-textarea").press("Control+c");
       await page.waitForFunction(() => document.querySelector(".xterm") !== null);
       await page.getByRole("button", { name: "断开连接", exact: true }).click();
-      await page.getByRole("button", { name: "验证并连接", exact: true }).waitFor();
+      await page.getByRole("button", { name: "连接", exact: true }).waitFor();
       assert.ok(terminalMessages.some(message => message.type === "resize" && message.cols > 2));
       assert.ok(terminalMessages.some(message => message.type === "input" && message.data === "a"));
       assert.ok(terminalMessages.some(message => message.type === "input" && message.data === "\x03"));

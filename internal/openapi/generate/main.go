@@ -227,7 +227,17 @@ func main() {
 	schemas["Null"] = scalar("null")
 	schemas["PaymentNotify"] = schema{"description": "Provider-specific signed payload. See docs/payment/protocol-sources.md; values are validated by the configured protocol adapter.", "type": "object", "additionalProperties": true}
 	model("Upgrade", schema{"url": schema{"type": "string", "format": "uri"}, "sha256": str, "signature": str, "version": str, "os": str, "arch": str}, "url", "sha256", "signature", "version", "os", "arch")
-	model("OperationAccess", schema{"password": schema{"type": "string", "writeOnly": true}}, "password")
+	// WebSSH 不带密码：只给 scope=shell 就能换到开终端的授权；卸载与升级仍然要
+	// password，换来的授权是 sensitive。两者给一个即可，所以都不设 required。
+	schemas["OperationAccess"] = schema{
+		"type":                 "object",
+		"additionalProperties": false,
+		"description":          "Exactly one of scope=shell (WebSSH, no password) or password (full grant, required by uninstall and upgrade).",
+		"properties": schema{
+			"password": schema{"type": "string", "writeOnly": true},
+			"scope":    schema{"type": "string", "enum": []any{"shell", "sensitive"}},
+		},
+	}
 	model("OperationAccessSecret", schema{"token": str, "expires_at": date}, "token", "expires_at")
 	model("OperationCreate", schema{"access_token": str, "idempotency_key": str}, "access_token", "idempotency_key")
 	model("UpgradeOperationCreate", schema{"access_token": str, "idempotency_key": str, "upgrade": ref("Upgrade")}, "access_token", "idempotency_key", "upgrade")
@@ -303,7 +313,7 @@ func main() {
 		{"GET", "/nodes", "", "NodePage", "200", "user", "Authorized nodes", true},
 		{"POST", "/nodes/enrollment", "Enrollment", "EnrollmentSecret", "201", "admin", "One-time node enrollment valid for 15 minutes", false},
 		{"POST", "/nodes/{id}/rotate-token", "Empty", "NodeSecret", "200", "admin", "Rotate node credential", false},
-		{"POST", "/nodes/{id}/operation-access", "OperationAccess", "OperationAccessSecret", "201", "admin", "Short-lived password reauthentication for node operations", false},
+		{"POST", "/nodes/{id}/operation-access", "OperationAccess", "OperationAccessSecret", "201", "admin", "Short-lived node-operation grant; WebSSH asks for scope=shell alone, uninstall and upgrade require the password", false},
 		{"POST", "/nodes/{id}/terminal", "OperationCreate", "NodeOperation", "201", "admin", "Create an audited remote terminal task", false},
 		{"POST", "/nodes/{id}/shell", "OperationCreate", "NodeOperation", "201", "admin", "Create an interactive PTY terminal task", false},
 		{"POST", "/nodes/{id}/uninstall", "OperationCreate", "NodeOperation", "201", "admin", "Create a managed Agent uninstall task", false},

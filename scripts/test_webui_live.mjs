@@ -992,6 +992,7 @@ try {
       );
       assert.equal(await user.getByRole("button", { name: "WebSSH", exact: true }).count(), 0);
       assert.equal(await user.getByRole("button", { name: "卸载设备", exact: true }).count(), 0);
+      assert.equal(await user.getByLabel("视角", { exact: true }).count(), 0, "普通账号没有视角开关");
       const history = user.getByRole("region", { name: "历史趋势" });
       await history.getByText("4 个采样桶 · 3 个CPU有效值").waitFor();
       await history

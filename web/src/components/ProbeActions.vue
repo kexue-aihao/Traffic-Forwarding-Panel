@@ -69,10 +69,14 @@ async function start() {
   busy.value = true;
   error.value = "";
   try {
+    // WebSSH 不再要管理员密码：面板会话本身已经是管理员，再要一次密码只是把
+    // 门槛挪个地方。不带密码换来的授权只够开终端，卸载仍然要密码。
     const access = await api<{ token: string }>(
       path + "/operation-access",
       "POST",
-      { password: password.value },
+      props.mode === "shell"
+        ? { scope: "shell" }
+        : { password: password.value },
     );
     if (!alive) return;
     const result = await api<Operation>(path + "/" + props.mode, "POST", {
@@ -223,6 +227,7 @@ onUnmounted(() => {
       @submit.prevent="start"
     >
       <label
+        v-if="mode !== 'shell'"
         >管理员密码<input
           v-model="password"
           type="password"
@@ -233,7 +238,7 @@ onUnmounted(() => {
         :class="mode === 'shell' ? 'primary' : 'danger'"
         :disabled="busy || connected"
       >
-        {{ mode === "shell" ? "验证并连接" : "确认卸载此设备" }}
+        {{ mode === "shell" ? "连接" : "确认卸载此设备" }}
       </button>
     </form>
     <p v-if="op && mode === 'uninstall'" role="status">

@@ -33,14 +33,28 @@ func (s *Server) operationAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		Password string `json:"password"`
+		Scope    string `json:"scope"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	var hash string
-	if s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT password_hash FROM cp_users WHERE id=?"), u.ID).Scan(&hash) != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password)) != nil {
-		fail(w, 403, "password incorrect")
+	scope := in.Scope
+	if scope == "" {
+		scope = "sensitive"
+	}
+	if scope != "sensitive" && scope != "shell" {
+		fail(w, 400, "invalid scope")
 		return
+	}
+	// WebSSH 不再要管理员密码：会话本身已经是管理员 Cookie，再要一次密码只
+	// 是把开终端的门槛抬到别处。省掉这一步换来的授权只够开终端 —— 卸载和
+	// 升级仍然要密码换来的 sensitive 授权。
+	if scope == "sensitive" {
+		var hash string
+		if s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT password_hash FROM cp_users WHERE id=?"), u.ID).Scan(&hash) != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password)) != nil {
+			fail(w, 403, "password incorrect")
+			return
+		}
 	}
 	cookie, _ := r.Cookie("tfp_session")
 	raw := token()
@@ -53,7 +67,7 @@ func (s *Server) operationAccess(w http.ResponseWriter, r *http.Request) {
 		if _, e := tx.ExecContext(r.Context(), s.q("DELETE FROM cp_operation_access WHERE expires_at<=?"), time.Now().Unix()); e != nil {
 			return e
 		}
-		if _, e := tx.ExecContext(r.Context(), s.q("INSERT INTO cp_operation_access(token_hash,user_id,node_id,session_hash,expires_at) VALUES(?,?,?,?,?)"), digest(raw), u.ID, node, digest(cookie.Value), expiry.Unix()); e != nil {
+		if _, e := tx.ExecContext(r.Context(), s.q("INSERT INTO cp_operation_access(token_hash,user_id,node_id,session_hash,expires_at,scope) VALUES(?,?,?,?,?,?)"), digest(raw), u.ID, node, digest(cookie.Value), expiry.Unix(), scope); e != nil {
 			return e
 		}
 		return s.AuditTx(r.Context(), tx, u.ID, "node.operation_access", node)
@@ -65,10 +79,29 @@ func (s *Server) operationAccess(w http.ResponseWriter, r *http.Request) {
 	reply(w, 201, map[string]any{"token": raw, "expires_at": expiry})
 }
 
-func (s *Server) operationGrant(ctx context.Context, tx *sql.Tx, user, node, session, access string) (int64, error) {
+// terminalKind 是「开一个交互终端」这一类的操作：面板建的是 shell，
+// 更早的客户端建的是 terminal，两者都归这里管。
+func terminalKind(kind string) bool {
+	return kind == "shell" || kind == "terminal"
+}
+
+// scopeAllows 说明一份授权够干什么。不带密码换来的 shell 授权只能开终端；
+// 卸载与升级仍然要密码换来的 sensitive 授权。
+func scopeAllows(scope, kind string) bool {
+	if scope == "sensitive" {
+		return true
+	}
+	return scope == "shell" && terminalKind(kind)
+}
+
+func (s *Server) operationGrant(ctx context.Context, tx *sql.Tx, user, node, session, access string) (int64, string, error) {
 	var expires int64
-	e := tx.QueryRowContext(ctx, s.q(`SELECT a.expires_at FROM cp_operation_access a JOIN cp_sessions s ON s.token_hash=a.session_hash JOIN cp_users u ON u.id=a.user_id WHERE a.token_hash=? AND a.user_id=? AND a.node_id=? AND a.session_hash=? AND a.expires_at>? AND s.expires_at>? AND u.disabled=0 AND u.role='admin'`), access, user, node, session, time.Now().Unix(), time.Now().Unix()).Scan(&expires)
-	return expires, e
+	var scope string
+	e := tx.QueryRowContext(ctx, s.q(`SELECT a.expires_at,a.scope FROM cp_operation_access a JOIN cp_sessions s ON s.token_hash=a.session_hash JOIN cp_users u ON u.id=a.user_id WHERE a.token_hash=? AND a.user_id=? AND a.node_id=? AND a.session_hash=? AND a.expires_at>? AND s.expires_at>? AND u.disabled=0 AND u.role='admin'`), access, user, node, session, time.Now().Unix(), time.Now().Unix()).Scan(&expires, &scope)
+	if e != nil {
+		return 0, "", e
+	}
+	return expires, scope, nil
 }
 
 func (s *Server) createTerminal(w http.ResponseWriter, r *http.Request) {
@@ -141,9 +174,12 @@ func (s *Server) createOperation(w http.ResponseWriter, r *http.Request, kind, a
 		if e := json.Unmarshal([]byte(raw), &node); e != nil {
 			return e
 		}
-		expires, e := s.operationGrant(r.Context(), tx, u.ID, op.NodeID, digest(cookie.Value), digest(access))
+		expires, scope, e := s.operationGrant(r.Context(), tx, u.ID, op.NodeID, digest(cookie.Value), digest(access))
 		if e != nil {
 			return errors.New("operation authorization expired")
+		}
+		if !scopeAllows(scope, kind) {
+			return errors.New("operation access scope does not allow this operation")
 		}
 		var previousID, previousHash string
 		e = tx.QueryRowContext(r.Context(), s.q("SELECT id,payload_hash FROM cp_node_operations WHERE user_id=? AND idempotency_key=?"), u.ID, key).Scan(&previousID, &previousHash)
@@ -331,7 +367,7 @@ func (s *Server) agentControl(w http.ResponseWriter, r *http.Request) {
 			if e != nil {
 				return e
 			}
-			_, grantErr := s.operationGrant(r.Context(), tx, owner, node, session, access)
+			_, _, grantErr := s.operationGrant(r.Context(), tx, owner, node, session, access)
 			if !(op.Kind == "uninstall" && op.Status == "running") && (!op.ExpiresAt.After(time.Now()) || grantErr != nil) {
 				if _, e = tx.ExecContext(r.Context(), s.q("UPDATE cp_node_operations SET status='expired',updated_at=? WHERE id=?"), time.Now().Unix(), oid); e != nil {
 					return e

@@ -2105,15 +2105,20 @@
       },
       "OperationAccess": {
         "additionalProperties": false,
+        "description": "Exactly one of scope=shell (WebSSH, no password) or password (full grant, required by uninstall and upgrade).",
         "properties": {
           "password": {
             "type": "string",
             "writeOnly": true
+          },
+          "scope": {
+            "enum": [
+              "shell",
+              "sensitive"
+            ],
+            "type": "string"
           }
         },
-        "required": [
-          "password"
-        ],
         "type": "object"
       },
       "OperationAccessSecret": {
@@ -7885,7 +7890,7 @@
             "cookieSession": []
           }
         ],
-        "summary": "Short-lived password reauthentication for node operations",
+        "summary": "Short-lived node-operation grant; WebSSH asks for scope=shell alone, uninstall and upgrade require the password",
         "x-role": "admin"
       }
     },

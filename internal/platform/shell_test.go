@@ -16,7 +16,8 @@ func TestInteractiveBridgeProtocolAndRevocation(t *testing.T) {
 	f := setup(t)
 	_, n := f.node()
 	f.req("POST", "/agent/ack", contract.Ack{Version: 1, AppliedVersion: 1, Capabilities: []string{"shell-v1"}}, n.Token)
-	access := read[map[string]string](t, f.req("POST", "/nodes/"+n.NodeID+"/operation-access", map[string]string{"password": "test-password-long"}, ""), 201)
+	// WebSSH 走的就是这条路：不带密码，只声明 scope=shell。
+	access := read[map[string]string](t, f.req("POST", "/nodes/"+n.NodeID+"/operation-access", map[string]string{"scope": "shell"}, ""), 201)
 	op := read[contract.NodeOperation](t, f.req("POST", "/nodes/"+n.NodeID+"/shell", map[string]string{"access_token": access["token"], "idempotency_key": "interactive-shell"}, ""), 201)
 	control := read[contract.Control](t, f.req("POST", "/agent/control", nil, n.Token), 200)
 	server := httptest.NewServer(f.m)

@@ -168,7 +168,14 @@ function probeState(p: Probe) {
   if (value === "离线") return { key: "offline", mark: "x" };
   return { key: "stale", mark: "clock" };
 }
+// 探针页面的视角开关：管理员能直接看到普通账号眼里的样子 —— 位置图标照旧，
+// 机器地址换成「已隐藏」。非管理员没有这个开关，本来就是用户视角。
+const viewAsUser = ref(false);
+function visibleIPs(p: Probe) {
+  return viewAsUser.value ? [] : p.public_ips || [];
+}
 function addressLabel(p: Probe, family: "ipv4" | "ipv6") {
+  if (viewAsUser.value) return "已隐藏";
   const address = addressFor(p, family);
   if (address) return address;
   if (p.public_ips === undefined) return canManage.value ? "未上报" : "已隐藏";
@@ -309,6 +316,20 @@ onUnmounted(() => {
           </option>
         </Select></label
       >
+      <label v-if="canManage"
+        >视角<Select
+          :model-value="viewAsUser ? 'user' : 'admin'"
+          aria-label="视角"
+          @change="
+            (value: string) => {
+              viewAsUser = value === 'user';
+            }
+          "
+        >
+          <option value="admin">管理员视角</option>
+          <option value="user">用户视角</option>
+        </Select></label
+      >
       <p class="small muted">按设备组查看实时状态，历史趋势跟随同一范围。</p>
     </div>
     <p v-if="error" class="warning" role="status">{{ error }}</p>
@@ -375,7 +396,7 @@ onUnmounted(() => {
               <LocationFlag
                 :code="locationFor(p, 'ipv4')?.country_code"
                 :name="locationFor(p, 'ipv4')?.country_name"
-                :size="20"
+                :size="26"
               />
               <span class="probe-ip" :title="addressLabel(p, 'ipv4')">
                 {{ addressLabel(p, "ipv4") }}
@@ -388,7 +409,7 @@ onUnmounted(() => {
               <LocationFlag
                 :code="locationFor(p, 'ipv6')?.country_code"
                 :name="locationFor(p, 'ipv6')?.country_name"
-                :size="20"
+                :size="26"
               />
               <span class="probe-ip" :title="addressLabel(p, 'ipv6')">
                 {{ addressLabel(p, "ipv6") }}
@@ -486,12 +507,12 @@ onUnmounted(() => {
               </dd>
             </div>
           </dl>
-          <p v-for="ip in p.public_ips || []" :key="ip.address" class="small">
+          <p v-for="ip in visibleIPs(p)" :key="ip.address" class="small">
             {{ ip.family }} · {{ ip.address }}<br /><span class="muted"
               >{{ ip.source }} · {{ formatDateTime(ip.observed_at) }}</span
             >
           </p>
-          <p v-if="!p.public_ips?.length" class="small muted">
+          <p v-if="!visibleIPs(p).length" class="small muted">
             公网地址不对普通账号展示。脚本取地址请用下方接口。
           </p>
         </details>

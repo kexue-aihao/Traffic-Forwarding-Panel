@@ -60,7 +60,7 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 | POST /agent/probe | Probe | 204，身份绑定 node_id |
 | POST /agent/usage | UsageBatch | `{accepted: [id...]}`；持久化后确认 |
 | POST /agent/leases/retire | `{lease_id,used_bytes}` | 204；最终用量必须已全部结算，重复相同退租安全 |
-| POST /nodes/{id}/operation-access | `{password}` | 管理员 Cookie 二次验证；返回 15 分钟节点运维 token |
+| POST /nodes/{id}/operation-access | `{password}` 或 `{scope:"shell"}` | 返回 15 分钟节点运维 token。WebSSH 只发 `scope:"shell"`、不发密码，换来的授权只能开终端；卸载与升级要 `password`（scope 缺省即 sensitive）。两者给其一即可 |
 | POST /nodes/{id}/terminal | `{access_token,idempotency_key}` | 创建审计终端任务；节点需声明 `terminal-v1` |
 | POST /nodes/{id}/upgrade | `{access_token,idempotency_key,upgrade}` | 创建签名升级任务；Agent 校验 HTTPS、SHA-256、Ed25519 和平台 |
 | GET /nodes/{id}/operations | 无 | 最近节点运维任务；仅管理员 Cookie |
