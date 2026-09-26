@@ -785,11 +785,15 @@ try {
       await user
         .getByLabel("名称", { exact: true })
         .fill("disabled-integration-rule");
-      await user.getByLabel("入口服务器").selectOption(registered.node_id);
-      const userGroups = await (
-        await user.request.get(base + "/api/v1/groups")
-      ).json();
-      await user.getByLabel("设备组").selectOption(userGroups.items[0].id);
+      // 入口服务器与设备组合成一项，选项名字就是设备组名 —— 组里只有一台机器
+      // 时，机器名是同一件事的第二个名字。选中它同时定下机器和组。
+      const entry = user.getByLabel("入口服务器");
+      await entry.selectOption({ label: savedGroup.name });
+      assert.equal(
+        await entry.inputValue(),
+        `${registered.node_id}::${savedGroup.id}`,
+        "选一个入口要同时定下机器与设备组",
+      );
       await user.getByLabel("目标地址", { exact: true }).fill("127.0.0.1:8080");
       await user.getByLabel("启用规则", { exact: true }).uncheck();
       await save(user);
@@ -1260,10 +1264,7 @@ try {
       await user.getByLabel("名称", { exact: true }).fill("managed draft");
       await user
         .getByLabel("入口服务器", { exact: true })
-        .selectOption(registered.node_id);
-      await user
-        .getByLabel("设备组", { exact: true })
-        .selectOption(savedGroup.id);
+        .selectOption({ label: savedGroup.name });
       await user
         .getByLabel("出口选择", { exact: true })
         .selectOption(exitGroup.id);

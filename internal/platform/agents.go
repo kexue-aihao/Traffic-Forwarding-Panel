@@ -191,6 +191,29 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 	} else {
 		where += " AND " + liveNodeSQL
 	}
+	// 普通用户只看得到自己有权访问的组归属：一台机器可能同时属于别人的组，
+	// 整份照发等于把「这台机器还属于别家」告诉了他。探针列表（visibleNodes）
+	// 一直是这么过滤的，这里原来直接把 group_ids 置空 —— 两种做法都挡住了越权，
+	// 但置空会让「入口服务器 = 某台机器 + 它所属的入口组」这条组合在界面上凑不
+	// 出来，普通用户建规则时选不到入口。
+	authorized := map[string]bool{}
+	if u.Role != "admin" {
+		rows, e := s.Store.DB.QueryContext(r.Context(), s.q(`SELECT gig.group_id FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE iu.id=?`), u.ID)
+		if e != nil {
+			fail(w, 500, "query failed")
+			return
+		}
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) != nil {
+				rows.Close()
+				fail(w, 500, "query failed")
+				return
+			}
+			authorized[id] = true
+		}
+		rows.Close()
+	}
 	n, o := pages(r)
 	var total int
 	if s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT COUNT(*) FROM cp_nodes n"+where), args...).Scan(&total) != nil {
@@ -223,7 +246,13 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 			node.LastSeen = &at
 		}
 		if u.Role != "admin" {
-			node.GroupIDs = nil
+			visible := []string{}
+			for _, id := range node.GroupIDs {
+				if authorized[id] {
+					visible = append(visible, id)
+				}
+			}
+			node.GroupIDs = visible
 		}
 		items = append(items, node)
 	}

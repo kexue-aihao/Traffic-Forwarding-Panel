@@ -58,6 +58,7 @@ const group = {
 const node = {
   id: "n1",
   name: "Fixture node",
+  group_ids: ["g1"],
   agent_version: "test",
   last_seen: summerUTC,
   desired_version: 1,
@@ -558,8 +559,13 @@ try {
       await page
         .getByLabel("名称", { exact: true })
         .fill("<img src=x onerror=alert(1)>");
-      await pickOption(page, "入口服务器", "n1");
-      await pickOption(page, "设备组", "g1");
+      // 入口服务器与设备组合成一项，值同时带机器与组。这一组有两台机器，
+      // 所以选项在组名后面补上机器名加以区分（组里只有一台时选项就读作组名）。
+      await pickOption(page, "入口服务器", "n1::g1");
+      assert.deepEqual(
+        await page.getByLabel("入口服务器").locator("option").allTextContents(),
+        ["选择服务器", "Fixture group · Fixture node", "Fixture group · Offline fixture node"],
+      );
       await page.getByLabel("目标地址", { exact: true }).fill("127.0.0.1:8080");
       await page.getByRole("button", { name: "保存", exact: true }).click();
       await page

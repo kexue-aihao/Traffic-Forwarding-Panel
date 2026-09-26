@@ -335,6 +335,76 @@ const formForwards = computed(
     (!!form.value.group_type || !!selected.value),
 );
 const entryGroups = computed(() => options.value.groups.filter(isEntryGroup));
+// 下拉的 value 只能是字符串，而这一项要同时提交机器与设备组，所以把两个 id
+// 拼起来（都是接口给的不透明字符串，中间用 :: 隔开）。
+function entryKeyOf(nodeID: string, groupID: string) {
+  return nodeID && groupID ? `${nodeID}::${groupID}` : "";
+}
+// 入口服务器与设备组是同一件事的两面：规则必须落在「某台机器 + 它所属的入口
+// 组」这个组合上，后端也是按这个组合校验的（节点必须在该组里）。分成两个下拉
+// 之后，运营方看到的是同一台机器的两个名字 —— 组里只有一台机器时更是纯重复。
+// 合成一个：一台机器一条选项，名字取设备组名；只有一组里不止一台机器时才补上
+// 机器名，否则两条选项读起来一模一样。
+const entryOptions = computed(() => {
+  const names = new Map(
+    entryGroups.value.map((g) => [String(g.id), String(g.name)]),
+  );
+  const rows: {
+    key: string;
+    label: string;
+    nodeID: string;
+    groupID: string;
+  }[] = [];
+  for (const node of options.value.nodes) {
+    const nodeID = String(node.id);
+    for (const id of ((node.group_ids as string[]) || []).map(String)) {
+      // 出口组和链式组不能当入口，它们不出现在这里。
+      if (!names.has(id)) continue;
+      rows.push({
+        key: entryKeyOf(nodeID, id),
+        label: String(node.name),
+        nodeID,
+        groupID: id,
+      });
+    }
+  }
+  const perGroup = new Map<string, number>();
+  for (const row of rows)
+    perGroup.set(row.groupID, (perGroup.get(row.groupID) || 0) + 1);
+  for (const row of rows) {
+    const group = names.get(row.groupID) || row.groupID;
+    row.label =
+      (perGroup.get(row.groupID) || 0) > 1
+        ? `${group} · ${row.label}`
+        : group;
+  }
+  // 编辑一条入口已经不在组里的旧规则时，列表里没有对应选项，下拉会是空的。
+  // 补一条只读的，让运营方看到这条规则实际落在哪里。
+  const current = entryKeyOf(form.value.node_id, form.value.group_id);
+  if (selected.value && current && !rows.some((row) => row.key === current)) {
+    const node = options.value.nodes.find(
+      (n) => String(n.id) === form.value.node_id,
+    );
+    rows.push({
+      key: current,
+      label: [
+        node ? String(node.name) : form.value.node_id,
+        names.get(form.value.group_id) || form.value.group_id,
+      ].join(" · "),
+      nodeID: form.value.node_id,
+      groupID: form.value.group_id,
+    });
+  }
+  return rows;
+});
+const entryKey = computed({
+  get: () => entryKeyOf(form.value.node_id, form.value.group_id),
+  set: (value: string) => {
+    const row = entryOptions.value.find((item) => item.key === value);
+    form.value.node_id = row?.nodeID || "";
+    form.value.group_id = row?.groupID || "";
+  },
+});
 const exitGroups = computed(() => options.value.groups.filter(isExitGroup));
 const chainChoices = computed(() =>
   options.value.groups.filter(
@@ -1329,37 +1399,26 @@ const labels: Record<string, string> = {
           ><template v-if="resource === 'rules'"
             ><label
               >入口服务器<Select
-                v-model="form.node_id"
+                v-model="entryKey"
                 aria-label="入口服务器"
                 required
                 :disabled="!!selected"
               >
                 <option value="" disabled>选择服务器</option>
                 <option
-                  v-for="n in options.nodes"
-                  :key="String(n.id)"
-                  :value="n.id"
+                  v-for="row in entryOptions"
+                  :key="row.key"
+                  :value="row.key"
                 >
-                  {{ n.name }}
-                </option>
-              </Select></label
-            ><label
-              >设备组<Select
-                v-model="form.group_id"
-                aria-label="设备组"
-                required
-                :disabled="!!selected"
-              >
-                <option value="" disabled>选择设备组</option>
-                <option
-                  v-for="g in entryGroups"
-                  :key="String(g.id)"
-                  :value="g.id"
-                >
-                  {{ g.name }}
+                  {{ row.label }}
                 </option>
               </Select></label
             >
+            <p v-if="!entryOptions.length" class="muted small">
+              没有可选的入口服务器：入口是「一台机器 + 它所属的入口设备组」，
+              你名下还没有这样的组合。机器要先加入你被授权的入口设备组（管理员在
+              「设备组」页操作），规则才能落在它上面。
+            </p>
             <label
               >出口选择<Select
                 v-model="form.exit_group_id"
