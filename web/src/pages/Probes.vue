@@ -9,6 +9,7 @@ import {
 import { api, errorText, ApiError } from "../core/api";
 import ProbeHistory from "../components/ProbeHistory.vue";
 import LocationFlag from "../components/LocationFlag.vue";
+import Icon from "../components/Icon.vue";
 const ProbeActions = defineAsyncComponent(
   () => import("../components/ProbeActions.vue"),
 );
@@ -154,6 +155,18 @@ function locationFor(
   // Older control planes only returned one location. Keep that response
   // compatible when the machine has no separate IPv4 observation.
   return !addressFor(p, "ipv4") ? p.location : undefined;
+}
+/**
+ * 状态标：在线绿底勾、离线红底叉，数据陈旧是黄底钟。
+ *
+ * 「数据陈旧」是第三种状态（机器在线，只是最近没上报），给它一个红叉会
+ * 把「没上报」说成「已离线」，所以单独一种底色和标记。
+ */
+function probeState(p: Probe) {
+  const value = status(p);
+  if (value === "在线") return { key: "online", mark: "check" };
+  if (value === "离线") return { key: "offline", mark: "x" };
+  return { key: "stale", mark: "clock" };
 }
 function addressLabel(p: Probe, family: "ipv4" | "ipv6") {
   const address = addressFor(p, family);
@@ -348,32 +361,38 @@ onUnmounted(() => {
             <span class="probe-state-value">
               <span
                 class="probe-status-square"
-                :data-live="String(status(p) === '在线')"
+                :data-state="probeState(p).key"
                 aria-hidden="true"
-              />
+              >
+                <Icon :name="probeState(p).mark" />
+              </span>
               <span class="sr-only">{{ status(p) }}</span>
             </span>
           </div>
           <div class="probe-cell probe-location-cell">
             <span class="probe-label">IPv4 地址</span>
-            <LocationFlag
-              :code="locationFor(p, 'ipv4')?.country_code"
-              :name="locationFor(p, 'ipv4')?.country_name"
-              :size="26"
-            />
-            <span class="probe-ip" :title="addressLabel(p, 'ipv4')">
-              {{ addressLabel(p, "ipv4") }}
+            <span class="probe-address">
+              <LocationFlag
+                :code="locationFor(p, 'ipv4')?.country_code"
+                :name="locationFor(p, 'ipv4')?.country_name"
+                :size="20"
+              />
+              <span class="probe-ip" :title="addressLabel(p, 'ipv4')">
+                {{ addressLabel(p, "ipv4") }}
+              </span>
             </span>
           </div>
           <div class="probe-cell probe-location-cell">
             <span class="probe-label">IPv6 地址</span>
-            <LocationFlag
-              :code="locationFor(p, 'ipv6')?.country_code"
-              :name="locationFor(p, 'ipv6')?.country_name"
-              :size="26"
-            />
-            <span class="probe-ip" :title="addressLabel(p, 'ipv6')">
-              {{ addressLabel(p, "ipv6") }}
+            <span class="probe-address">
+              <LocationFlag
+                :code="locationFor(p, 'ipv6')?.country_code"
+                :name="locationFor(p, 'ipv6')?.country_name"
+                :size="20"
+              />
+              <span class="probe-ip" :title="addressLabel(p, 'ipv6')">
+                {{ addressLabel(p, "ipv6") }}
+              </span>
             </span>
           </div>
           <div class="metrics probe-network probe-rate">

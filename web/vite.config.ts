@@ -53,6 +53,9 @@ export default defineConfig({
           "moon",
           "settings",
           "book-open",
+          "check",
+          "x",
+          "clock",
         ];
         const symbols = names.map((name) => {
           const raw = readFileSync(

@@ -550,11 +550,28 @@ try {
         .waitFor();
       // 位置图标与设备组归属：位置对普通用户也可见，机器地址不是。
       assert.equal(
-        await page.locator(".location-flag").first().getAttribute("aria-label"),
+        await page
+          .locator(".probe-location-cell")
+          .nth(0)
+          .locator(".probe-address > .location-flag + .probe-ip")
+          .count(),
+        1,
+        "国旗要贴在 IPv4 地址前面、和地址同一行",
+      );
+      assert.equal(
+        await page
+          .locator(".probe-location-cell")
+          .nth(0)
+          .locator(".location-flag")
+          .getAttribute("aria-label"),
         "中国香港",
       );
       assert.equal(
-        await page.locator(".location-flag").nth(1).getAttribute("aria-label"),
+        await page
+          .locator(".probe-location-cell")
+          .nth(1)
+          .locator(".location-flag")
+          .getAttribute("aria-label"),
         "日本",
       );
       assert.equal(
@@ -577,6 +594,24 @@ try {
         await page.locator(".probe-place").first().innerText(),
         "位置 中国香港·Hong Kong · 设备组 Fixture group",
       );
+      // 状态标：在线绿底勾、离线红底叉。换设备组会让页面重新拉一次
+      // /probes，借这个真实动作把三种状态各验一遍。
+      const squareMark = () =>
+        page.locator(".probe-status-square use").first().getAttribute("href");
+      fixtureProbe.online = false;
+      await pickOption(page, "设备组", "g1");
+      await page.locator('.probe-status-square[data-state="offline"]').waitFor();
+      assert.equal(await squareMark(), "/assets/icons.svg#x", "离线应当是红底叉");
+      fixtureProbe.online = undefined;
+      fixtureProbe.sampled_at = new Date().toISOString();
+      await pickOption(page, "设备组", "");
+      await page.locator('.probe-status-square[data-state="online"]').waitFor();
+      assert.equal(await squareMark(), "/assets/icons.svg#check", "在线应当是绿底勾");
+      fixtureProbe.sampled_at = winterUTC;
+      await pickOption(page, "设备组", "g1");
+      await page.locator('.probe-status-square[data-state="stale"]').waitFor();
+      assert.equal(await squareMark(), "/assets/icons.svg#clock", "数据陈旧应当是黄底钟");
+      await pickOption(page, "设备组", "");
       // 探针页面按设备组收窄：选了组之后仍然只显示这一组的机器。这里走真实
       // 点击：切换是这套自绘下拉唯一的入口，值得按用户的方式验一遍。
       await pickOption(page, "设备组", "g1");

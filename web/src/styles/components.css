@@ -1187,18 +1187,37 @@ tbody tr:hover td {
   color: var(--color-ink-muted);
 }
 .probe-status-square {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 30px;
   height: 30px;
   flex: none;
   border-radius: 6px;
   background: var(--color-line-strong);
   box-shadow: inset 0 0 0 1px var(--color-line);
+  color: #fff;
 }
-.probe-status-square[data-live="true"] {
+/* 标记是勾 / 叉 / 钟：24 的视图盒缩到 17px，描边要加粗才看得清。 */
+.probe-status-square .icon {
+  width: 17px;
+  height: 17px;
+  stroke-width: 3;
+}
+.probe-status-square[data-state="online"] {
   background: var(--color-success);
   box-shadow: inset 0 0 0 1px
     color-mix(in oklab, var(--color-success) 65%, white);
+}
+.probe-status-square[data-state="stale"] {
+  background: var(--color-warn);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--color-warn) 65%, white);
+}
+.probe-status-square[data-state="offline"] {
+  background: var(--color-danger);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--color-danger) 65%, white);
 }
 .probe-place {
   max-width: 220px;
@@ -1231,13 +1250,17 @@ tbody tr:hover td {
   align-items: center;
   min-height: 30px;
 }
-.probe-location-cell .location-flag {
-  padding: 7px 12px;
-  border-radius: 6px;
-  background: var(--color-bg-4);
+/* 国旗贴在地址前面：和地址同一行，不再单独占一块底色。 */
+.probe-address {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 .probe-ip {
   display: block;
+  min-width: 0;
   max-width: 100%;
   overflow: hidden;
   color: var(--color-ink);
