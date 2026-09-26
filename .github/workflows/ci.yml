@@ -32,7 +32,8 @@ jobs:
       - run: test -z "$(gofmt -l cmd internal)"
       - run: bash -n install.sh
       - run: bash -n internal/agentdist/agent-install.sh
-      - run: shellcheck install.sh internal/agentdist/agent-install.sh
+      - run: bash -n internal/agentdist/agent-uninstall.sh
+      - run: shellcheck install.sh internal/agentdist/agent-install.sh internal/agentdist/agent-uninstall.sh
       - run: go generate ./internal/openapi
       - run: git diff --exit-code -- internal/openapi/openapi.json
       - run: go vet ./...

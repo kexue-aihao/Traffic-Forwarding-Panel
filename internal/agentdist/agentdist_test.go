@@ -38,7 +38,7 @@ func TestInstallerScriptIsAlwaysAvailable(t *testing.T) {
 		t.Fatalf("installer content type = %q", ct)
 	}
 	body := w.Body.String()
-	for _, want := range []string{"#!/usr/bin/env bash", "TFP_ENROLLMENT_TOKEN", "/download/agent/linux/", "systemctl"} {
+	for _, want := range []string{"#!/usr/bin/env bash", "TFP_ENROLLMENT_TOKEN", "/download/agent/linux/", "/download/agent-uninstall.sh", "systemctl"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("installer script is missing %q", want)
 		}
@@ -128,5 +128,23 @@ func TestLookupIgnoresDirectories(t *testing.T) {
 	}
 	if _, ok := Lookup(dir, "linux", "amd64"); ok {
 		t.Fatal("a directory must not be published as an Agent binary")
+	}
+}
+
+func TestUninstallerScriptIsAlwaysAvailable(t *testing.T) {
+	// 卸载脚本和接入脚本同理：面板连不上、Agent 已经起不来的机器仍然要能被拆
+	// 干净，所以它同样内嵌，且不依赖任何产物目录。
+	w := get(t, filepath.Join(t.TempDir(), "absent"), "/download/agent-uninstall.sh")
+	if w.Code != http.StatusOK {
+		t.Fatalf("uninstaller status = %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/x-shellscript") {
+		t.Fatalf("uninstaller content type = %q", ct)
+	}
+	body := w.Body.String()
+	for _, want := range []string{"#!/usr/bin/env bash", "systemctl disable", "/usr/local/bin/tfp-agent", "tfp-agent.service", "tfp-exit.service"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("uninstaller script is missing %q", want)
+		}
 	}
 }

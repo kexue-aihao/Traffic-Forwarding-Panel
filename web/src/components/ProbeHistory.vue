@@ -22,7 +22,13 @@ interface HistorySample {
   upload_bps: number | null;
   download_bps: number | null;
 }
-const props = defineProps<{ nodes: { id: string; name: string }[] }>();
+// address 是这台机器当前的公网 IPv4。取不到（普通账号看不到地址）时退回名字。
+const props = defineProps<{
+  nodes: { id: string; name: string; address?: string }[];
+}>();
+function nodeLabel(node: { name: string; address?: string }) {
+  return node.address || node.name;
+}
 const route = useRoute();
 const router = useRouter();
 const ranges = [
@@ -51,7 +57,49 @@ const metric = computed(
   () => metrics.find((item) => item.key === route.query.metric) || metrics[0],
 );
 const rateMetric = computed(() => metric.value.unit === "B/s");
-const items = ref<HistorySample[]>([]);
+const raw = ref<HistorySample[]>([]);
+const metricKeys = [
+  "cpu_percent",
+  "memory_percent",
+  "disk_percent",
+  "load1",
+  "upload_bps",
+  "download_bps",
+] as const;
+// 波形图五分钟一个点。一分钟一个点时 24 小时窗口有 1440 个点，图上挤成一团
+// 噪声，7 天窗口更是上万个。组内只要缺一分钟，这个点就整点留空 —— 断线是图上
+// 「这里没测到」的唯一信号，取平均会把它抹平成一条平滑的线。
+const plotStep = 5 * 60 * 1000;
+function plotBucket(at: number) {
+  return Math.floor(at / plotStep) * plotStep;
+}
+function mergeGroup(group: HistorySample[]): HistorySample {
+  const merged: HistorySample = { ...group[0] };
+  merged.samples = group.reduce((sum, item) => sum + item.samples, 0);
+  for (const key of metricKeys) {
+    if (group.some((item) => item[key] === null)) {
+      merged[key] = null;
+      continue;
+    }
+    merged[key] =
+      group.reduce((sum, item) => sum + (item[key] ?? 0), 0) / group.length;
+  }
+  return merged;
+}
+const items = computed(() => {
+  if (range.value.resolution !== "minute" || raw.value.length === 0)
+    return raw.value;
+  const groups = new Map<number, HistorySample[]>();
+  for (const item of raw.value) {
+    const key = plotBucket(Date.parse(item.sampled_at));
+    const group = groups.get(key);
+    if (group) group.push(item);
+    else groups.set(key, [item]);
+  }
+  return [...groups.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, group]) => mergeGroup(group));
+});
 const loading = ref(false);
 const error = ref("");
 const windowStart = ref(0);
@@ -60,8 +108,10 @@ const selectedIndex = ref(0);
 let generation = 0;
 let alive = true;
 const selected = computed(() => items.value[selectedIndex.value]);
+// 窗口取整与「这里断线了」的判定共用这个间隔：两者都该跟着绘图粒度走，
+// 否则窗口末尾会把最后一个点切成半格。
 const interval = computed(() =>
-  range.value.resolution === "minute" ? 60000 : 3600000,
+  range.value.resolution === "minute" ? plotStep : 3600000,
 );
 const valid = computed(() =>
   items.value.filter((item) => item[metric.value.key] !== null),
@@ -123,7 +173,7 @@ function select(key: string, value: string) {
 }
 async function load() {
   const request = ++generation;
-  items.value = [];
+  raw.value = [];
   error.value = "";
   if (!selectedNode.value) {
     loading.value = false;
@@ -143,8 +193,8 @@ async function load() {
       `/probes/${encodeURIComponent(selectedNode.value.id)}/history?${query}`,
     );
     if (!alive || request !== generation) return;
-    items.value = result.items;
-    selectedIndex.value = Math.max(0, result.items.length - 1);
+    raw.value = result.items;
+    selectedIndex.value = Math.max(0, items.value.length - 1);
   } catch (cause) {
     if (
       alive &&
@@ -179,8 +229,8 @@ onUnmounted(() => {
       </button>
     </div>
     <p class="small muted">
-      分钟采样保留 7 天，小时汇总保留 180 天。最近 1–2
-      分钟的采样稍后可见，当前小时逐步汇总；缺失数据留空，不代表零用量或计费流量。
+      分钟采样保留 7 天，小时汇总保留 180 天。波形图每 5
+      分钟一个点，5 分钟内只要缺一次采样这个点就留空；缺失不代表零用量或计费流量。
     </p>
     <div v-if="nodes.length" class="history-controls">
       <label
@@ -189,7 +239,7 @@ onUnmounted(() => {
           @change="select('node', $event)"
         >
           <option v-for="node in nodes" :key="node.id" :value="node.id">
-            {{ node.name }}
+            {{ nodeLabel(node) }}
           </option>
         </Select></label
       >
@@ -243,7 +293,7 @@ onUnmounted(() => {
             viewBox="0 0 604 170"
             preserveAspectRatio="none"
             role="img"
-            :aria-label="`${selectedNode.name} ${metric.label}历史趋势，缺测处断线；下方滑块可逐点查看`"
+            :aria-label="`${nodeLabel(selectedNode)} ${metric.label}历史趋势，缺测处断线；下方滑块可逐点查看`"
           >
             <line x1="6" y1="14" x2="598" y2="14" class="history-guide" />
             <line x1="6" y1="160" x2="598" y2="160" class="history-guide" />

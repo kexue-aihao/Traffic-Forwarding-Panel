@@ -174,6 +174,18 @@ const viewAsUser = ref(false);
 function visibleIPs(p: Probe) {
   return viewAsUser.value ? [] : p.public_ips || [];
 }
+// 历史趋势按机器选：同一个设备组里可能有好几台，光看名字认不出是哪一台，
+// 地址认得出来。用户视角下地址是隐藏的，那就退回名字 —— 与页面其它地方同口径。
+const historyNodes = computed(() =>
+  nodes.value.map((node) => {
+    const probe = probes.value.find((item) => item.node_id === node.id);
+    return {
+      id: node.id,
+      name: node.name,
+      address: probe && !viewAsUser.value ? addressFor(probe, "ipv4") : "",
+    };
+  }),
+);
 function addressLabel(p: Probe, family: "ipv4" | "ipv6") {
   if (viewAsUser.value) return "已隐藏";
   const address = addressFor(p, family);
@@ -522,7 +534,7 @@ onUnmounted(() => {
       累计流量来自机器的非回环网卡计数，重启或网卡重置后可能归零，包含其他程序和虚拟网卡流量，不代表转发计费流量。单位按
       1024 进位：1024 GB = 1 TB。
     </p>
-    <ProbeHistory :nodes="nodes" />
+    <ProbeHistory :nodes="historyNodes" />
     <ProbeActions
       v-if="operation"
       :key="operation.seq"

@@ -996,12 +996,10 @@ try {
       assert.equal(await user.getByRole("button", { name: "卸载设备", exact: true }).count(), 0);
       assert.equal(await user.getByLabel("视角", { exact: true }).count(), 0, "普通账号没有视角开关");
       const history = user.getByRole("region", { name: "历史趋势" });
-      await history.getByText("4 个采样桶 · 3 个CPU有效值").waitFor();
-      await history
-        .locator(".history-selection")
-        .getByText("0 %", { exact: true })
-        .waitFor();
-      assert.equal(await history.locator("polyline").count(), 1);
+      // 图上的形状（几分钟一个点、缺测怎么断线）由 test_webui.mjs 用受控数据验：
+      // 线上的样点是实时的，面板还要等聚合跑完才落桶，形状本身不稳定。这里确认
+      // 历史这一块渲染得出来，下面几条再确认接口答 200。
+      await history.getByText("分钟采样保留 7 天", { exact: false }).waitFor();
       assert.equal(
         (
           await user.request.get(

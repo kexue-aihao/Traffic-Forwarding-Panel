@@ -26,6 +26,12 @@ import (
 //go:embed agent-install.sh
 var installer string
 
+// 卸载脚本同样内嵌：面板连不上、或 Agent 已经起不来的机器仍然要能被拆干净。
+// 接入脚本会在安装时把它落到 /etc/tfp-agent/ 下。
+//
+//go:embed agent-uninstall.sh
+var uninstaller string
+
 // 平台片段只允许小写字母与数字：路径拼接前先把它锁死，
 // 后面那次 filepath 包含关系检查是第二道防线，不是唯一一道。
 var platformSegment = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
@@ -33,12 +39,19 @@ var platformSegment = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
 // Register 挂载两个公开路由：
 //
 //	GET /download/agent-install.sh      接入脚本
+//	GET /download/agent-uninstall.sh    卸载脚本
 //	GET /download/agent/{os}/{arch}     指定平台的 Agent
 //	GET /download/agent                 面板自身平台的 Agent
 //
 // dir 是 Agent 产物所在目录，空值表示面板可执行文件所在目录 —— 容器镜像
 // 正是把 /agent 放在 /panel 旁边。
 func Register(mux *http.ServeMux, dir string) {
+	mux.HandleFunc("GET /download/agent-uninstall.sh", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+		w.Header().Set("Content-Disposition", `inline; filename="agent-uninstall.sh"`)
+		http.ServeContent(w, r, "agent-uninstall.sh", time.Time{}, strings.NewReader(uninstaller))
+	})
+
 	mux.HandleFunc("GET /download/agent-install.sh", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 		w.Header().Set("Content-Disposition", `inline; filename="agent-install.sh"`)

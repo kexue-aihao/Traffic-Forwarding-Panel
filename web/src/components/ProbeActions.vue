@@ -30,6 +30,7 @@ const labels: Record<string, string> = {
   expired: "设备未及时接收，任务已过期",
   cancelled: "已取消",
 };
+const origin = location.origin;
 const supported = props.node.capabilities?.includes(props.mode + "-v1");
 const path = `/nodes/${encodeURIComponent(props.node.id)}`;
 let key = crypto.randomUUID();
@@ -107,6 +108,12 @@ async function connect(id: string) {
     fontSize: 14,
     scrollback: 3000,
     theme: { background: "#101820", foreground: "#e6edf3" },
+  });
+  // 选中即复制：终端里的地址、密钥通常要粘到别处，再按一次复制键是多余的。
+  // 剪贴板在非安全上下文里没有，写失败也不该打断终端，所以整段吞掉异常。
+  terminal.onSelectionChange(() => {
+    const text = terminal?.getSelection();
+    if (text) void navigator.clipboard?.writeText(text).catch(() => {});
   });
   fit = new FitAddon();
   terminal.loadAddon(fit);
@@ -206,11 +213,16 @@ onUnmounted(() => {
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <p v-if="mode === 'shell'" class="muted">
       通过 Agent 打开交互终端，以 Agent 服务账号运行，支持 Ctrl+C
-      和交互命令。会话最长 10 分钟。
+      和交互命令。会话最长 10 分钟；选中文本即复制到剪贴板。
     </p>
     <p v-else class="warning">
       将停止并卸载此机器上的 Agent
       和配套出口服务，移除本机接入凭据。面板保留历史流量和审计记录。请先移除相关转发规则；卸载开始后不能撤销。
+    </p>
+    <p v-if="mode !== 'shell'" class="small muted">
+      面板连不上、或 Agent 已经起不来时，在机器上以 root 执行
+      <code>bash &lt;(curl -fLsS {{ origin }}/download/agent-uninstall.sh)</code>
+      也能卸载；那条路不会回报面板，节点记录要到「服务器」页删。
     </p>
     <p v-if="!supported" class="warning">
       此 Agent

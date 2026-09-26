@@ -45,12 +45,34 @@ EXIT_KEY=""
 EXIT_ALLOW=""
 EXIT_TRANSPORT="tls"
 EXIT_UNIT="/etc/systemd/system/tfp-exit.service"
+UNINSTALL_SCRIPT=""
 
 die() {
   printf '错误：%s\n' "$1" >&2
   exit 1
 }
 note() { printf '  %s\n' "$1"; }
+
+# 装完把文件落在哪写清楚：机器出问题时运营方要能直接找到它们，而不是回头翻
+# 安装脚本。
+print_paths() {
+  echo
+  echo "本机文件位置："
+  note "Agent 程序    $BIN_PATH"
+  note "节点身份      $STATE_DIR/agent-state.json"
+  note "环境文件      $ENV_DIR/agent.env"
+  note "服务单元      $UNIT_PATH"
+  if [ "$MODE" = "exit" ]; then
+    note "出口单元      $EXIT_UNIT"
+  fi
+  if [ -n "$CA_ARG" ]; then
+    note "根证书        $ENV_DIR/ca.pem"
+  fi
+  if [ -n "$UNINSTALL_SCRIPT" ]; then
+    note "卸载脚本      $UNINSTALL_SCRIPT"
+    note "              卸载：sudo bash $UNINSTALL_SCRIPT（加 -p 连节点身份一起删）"
+  fi
+}
 
 usage() {
   cat <<'USAGE'
@@ -231,6 +253,13 @@ chmod 0600 "$ENV_DIR/managed-install"
 #
 # 出口模式也要装它：出口服务本身不跟面板通信，没有这个 agent，设备不会出现
 # 在控制台里，出口列表的「在线」列也就永远是离线。
+# 顺手把卸载脚本放到本机：面板不可达或 Agent 起不来时，本机这份仍然能用。
+# 拉不到不算失败 —— 它只是方便，不该拦住接入。
+if curl -fLsS --max-time 20 -o "$TMP/agent-uninstall.sh" "$PANEL_URL/download/agent-uninstall.sh" 2>/dev/null; then
+  install -m 0700 "$TMP/agent-uninstall.sh" "$ENV_DIR/agent-uninstall.sh"
+  UNINSTALL_SCRIPT="$ENV_DIR/agent-uninstall.sh"
+fi
+
 cat > "$UNIT_PATH" <<UNIT
 [Unit]
 Description=流量转发控制台 Agent
@@ -331,6 +360,7 @@ $(journalctl -u tfp-exit.service -n 20 --no-pager 2>/dev/null || true)"
   echo "出口已就绪。"
   note "出口服务：systemctl status tfp-exit    日志：journalctl -u tfp-exit -f"
   note "注册 Agent：systemctl status tfp-agent  日志：journalctl -u tfp-agent -f"
+  print_paths
   echo
   echo "还差一步：到控制台「出口管理 → 新增」建一条记录，填上"
   note "出口服务器 = 本机（节点「$NODE_NAME」）"
@@ -344,9 +374,11 @@ elif [ "$REGISTERED" = "yes" ]; then
   note "服务：systemctl status tfp-agent"
   note "日志：journalctl -u tfp-agent -f"
   note "控制台「服务器」页应已出现节点「$NODE_NAME」"
+  print_paths
 else
   echo "服务已在运行，但 ${WAIT_SECONDS} 秒内未完成注册。"
   note "请查看：journalctl -u tfp-agent -n 50 --no-pager"
   note "常见原因：令牌已过期（有效期 15 分钟）或已被使用、面板地址不可达、"
   note "          面板使用私有 CA 而缺少 -c 参数"
+  print_paths
 fi

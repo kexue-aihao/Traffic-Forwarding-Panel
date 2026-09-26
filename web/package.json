@@ -1,7 +1,7 @@
 {
   "name": "traffic-forwarding-ui",
   "private": true,
-  "version": "0.1.17",
+  "version": "0.1.18",
   "type": "module",
   "engines": {
     "node": ">=22.12"

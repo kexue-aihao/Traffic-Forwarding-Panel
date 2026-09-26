@@ -223,8 +223,26 @@ const server = createServer(async (req, res) => {
         return json({ code: "unavailable", error: "历史查询暂不可用" }, 409);
       if (path.includes("/n2/")) return json({ items: [], total: 0 });
       const resolution = url.searchParams.get("resolution");
-      const step = resolution === "minute" ? 60000 : 3600000;
+      // 波形图五分钟一个点，分钟档的桶也按五分钟造：一个桶一分钟，合起来正好
+      // 是一个点。继续造一分钟间隔的数据，等于在验一个已经不会出现的形状。
+      const step = resolution === "minute" ? 300000 : 3600000;
       const end = Date.parse(url.searchParams.get("to"));
+      if (historyMode === "partial") {
+        // 五分钟一组里缺了一分钟：这一组必须整点留空。同一组的上行有值，所以
+        // 这条验的是「按指标留空」，而不是「压根没有数据」。
+        const partial = [0, 1].map((offset) => ({
+          sampled_at: new Date(end - (2 - offset) * 60000).toISOString(),
+          resolution,
+          samples: 1,
+          cpu_percent: offset === 0 ? 42 : null,
+          memory_percent: 50,
+          disk_percent: 0,
+          load1: null,
+          upload_bps: 1024,
+          download_bps: 2048,
+        }));
+        return json({ items: partial, total: partial.length });
+      }
       const items = [0, 1, 2, 3, 5, 6].map((offset, index) => ({
         sampled_at: new Date(end - (7 - offset) * step).toISOString(),
         resolution,
@@ -713,6 +731,8 @@ try {
         await page.locator("dialog").waitFor({ state: "detached" });
         await page.getByRole("button", { name: "卸载设备", exact: true }).click();
         await page.locator("dialog[open]").getByText("卸载开始后不能撤销。", { exact: false }).waitFor();
+        // Agent 这边还不支持远程卸载时，至少要给出机器上手动卸载的那条命令。
+        await page.locator("dialog[open]").getByText("/download/agent-uninstall.sh", { exact: false }).waitFor();
         await page.getByRole("button", { name: "关闭对话框" }).click();
         await page.locator("dialog").waitFor({ state: "detached" });
       }
@@ -760,7 +780,7 @@ try {
       await history.getByText("6 个采样桶 · 5 个CPU有效值").waitFor();
       assert.match(
         await history.locator(".history-window").innerText(),
-        /2026-07-14 00:21:00 至 2026-07-15 00:21:00 · 上海时间 UTC\+8/,
+        /2026-07-14 00:25:00 至 2026-07-15 00:25:00 · 上海时间 UTC\+8/,
       );
       assert.match(
         await history.locator(".history-selection").innerText(),
@@ -768,7 +788,7 @@ try {
       );
       assert.deepEqual(
         await history.locator(".history-x span").allTextContents(),
-        ["00:21", "00:21"],
+        ["00:25", "00:25"],
       );
       assert.equal(
         await history.locator("polyline").count(),
@@ -919,6 +939,15 @@ try {
           `history ${name} ${width} overflow`,
         );
       }
+      // 五分钟一组里只要缺一分钟，这个点就整点留空 —— 断线是图上「这里没测到」
+      // 的唯一信号，不能被平均抹平。
+      historyMode = "partial";
+      await page.getByLabel("历史时间范围").selectOption("24h");
+      await history.getByText("1 个采样桶 · 1 个上行有效值").waitFor();
+      await pickOption(page, "历史指标", "cpu_percent");
+      await history.getByText("该指标在此时间范围没有有效值。").waitFor();
+      await pickOption(page, "历史指标", "upload_bps");
+      historyMode = "samples";
       if (name === "chromium") {
         await page.getByLabel("历史时间范围").selectOption("1h");
         await page.getByLabel("历史指标").selectOption("cpu_percent");

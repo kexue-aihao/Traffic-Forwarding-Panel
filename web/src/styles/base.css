@@ -86,8 +86,10 @@ a {
   border-radius: 4px;
 }
 
+/* 选中一段文字要一眼看出选中的是哪一段。accent-soft 只有一成透明度，
+   在深色底上几乎看不见 —— 而探针页的地址正是要被选中复制的东西。 */
 ::selection {
-  background: var(--color-accent-soft);
+  background: color-mix(in oklab, var(--color-accent) 60%, transparent);
   color: var(--color-ink);
 }
 
