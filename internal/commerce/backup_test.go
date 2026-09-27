@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
@@ -26,7 +27,7 @@ func TestBackupRestoreRejectsPartialAndExistingData(t *testing.T) {
 	}); e != nil {
 		t.Fatal(e)
 	}
-	p, e := s.CreatePlan(ctx, Plan{Name: "backup", Price: 100, Quota: 1000, Months: 1})
+	p, e := s.CreatePlan(ctx, Plan{Name: "backup", Price: 100, Quota: 1000, DurationUnit: "week", DurationValue: 2})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -55,6 +56,10 @@ func TestBackupRestoreRejectsPartialAndExistingData(t *testing.T) {
 	if e = target.Import(ctx, bytes.NewReader(raw)); e != nil {
 		t.Fatal(e)
 	}
+	plans, e := restored.Plans(ctx)
+	if e != nil || len(plans) != 1 || plans[0].DurationUnit != "week" || plans[0].DurationValue != 2 {
+		t.Fatal("backup lost duration", plans, e)
+	}
 	w, e := restored.Wallet(ctx, "backup-user")
 	if e != nil || w.Balance != 9007199254740893 {
 		t.Fatal("integer precision lost", w, e)
@@ -65,6 +70,32 @@ func TestBackupRestoreRejectsPartialAndExistingData(t *testing.T) {
 	}
 	if e = target.Import(ctx, bytes.NewReader(raw)); e == nil {
 		t.Fatal("existing data overwritten")
+	}
+}
+
+func TestLegacyBackupDurationBackfill(t *testing.T) {
+	ctx := context.Background()
+	st := testdb.Open(t)
+	s := New(st.DB, st.Dialect, func(c context.Context, f func(*sql.Tx) error) error { return st.Write(c, storage.Critical, f) })
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The target already has schema v8. An old archive has neither new column.
+	archive := fmt.Sprintf("{\"format\":1,\"dialect\":%q}\n", st.Dialect) +
+		"{\"table\":\"commerce_plans\",\"columns\":[\"id\",\"name\",\"price\",\"quota\",\"months\"]}\n" +
+		"{\"table\":\"commerce_plans\",\"values\":[\"old-plan\",\"old monthly\",100,1000,6]}\n" +
+		"{\"end\":true,\"rows\":1}\n"
+	if err := st.Import(ctx, bytes.NewBufferString(archive)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := s.Migrate(ctx); err != nil {
+			t.Fatal(err)
+		}
+		plans, err := s.Plans(ctx)
+		if err != nil || len(plans) != 1 || plans[0].DurationUnit != "month" || plans[0].DurationValue != 6 || plans[0].Months != 6 {
+			t.Fatal("legacy backup lost months", plans, err)
+		}
 	}
 }
 

@@ -12,7 +12,7 @@ func (s *Service) PlansPage(ctx context.Context, page, size int) ([]Plan, int, e
 	if e := s.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM commerce_plans").Scan(&total); e != nil {
 		return nil, 0, e
 	}
-	rows, e := s.DB.QueryContext(ctx, s.q("SELECT p.id,p.name,p.price,p.quota,p.months,COALESCE(st.active,1),COALESCE(st.version,1),COALESCE(st.kind,'period'),COALESCE(lim.payload,'{}') FROM commerce_plans p LEFT JOIN commerce_plan_states st ON st.plan_id=p.id LEFT JOIN commerce_plan_limits lim ON lim.plan_id=p.id ORDER BY p.id LIMIT ? OFFSET ?"), size, (page-1)*size)
+	rows, e := s.DB.QueryContext(ctx, s.q("SELECT p.id,p.name,p.price,p.quota,p.months,p.duration_unit,p.duration_value,COALESCE(st.active,1),COALESCE(st.version,1),COALESCE(st.kind,'period'),COALESCE(lim.payload,'{}') FROM commerce_plans p LEFT JOIN commerce_plan_states st ON st.plan_id=p.id LEFT JOIN commerce_plan_limits lim ON lim.plan_id=p.id ORDER BY p.id LIMIT ? OFFSET ?"), size, (page-1)*size)
 	if e != nil {
 		return nil, 0, e
 	}
@@ -21,7 +21,10 @@ func (s *Service) PlansPage(ctx context.Context, page, size int) ([]Plan, int, e
 	for rows.Next() {
 		var p Plan
 		var rawLimits string
-		if e = rows.Scan(&p.ID, &p.Name, &p.Price, &p.Quota, &p.Months, &p.Active, &p.Version, &p.Kind, &rawLimits); e != nil {
+		if e = rows.Scan(&p.ID, &p.Name, &p.Price, &p.Quota, &p.Months, &p.DurationUnit, &p.DurationValue, &p.Active, &p.Version, &p.Kind, &rawLimits); e != nil {
+			return nil, 0, e
+		}
+		if e = normalizePlanDuration(&p); e != nil {
 			return nil, 0, e
 		}
 		if e = json.Unmarshal([]byte(rawLimits), &p.Limits); e != nil {

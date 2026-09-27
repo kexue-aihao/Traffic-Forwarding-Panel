@@ -398,13 +398,16 @@ func (s *Service) RedeemCode(ctx context.Context, user, plain string) (map[strin
 			if !p.Active || p.Kind != "period" {
 				return errors.New("plan is not available")
 			}
-			quota, months := p.Quota, p.Months
+			quota := p.Quota
 			var current int64
 			if err := tx.QueryRowContext(ctx, s.q("SELECT COALESCE(MAX(version),0) FROM commerce_entitlements WHERE user_id=?"), user).Scan(&current); err != nil {
 				return err
 			}
 			start := s.Now().UTC()
-			end := AddMonths(start, months)
+			end, err := planExpiry(start, p)
+			if err != nil {
+				return err
+			}
 			entID := id()
 			if _, err := tx.ExecContext(ctx, s.q("INSERT INTO commerce_entitlements(id,user_id,plan_id,version,starts_at,expires_at,quota,used,allocated) VALUES(?,?,?,?,?,?,?,0,0)"), entID, user, planID, current+1, stamp(start), stamp(end), quota); err != nil {
 				return err

@@ -61,6 +61,16 @@ async function save(page) {
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await page.locator("dialog").waitFor({ state: "detached" });
 }
+async function savePaymentChannels(page) {
+  // A previous success toast can still be visible while a new save is running.
+  const saved = page.waitForResponse(r =>
+    r.url() === base + "/api/v1/payment-settings" && r.request().method() === "PUT",
+  );
+  await page.getByRole("button", { name: "保存支付通道", exact: true }).click();
+  const response = await saved;
+  assert.equal(response.status(), 200, await response.text());
+  await page.locator('button[data-busy="false"]').filter({ hasText: "保存支付通道" }).waitFor();
+}
 // 自绘下拉走真实点击：展开那层列表再点选项。selectOption 直接改原生 select
 // 的值，碰不到那层 <li>，测不出「选项点不中、下拉切不了」。
 async function pickOption(page, label, value) {
@@ -598,6 +608,10 @@ try {
         .getByRole("link", { name: "套餐与钱包", exact: true })
         .click();
       await admin.getByRole("button", { name: "新增套餐" }).click();
+      // A weekly plan must persist weeks through the real API and editor.
+      await pickOption(admin, "套餐类型", "week");
+      assert.equal(await admin.getByLabel("有效月数", { exact: true }).count(), 0);
+      await admin.getByLabel("有效周数", { exact: true }).fill("2");
       await admin
         .getByLabel("名称", { exact: true })
         .fill(`plan-${browserName}`);
@@ -608,6 +622,46 @@ try {
         .getByLabel("每节点上下行合计（B/s）", { exact: true })
         .fill("1048576");
       await admin.getByRole("button", { name: "确认提交" }).click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      const periodCard = admin.locator("article").filter({
+        has: admin.getByRole("heading", { name: `plan-${browserName}`, exact: true }),
+      });
+      await periodCard.getByText("2 周", { exact: false }).waitFor();
+      // Edit each unit, reload and verify both API data and the visible label.
+      let previousUnit = "week", previousCount = "2", previousLabel = "有效周数";
+      for (const [unit, label, count, suffix] of [
+        ["day", "有效天数", "3", "天"],
+        ["year", "有效年数", "2", "年"],
+        ["month", "有效月数", "1", "个月"],
+      ]) {
+        await periodCard.getByRole("button", { name: "编辑套餐", exact: true }).click();
+        assert.equal(await admin.getByLabel("套餐类型").inputValue(), previousUnit);
+        assert.equal(await admin.getByLabel(previousLabel, { exact: true }).inputValue(), previousCount);
+        await pickOption(admin, "套餐类型", unit);
+        const duration = admin.getByLabel(label, { exact: true });
+        await duration.fill(unit === "year" ? "11" : "0");
+        assert.equal(await duration.evaluate(el => el.checkValidity()), false);
+        await duration.fill("1.5");
+        assert.equal(await duration.evaluate(el => el.checkValidity()), false);
+        await duration.fill(count);
+        const saved = admin.waitForResponse(r => r.url().includes("/api/v1/plans/") && r.request().method() === "PUT");
+        await admin.getByRole("button", { name: "确认提交", exact: true }).click();
+        const response = await saved;
+        assert.equal(response.status(), 200, await response.text());
+        const plan = await response.json();
+        assert.equal(plan.duration_unit, unit);
+        assert.equal(plan.duration_value, Number(count));
+        await admin.locator("dialog").waitFor({ state: "detached" });
+        await admin.reload();
+        await periodCard.getByText(`${count} ${suffix}`, { exact: false }).waitFor();
+        [previousUnit, previousCount, previousLabel] = [unit, count, label];
+      }
+      await periodCard.getByRole("button", { name: "编辑套餐", exact: true }).click();
+      assert.equal(await admin.getByLabel("套餐类型").inputValue(), "month");
+      assert.equal(await admin.getByLabel("有效月数", { exact: true }).inputValue(), "1");
+      await admin.getByRole("button", { name: "关闭对话框" }).click();
+      await admin.getByText("尚有未保存内容。再次关闭将放弃修改。", { exact: true }).waitFor();
+      await admin.getByRole("button", { name: "关闭对话框" }).click();
       await admin.locator("dialog").waitFor({ state: "detached" });
       assert.equal(
         await admin
@@ -1095,6 +1149,7 @@ try {
         .getByRole("button", { name: "新增套餐", exact: true })
         .click();
       await admin.getByLabel("套餐类型").selectOption("addon");
+      assert.equal(await admin.getByLabel(/有效(天|周|月|年)数/).count(), 0);
       await admin
         .getByLabel("名称", { exact: true })
         .fill(`addon-${browserName}`);
@@ -1262,9 +1317,7 @@ try {
       await epayCard
         .getByLabel("支付完成返回地址")
         .fill("https://panel.example.test/#/commerce");
-      await admin
-        .getByRole("button", { name: "保存支付通道", exact: true })
-        .click();
+      await savePaymentChannels(admin);
       await admin
         .getByText("支付通道已保存，立即生效。", { exact: false })
         .waitFor();
@@ -1289,9 +1342,7 @@ try {
       assert.equal(liveEpay.fee_percent, "1.50");
       // 密钥留空表示沿用已存下来的那一把：再存一次不会把它清掉。
       await epayCard.getByLabel("商户密钥").fill("");
-      await admin
-        .getByRole("button", { name: "保存支付通道", exact: true })
-        .click();
+      await savePaymentChannels(admin);
       await admin
         .getByText("支付通道已保存，立即生效。", { exact: false })
         .waitFor();
@@ -1312,9 +1363,7 @@ try {
       await gatewayInput.click();
       await gatewayInput.press("Control+a");
       await gatewayInput.press("Delete");
-      await admin
-        .getByRole("button", { name: "保存支付通道", exact: true })
-        .click();
+      await savePaymentChannels(admin);
       // 等的是这张卡片自己变回「未配置」，而不是那条提示：上一次保存的提示还
       // 在屏幕上，等同一条文案会立刻返回，之后的接口断言就会抢在保存前面。
       await epayCard.getByText("未配置", { exact: true }).waitFor();

@@ -31,6 +31,8 @@ interface Plan {
   price_cents: string;
   quota_bytes: string;
   months: number;
+  duration_unit?: "day" | "week" | "month" | "year" | "";
+  duration_value?: number;
   active: boolean;
   version: number;
   kind: "period" | "addon";
@@ -234,14 +236,53 @@ function businessError(error: unknown) {
     )[message] || message
   );
 }
-const planForm = ref({
-  limits: emptyLimits(),
-  name: "",
-  price_cents: "1000",
-  quota_bytes: "10737418240",
-  months: 1,
-  kind: "period" as "period" | "addon",
+const durationOptions = {
+  day: { name: "日套餐（按天）", label: "有效天数", suffix: "天", max: 3650 },
+  week: { name: "周期套餐（按周）", label: "有效周数", suffix: "周", max: 520 },
+  month: {
+    name: "月期套餐（按月）",
+    label: "有效月数",
+    suffix: "个月",
+    max: 120,
+  },
+  year: { name: "年期套餐（按年）", label: "有效年数", suffix: "年", max: 10 },
+};
+type DurationUnit = keyof typeof durationOptions;
+function emptyPlanForm() {
+  return {
+    limits: emptyLimits(),
+    name: "",
+    price_cents: "1000",
+    quota_bytes: "10737418240",
+    duration_unit: "month" as DurationUnit,
+    duration_value: 1,
+    kind: "period" as "period" | "addon",
+  };
+}
+const planForm = ref(emptyPlanForm());
+const planType = computed({
+  get: () =>
+    planForm.value.kind === "addon" ? "addon" : planForm.value.duration_unit,
+  set: (value: string) => {
+    planForm.value.kind = value === "addon" ? "addon" : "period";
+    if (value in durationOptions)
+      planForm.value.duration_unit = value as DurationUnit;
+  },
 });
+const durationOption = computed(
+  () => durationOptions[planForm.value.duration_unit],
+);
+function durationText(plan: Plan) {
+  if (plan.kind === "addon") return "流量叠加包";
+  const unit = plan.duration_unit || "month";
+  return `${plan.duration_value || plan.months} ${durationOptions[unit].suffix}`;
+}
+function createPlan() {
+  planForm.value = emptyPlanForm();
+  editingPlan.value = null;
+  creating.value = true;
+  formError.value = "";
+}
 function money(cents: string) {
   const n = BigInt(cents);
   const neg = n < 0n;
@@ -414,7 +455,8 @@ function editPlan(plan: Plan) {
     name: plan.name,
     price_cents: plan.price_cents,
     quota_bytes: plan.quota_bytes,
-    months: plan.months || 1,
+    duration_unit: plan.duration_unit || "month",
+    duration_value: plan.duration_value || plan.months || 1,
     kind: plan.kind,
     limits: { ...(plan.limits || emptyLimits()) },
   };
@@ -465,7 +507,10 @@ async function submit() {
           planForm.value.kind === "addon"
             ? emptyLimits()
             : planForm.value.limits,
-        months: planForm.value.kind === "addon" ? 0 : planForm.value.months,
+        duration_unit:
+          planForm.value.kind === "addon" ? "" : planForm.value.duration_unit,
+        duration_value:
+          planForm.value.kind === "addon" ? 0 : planForm.value.duration_value,
         ...(editingPlan.value ? { version: editingPlan.value.version } : {}),
       };
       await api(
@@ -552,11 +597,7 @@ watch(
         <button @click="load" :disabled="loading">刷新状态</button
         ><button
           v-if="adminSite && state.user?.role === 'admin'"
-          @click="
-            creating = true;
-            editingPlan = null;
-            formError = '';
-          "
+          @click="createPlan"
         >
           新增套餐
         </button>
@@ -643,8 +684,7 @@ watch(
         <h3>{{ plan.name }}</h3>
         <p class="price">¥ {{ money(plan.price_cents) }}</p>
         <p class="muted">
-          {{ plan.kind === "addon" ? "流量叠加包" : `${plan.months} 个月` }} ·
-          {{ plan.quota_bytes }} 字节
+          {{ durationText(plan) }} · {{ plan.quota_bytes }} 字节
         </p>
         <button
           class="primary"
@@ -850,7 +890,10 @@ watch(
       ><form @submit.prevent="submit">
         <p v-if="formError" class="error" role="alert">{{ formError }}</p>
         <template v-if="selected"
-          ><p>{{ selected.name }} · ¥ {{ money(selected.price_cents) }}</p>
+          ><p>
+            {{ selected.name }} · {{ durationText(selected) }} · ¥
+            {{ money(selected.price_cents) }}
+          </p>
           <p class="warning">
             {{
               selected.kind === "addon"
@@ -873,8 +916,13 @@ watch(
               >
                 {{ channelName(c.id)
                 }}<template
-                  v-if="c.fee_percent && c.fee_percent !== '0.00' || (c.fee_fixed && c.fee_fixed !== '0.00')"
-                  >（手续费 {{ c.fee_percent }}% + ¥{{ c.fee_fixed }}）</template
+                  v-if="
+                    (c.fee_percent && c.fee_percent !== '0.00') ||
+                    (c.fee_fixed && c.fee_fixed !== '0.00')
+                  "
+                  >（手续费 {{ c.fee_percent }}% + ¥{{
+                    c.fee_fixed
+                  }}）</template
                 >
               </option>
             </Select></label
@@ -917,7 +965,9 @@ watch(
               <dt>折合应付</dt>
               <dd>
                 ≈ {{ chargeQuote.crypto }}
-                <span class="small muted">（汇率 {{ selectedChannel?.rate }}）</span>
+                <span class="small muted"
+                  >（汇率 {{ selectedChannel?.rate }}）</span
+                >
               </dd>
             </div>
           </dl>
@@ -928,11 +978,39 @@ watch(
           </p></template
         ><template v-else
           ><label
-            >套餐类型<Select v-model="planForm.kind" :disabled="!!editingPlan">
-              <option value="period">周期套餐</option>
-              <option value="addon">流量叠加包</option>
+            >套餐类型<Select
+              v-model="planType"
+              :disabled="editingPlan?.kind === 'addon'"
+            >
+              <option
+                v-for="(option, unit) in durationOptions"
+                :key="unit"
+                :value="unit"
+              >
+                {{ option.name }}
+              </option>
+              <option value="addon" :disabled="!!editingPlan">
+                流量叠加包
+              </option>
             </Select></label
-          ><label>名称<input v-model="planForm.name" required /></label
+          >
+          <label v-if="planForm.kind === 'period'">
+            {{ durationOption.label
+            }}<input
+              v-model.number="planForm.duration_value"
+              type="number"
+              min="1"
+              :max="durationOption.max"
+              step="1"
+              required
+            />
+          </label>
+          <p v-if="planForm.kind === 'period'" class="small muted">
+            周按 7
+            天计算；月、年按上海时区自然月、自然年计算，月末及闰日夹紧至目标月末。季度、半年可分别设置为
+            3 个月、6 个月。
+          </p>
+          <label>名称<input v-model="planForm.name" required /></label
           ><label
             >价格（分）<input
               v-model="planForm.price_cents"
@@ -984,14 +1062,8 @@ watch(
                 required
             /></label>
           </fieldset>
-          <label v-if="planForm.kind === 'period'"
-            >有效月数<input
-              v-model.number="planForm.months"
-              type="number"
-              min="1"
-              max="120"
-              required /></label></template
-        ><div class="form-actions">
+        </template>
+        <div class="form-actions">
           <button
             class="primary"
             :disabled="busy"

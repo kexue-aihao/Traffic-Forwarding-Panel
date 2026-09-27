@@ -192,8 +192,13 @@ func main() {
 	requestFrom("GroupUpdate", "Group", "name type? direct_policy? chain_group_ids? advanced? identity_group_ids? blocked_protocols? disabled_networks? disabled_transports? multiplier? port_min port_max max_rules? version")
 	requestFrom("RuleCreate", "Rule", "user_id? name node_id group_id network transport listen target enabled blocked_protocols? tunnel? backends? shared_tls? proxy_protocol? exit_group_id? exit_id?")
 	requestFrom("RuleUpdate", "Rule", "user_id? name node_id group_id network transport listen target enabled blocked_protocols? tunnel? backends? shared_tls? proxy_protocol? exit_group_id? exit_id? version")
-	requestFrom("PlanCreate", "Plan", "name price_cents quota_bytes months kind? limits?")
-	requestFrom("PlanUpdate", "Plan", "name price_cents quota_bytes months kind version limits?")
+	planFields := schemas["Plan"].(schema)["properties"].(schema)
+	planFields["kind"] = schema{"type": "string", "enum": []string{"period", "addon"}}
+	planFields["duration_unit"] = schema{"type": "string", "enum": []string{"", "day", "week", "month", "year"}, "description": "Period unit, paired with duration_value. Empty only for add-ons or legacy months input. Largest unit is year."}
+	planFields["duration_value"] = schema{"type": "integer", "minimum": 0, "maximum": 3650, "description": "Positive integer for period plans: day 1..3650, week 1..520, month 1..120, year 1..10. Add-ons use 0 with an empty unit."}
+	planFields["months"] = schema{"type": "integer", "minimum": 0, "maximum": 120, "description": "Legacy input when the duration pair is omitted. Output is monthly count (year x 12); 0 for day/week/add-on. If supplied with the pair, must agree. Legacy edits are only allowed for monthly plans."}
+	requestFrom("PlanCreate", "Plan", "name price_cents quota_bytes months? duration_unit? duration_value? kind? limits?")
+	requestFrom("PlanUpdate", "Plan", "name price_cents quota_bytes months? duration_unit? duration_value? kind version limits?")
 	model("PlanActive", schema{"active": flag}, "active")
 	model("PlanActiveResult", schema{"id": str, "active": flag}, "id", "active")
 	model("OrderCreate", schema{"channel": schema{"type": "string", "enum": []string{"epay", "epusdt", "bepusdt", "tokenpay", "cryptomus"}}, "amount_cents": money, "idempotency_key": str}, "channel", "amount_cents", "idempotency_key")

@@ -20,18 +20,18 @@ func validatePlan(p Plan) error {
 	if strings.TrimSpace(p.Name) == "" || len(p.Name) > 200 || p.Price <= 0 || p.Price > 100000000 || p.Quota <= 0 {
 		return errors.New("invalid plan")
 	}
-	if p.Kind == "period" && p.Months >= 1 && p.Months <= 120 || p.Kind == "addon" && p.Months == 0 {
-		return nil
-	}
-	return errors.New("invalid plan kind or duration")
+	return normalizePlanDuration(&p)
 }
 func (s *Service) planTx(ctx context.Context, tx *sql.Tx, id string) (Plan, error) {
-	q := "SELECT p.id,p.name,p.price,p.quota,p.months,st.active,st.version,st.kind FROM commerce_plans p JOIN commerce_plan_states st ON st.plan_id=p.id WHERE p.id=?"
+	q := "SELECT p.id,p.name,p.price,p.quota,p.months,p.duration_unit,p.duration_value,st.active,st.version,st.kind FROM commerce_plans p JOIN commerce_plan_states st ON st.plan_id=p.id WHERE p.id=?"
 	if s.Dialect != "sqlite" {
 		q += " FOR UPDATE"
 	}
 	var p Plan
-	err := tx.QueryRowContext(ctx, s.q(q), id).Scan(&p.ID, &p.Name, &p.Price, &p.Quota, &p.Months, &p.Active, &p.Version, &p.Kind)
+	err := tx.QueryRowContext(ctx, s.q(q), id).Scan(&p.ID, &p.Name, &p.Price, &p.Quota, &p.Months, &p.DurationUnit, &p.DurationValue, &p.Active, &p.Version, &p.Kind)
+	if err == nil {
+		err = normalizePlanDuration(&p)
+	}
 	if err == nil {
 		var raw string
 		err = tx.QueryRowContext(ctx, s.q("SELECT payload FROM commerce_plan_limits WHERE plan_id=?"), id).Scan(&raw)
@@ -44,6 +44,10 @@ func (s *Service) planTx(ctx context.Context, tx *sql.Tx, id string) (Plan, erro
 	return p, err
 }
 func (s *Service) UpdatePlan(ctx context.Context, p Plan) (Plan, error) {
+	legacyDuration := p.Kind == "period" && p.DurationUnit == "" && p.DurationValue == 0
+	if err := normalizePlanDuration(&p); err != nil {
+		return p, err
+	}
 	if err := validatePlan(p); err != nil {
 		return p, err
 	}
@@ -55,7 +59,10 @@ func (s *Service) UpdatePlan(ctx context.Context, p Plan) (Plan, error) {
 		if p.Version != old.Version || p.Kind != old.Kind {
 			return ErrConflict
 		}
-		if _, err = tx.ExecContext(ctx, s.q("UPDATE commerce_plans SET name=?,price=?,quota=?,months=? WHERE id=?"), p.Name, p.Price, p.Quota, p.Months, p.ID); err != nil {
+		if legacyDuration && old.DurationUnit != "month" {
+			return errors.New("explicit duration required to edit this plan")
+		}
+		if _, err = tx.ExecContext(ctx, s.q("UPDATE commerce_plans SET name=?,price=?,quota=?,months=?,duration_unit=?,duration_value=? WHERE id=?"), p.Name, p.Price, p.Quota, p.Months, p.DurationUnit, p.DurationValue, p.ID); err != nil {
 			return err
 		}
 		if err = s.savePlanLimits(ctx, tx, p); err != nil {
@@ -165,6 +172,9 @@ func (s *Service) PurchaseHistory(ctx context.Context, user string) ([]map[strin
 			return nil, err
 		}
 		if err = json.Unmarshal([]byte(raw), &p); err != nil {
+			return nil, err
+		}
+		if err = normalizePlanDuration(&p); err != nil {
 			return nil, err
 		}
 		out = append(out, map[string]any{"entitlement_id": ent, "plan": p, "created_at": parse(created)})

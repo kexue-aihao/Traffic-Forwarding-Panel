@@ -19,15 +19,17 @@ import (
 )
 
 type Plan struct {
-	Limits  contract.ResourceLimits `json:"limits"`
-	ID      string                  `json:"id"`
-	Name    string                  `json:"name"`
-	Price   int64                   `json:"price_cents,string"`
-	Quota   int64                   `json:"quota_bytes,string"`
-	Months  int                     `json:"months"`
-	Active  bool                    `json:"active"`
-	Version int64                   `json:"version"`
-	Kind    string                  `json:"kind"`
+	Limits        contract.ResourceLimits `json:"limits"`
+	ID            string                  `json:"id"`
+	Name          string                  `json:"name"`
+	Price         int64                   `json:"price_cents,string"`
+	Quota         int64                   `json:"quota_bytes,string"`
+	Months        int                     `json:"months"`
+	DurationUnit  string                  `json:"duration_unit"`
+	DurationValue int                     `json:"duration_value"`
+	Active        bool                    `json:"active"`
+	Version       int64                   `json:"version"`
+	Kind          string                  `json:"kind"`
 }
 type Wallet struct {
 	Currency string `json:"currency"`
@@ -128,7 +130,7 @@ func (s *Service) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS commerce_lease_reservations(lease_id VARCHAR(64) PRIMARY KEY,budget BIGINT NOT NULL,closed INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS commerce_attempts(order_id VARCHAR(64) PRIMARY KEY,state VARCHAR(32) NOT NULL,provider_id VARCHAR(128) NOT NULL,updated_at VARCHAR(40) NOT NULL)`,
 	}
-	err := storage.MigrateNamespace(ctx, s.DB, s.Dialect, "commerce", 7, func(conn *sql.Conn) error {
+	err := storage.MigrateNamespace(ctx, s.DB, s.Dialect, "commerce", 8, func(conn *sql.Conn) error {
 		var current int
 		if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM commerce_schema").Scan(&current); err != nil {
 			return err
@@ -202,6 +204,14 @@ func (s *Service) Migrate(ctx context.Context) error {
 				return err
 			}
 		}
+		if current < 8 {
+			if err := storage.EnsureColumn(ctx, conn, s.Dialect, "commerce_plans", "duration_unit", "VARCHAR(16) NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			if err := storage.EnsureColumn(ctx, conn, s.Dialect, "commerce_plans", "duration_value", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
+		}
 		return s.migrateFunding(ctx, conn)
 	})
 	if err != nil {
@@ -210,6 +220,11 @@ func (s *Service) Migrate(ctx context.Context) error {
 	// Backup import keeps target schema markers. On restart, backfill only data
 	// omitted by old backups; no DDL is performed outside the migration lock.
 	return s.Write(ctx, func(tx *sql.Tx) error {
+		// Older backups omit these columns and retain the target schema marker.
+		// Only unconverted monthly rows are backfilled, including on restart.
+		if _, err := tx.ExecContext(ctx, "UPDATE commerce_plans SET duration_unit='month',duration_value=months WHERE duration_unit='' AND duration_value=0 AND months>0"); err != nil {
+			return err
+		}
 		q := "INSERT INTO commerce_plan_states(plan_id,active,updated_at) SELECT p.id,1,? FROM commerce_plans p WHERE NOT EXISTS(SELECT 1 FROM commerce_plan_states st WHERE st.plan_id=p.id) ON CONFLICT(plan_id) DO NOTHING"
 		if s.Dialect == "mysql" {
 			q = "INSERT INTO commerce_plan_states(plan_id,active,updated_at) SELECT p.id,1,? FROM commerce_plans p WHERE NOT EXISTS(SELECT 1 FROM commerce_plan_states st WHERE st.plan_id=p.id) ON DUPLICATE KEY UPDATE plan_id=commerce_plan_states.plan_id"
@@ -270,7 +285,7 @@ func (s *Service) HasActiveEntitlement(ctx context.Context, user string) (bool, 
 }
 
 func (s *Service) Plans(ctx context.Context) ([]Plan, error) {
-	rows, e := s.DB.QueryContext(ctx, s.q("SELECT p.id,p.name,p.price,p.quota,p.months,COALESCE(st.active,1),COALESCE(st.version,1),COALESCE(st.kind,'period'),COALESCE(lim.payload,'{}') FROM commerce_plans p LEFT JOIN commerce_plan_states st ON st.plan_id=p.id LEFT JOIN commerce_plan_limits lim ON lim.plan_id=p.id ORDER BY p.id"))
+	rows, e := s.DB.QueryContext(ctx, s.q("SELECT p.id,p.name,p.price,p.quota,p.months,p.duration_unit,p.duration_value,COALESCE(st.active,1),COALESCE(st.version,1),COALESCE(st.kind,'period'),COALESCE(lim.payload,'{}') FROM commerce_plans p LEFT JOIN commerce_plan_states st ON st.plan_id=p.id LEFT JOIN commerce_plan_limits lim ON lim.plan_id=p.id ORDER BY p.id"))
 	if e != nil {
 		return nil, e
 	}
@@ -279,7 +294,10 @@ func (s *Service) Plans(ctx context.Context) ([]Plan, error) {
 	for rows.Next() {
 		var p Plan
 		var rawLimits string
-		if e = rows.Scan(&p.ID, &p.Name, &p.Price, &p.Quota, &p.Months, &p.Active, &p.Version, &p.Kind, &rawLimits); e != nil {
+		if e = rows.Scan(&p.ID, &p.Name, &p.Price, &p.Quota, &p.Months, &p.DurationUnit, &p.DurationValue, &p.Active, &p.Version, &p.Kind, &rawLimits); e != nil {
+			return nil, e
+		}
+		if e = normalizePlanDuration(&p); e != nil {
 			return nil, e
 		}
 		if e = json.Unmarshal([]byte(rawLimits), &p.Limits); e != nil {
@@ -293,6 +311,9 @@ func (s *Service) CreatePlan(ctx context.Context, p Plan) (Plan, error) {
 	if p.Kind == "" {
 		p.Kind = "period"
 	}
+	if err := normalizePlanDuration(&p); err != nil {
+		return p, err
+	}
 	if err := validatePlan(p); err != nil {
 		return p, errors.New("invalid plan")
 	}
@@ -300,7 +321,7 @@ func (s *Service) CreatePlan(ctx context.Context, p Plan) (Plan, error) {
 	p.Active = true
 	p.Version = 1
 	err := s.Write(ctx, func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(ctx, s.q("INSERT INTO commerce_plans(id,name,price,quota,months) VALUES(?,?,?,?,?)"), p.ID, p.Name, p.Price, p.Quota, p.Months)
+		_, e := tx.ExecContext(ctx, s.q("INSERT INTO commerce_plans(id,name,price,quota,months,duration_unit,duration_value) VALUES(?,?,?,?,?,?,?)"), p.ID, p.Name, p.Price, p.Quota, p.Months, p.DurationUnit, p.DurationValue)
 		if e != nil {
 			return e
 		}
@@ -433,9 +454,12 @@ func (s *Service) purchaseTx(ctx context.Context, tx *sql.Tx, user, plan, key st
 	if planVersion != 0 && purchasedPlan.Version != planVersion {
 		return result, ErrConflict
 	}
-	price, quota, months := purchasedPlan.Price, purchasedPlan.Quota, purchasedPlan.Months
+	price, quota := purchasedPlan.Price, purchasedPlan.Quota
 	result = Entitlement{ID: id(), UserID: user, PlanID: plan, Version: current + 1, StartsAt: s.Now().UTC(), Quota: quota, Limits: purchasedPlan.Limits}
-	result.ExpiresAt = AddMonths(result.StartsAt, months)
+	result.ExpiresAt, e = planExpiry(result.StartsAt, purchasedPlan)
+	if e != nil {
+		return result, e
+	}
 	if e = s.post(ctx, tx, user, -price, "purchase", result.ID); e != nil {
 		return result, e
 	}
