@@ -26,6 +26,9 @@ const registering = ref(false),
   registerInvite = ref(""),
   captcha = ref<{ id: string; image: string } | null>(null),
   captchaAnswer = ref("");
+const registrationEnabled = computed(
+  () => site.value.registration === "open" || site.value.registration === "invite",
+);
 async function loadCaptcha() {
   if (!site.value.captcha) return;
   try {
@@ -176,6 +179,10 @@ async function bootstrap() {
   state.ready = false;
   try {
     await loadSite();
+    registering.value =
+      !adminSite &&
+      registrationEnabled.value &&
+      new URLSearchParams(location.search).get("register") === "1";
     state.user = (await api<{ user: User }>("/auth/session")).user;
   } catch (e) {
     if (!(e instanceof Error && "status" in e && e.status === 401))
@@ -223,6 +230,14 @@ async function logout() {
   try {
     await api("/auth/logout", "POST", {});
     state.user = null;
+    registering.value = false;
+    username.value = "";
+    password.value = "";
+    registerInvite.value = "";
+    error.value = "";
+    // Settings can change while this shell is mounted; reload before showing
+    // the login form so registration and captcha use the saved policy.
+    await bootstrap();
   } catch (e) {
     state.notice = errorText(e);
   } finally {
@@ -357,7 +372,7 @@ onMounted(async () => {
                 >密码<input
                   v-model="password"
                   type="password"
-                  autocomplete="current-password"
+                  :autocomplete="registering ? 'new-password' : 'current-password'"
                   required
               /></label>
               <label v-if="registering && site.registration === 'invite'"
@@ -392,7 +407,7 @@ onMounted(async () => {
               </button>
             </form>
             <button
-              v-if="!adminSite && site.registration !== 'closed'"
+              v-if="!adminSite && registrationEnabled"
               type="button"
               :disabled="busy"
               @click="
@@ -403,6 +418,10 @@ onMounted(async () => {
             >
               {{ registering ? "已有账号，返回登录" : "注册账号" }}
             </button>
+            <p v-if="adminSite && registrationEnabled" class="small muted">
+              还没有用户账号？<a href="/?register=1">注册账号</a>
+              <span>（前往用户入口）</span>
+            </p>
           </section>
           <section
             v-else-if="adminSite && state.user.role !== 'admin'"

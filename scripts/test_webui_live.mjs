@@ -1149,6 +1149,37 @@ try {
       );
       // Functional completion: real APIs and embedded pages, no external gateways.
       await admin.getByRole("link", { name: "站点设置", exact: true }).click();
+      // This shell started with registration closed. Saving then signing out
+      // must refresh its policy without requiring a manual browser reload.
+      await admin.getByLabel("注册策略", { exact: true }).selectOption("open");
+      const openedSite = admin.waitForResponse(
+        (response) =>
+          response.url() === base + "/api/v1/site" &&
+          response.request().method() === "PUT",
+      );
+      await admin.getByRole("button", { name: "保存站点设置", exact: true }).click();
+      assert.equal((await openedSite).status(), 200);
+      await admin.locator('button[data-busy="true"]').waitFor({ state: "detached" });
+      await admin.getByRole("button", { name: "退出", exact: true }).click();
+      await admin.getByRole("link", { name: "注册账号", exact: true }).waitFor();
+      assert.equal(await admin.getByRole("button", { name: "创建账号", exact: true }).count(), 0);
+      const openContext = await browser.newContext();
+      const openVisitor = await openContext.newPage();
+      await openVisitor.goto(base + "/");
+      await openVisitor.getByRole("button", { name: "注册账号", exact: true }).waitFor();
+      await openVisitor.goto(base + "/admin");
+      await openVisitor.getByRole("link", { name: "注册账号", exact: true }).click();
+      await openVisitor.getByRole("button", { name: "创建账号", exact: true }).waitFor();
+      assert.equal(new URL(openVisitor.url()).pathname, "/");
+      assert.equal(await openVisitor.getByLabel("注册邀请码", { exact: true }).count(), 0);
+      assert.equal(await openVisitor.getByLabel("密码", { exact: true }).getAttribute("autocomplete"), "new-password");
+      await openVisitor.getByLabel("用户名", { exact: true }).fill(`open-${browserName}`);
+      await openVisitor.getByLabel("密码", { exact: true }).fill(randomUUID());
+      await openVisitor.getByRole("button", { name: "创建账号", exact: true }).click();
+      await openVisitor.getByText("注册成功，请登录。", { exact: false }).waitFor();
+      await openContext.close();
+      await login(admin, "ui-admin", password, "/admin");
+      await admin.getByRole("link", { name: "站点设置", exact: true }).click();
       await admin
         .getByLabel("公告", { exact: true })
         .fill(`功能测试 ${browserName}`);
@@ -1169,9 +1200,9 @@ try {
         .inputValue();
       const registrationContext = await browser.newContext();
       const visitor = await registrationContext.newPage();
-      await visitor.goto(base + "/");
+      await visitor.goto(base + "/admin");
       await visitor
-        .getByRole("button", { name: "注册账号", exact: true })
+        .getByRole("link", { name: "注册账号", exact: true })
         .click();
       await visitor
         .getByLabel("用户名", { exact: true })
@@ -1194,6 +1225,16 @@ try {
       await admin
         .locator('button[data-busy="true"]')
         .waitFor({ state: "detached" });
+      const closedContext = await browser.newContext();
+      const closedVisitor = await closedContext.newPage();
+      for (const path of ["/", "/admin", "/?register=1"]) {
+        await closedVisitor.goto(base + path);
+        await closedVisitor.getByRole("button", { name: "登录控制台", exact: true }).waitFor();
+        assert.equal(await closedVisitor.getByRole("button", { name: "注册账号", exact: true }).count(), 0);
+        assert.equal(await closedVisitor.getByRole("link", { name: "注册账号", exact: true }).count(), 0);
+        assert.equal(await closedVisitor.getByRole("button", { name: "创建账号", exact: true }).count(), 0);
+      }
+      await closedContext.close();
       // 支付通道：面板上填完就生效，商户密钥永远不回明文。
       const beforePayment = await (
         await admin.request.get(base + "/api/v1/payment-settings")
