@@ -91,3 +91,29 @@ func TestPlanRevisionSnapshotAndAddonReplay(t *testing.T) {
 		t.Fatal("expired add-on accepted")
 	}
 }
+
+func TestUnlimitedAddonRemovesQuotaLimit(t *testing.T) {
+	s := fixture(t)
+	ctx := context.Background()
+	if err := s.Write(ctx, func(tx *sql.Tx) error { return s.post(ctx, tx, "addon-unlimited", 1000, "test", "fund") }); err != nil {
+		t.Fatal(err)
+	}
+	period, err := s.CreatePlan(ctx, Plan{Name: "period", Price: 100, Quota: 1000, Months: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addon, err := s.CreatePlan(ctx, Plan{Name: "unlimited-addon", Price: 50, Quota: 0, Kind: "addon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Purchase(ctx, "addon-unlimited", period.ID, "period-buy", 0); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.PurchaseAddon(ctx, "addon-unlimited", addon.ID, "addon-buy", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Quota != 0 {
+		t.Fatalf("unlimited add-on retained quota limit: %d", got.Quota)
+	}
+}

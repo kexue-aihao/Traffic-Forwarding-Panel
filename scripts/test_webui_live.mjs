@@ -627,6 +627,10 @@ try {
         has: admin.getByRole("heading", { name: `plan-${browserName}`, exact: true }),
       });
       await periodCard.getByText("2 周", { exact: false }).waitFor();
+      const weeklyPlans = await (await admin.request.get(base + "/api/v1/plans")).json();
+      const weeklyPlan = weeklyPlans.items.find((plan) => plan.name === "plan-" + browserName);
+      assert.equal(weeklyPlan.price_cents, "1000");
+      assert.equal(weeklyPlan.quota_bytes, "0", "空白 GB 配额必须表示不限流量");
       // Edit each unit, reload and verify both API data and the visible label.
       let previousUnit = "week", previousCount = "2", previousLabel = "有效周数";
       for (const [unit, label, count, suffix] of [
@@ -1153,8 +1157,8 @@ try {
       await admin
         .getByLabel("名称", { exact: true })
         .fill(`addon-${browserName}`);
-      await admin.getByLabel("价格（分）", { exact: true }).fill("100");
-      await admin.getByLabel("流量配额（字节）", { exact: true }).fill("1024");
+      await admin.getByLabel("价格（元）", { exact: true }).fill("1");
+      await admin.getByLabel("流量配额（GB）", { exact: true }).fill("1");
       await admin
         .getByRole("button", { name: "确认提交", exact: true })
         .click();
@@ -1168,7 +1172,7 @@ try {
       await addonCard
         .getByRole("button", { name: "编辑套餐", exact: true })
         .click();
-      await admin.getByLabel("价格（分）", { exact: true }).fill("200");
+      await admin.getByLabel("价格（元）", { exact: true }).fill("2");
       await admin
         .getByRole("button", { name: "确认提交", exact: true })
         .click();
@@ -1200,7 +1204,7 @@ try {
       assert.equal(afterAddon.expires_at, beforeAddon.expires_at);
       assert.equal(
         BigInt(afterAddon.quota_bytes),
-        BigInt(beforeAddon.quota_bytes) + 1024n,
+        BigInt(beforeAddon.quota_bytes) + (1n << 30n),
       );
       // Functional completion: real APIs and embedded pages, no external gateways.
       await admin.getByRole("link", { name: "站点设置", exact: true }).click();

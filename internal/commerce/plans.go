@@ -17,7 +17,7 @@ func validatePlan(p Plan) error {
 	if p.Kind == "addon" && p.Limits != (contract.ResourceLimits{}) {
 		return errors.New("add-ons cannot change limits")
 	}
-	if strings.TrimSpace(p.Name) == "" || len(p.Name) > 200 || p.Price <= 0 || p.Price > 100000000 || p.Quota <= 0 {
+	if strings.TrimSpace(p.Name) == "" || len(p.Name) > 200 || p.Price <= 0 || p.Price > 100000000 || p.Quota < 0 {
 		return errors.New("invalid plan")
 	}
 	return normalizePlanDuration(&p)
@@ -45,6 +45,9 @@ func (s *Service) planTx(ctx context.Context, tx *sql.Tx, id string) (Plan, erro
 }
 func (s *Service) UpdatePlan(ctx context.Context, p Plan) (Plan, error) {
 	legacyDuration := p.Kind == "period" && p.DurationUnit == "" && p.DurationValue == 0
+	if err := applyPlanUnits(&p); err != nil {
+		return p, err
+	}
 	if err := normalizePlanDuration(&p); err != nil {
 		return p, err
 	}
@@ -132,14 +135,18 @@ func (s *Service) PurchaseAddon(ctx context.Context, user, plan, key string, exp
 		if !s.Now().Before(result.ExpiresAt) {
 			return errors.New("active entitlement required")
 		}
-		if result.Quota > math.MaxInt64-p.Quota {
+		if result.Quota != 0 && p.Quota != 0 && result.Quota > math.MaxInt64-p.Quota {
 			return errors.New("quota overflow")
 		}
 		purchaseID := id()
 		if err = s.post(ctx, tx, user, -p.Price, "addon", purchaseID); err != nil {
 			return err
 		}
-		result.Quota += p.Quota
+		if p.Quota == 0 {
+			result.Quota = 0
+		} else if result.Quota != 0 {
+			result.Quota += p.Quota
+		}
 		if _, err = tx.ExecContext(ctx, s.q("UPDATE commerce_entitlements SET quota=? WHERE id=?"), result.Quota, result.ID); err != nil {
 			return err
 		}

@@ -24,6 +24,8 @@ type Plan struct {
 	Name          string                  `json:"name"`
 	Price         int64                   `json:"price_cents,string"`
 	Quota         int64                   `json:"quota_bytes,string"`
+	PriceYuan     *string                 `json:"price_yuan,omitempty"`
+	QuotaGB       *string                 `json:"quota_gb,omitempty"`
 	Months        int                     `json:"months"`
 	DurationUnit  string                  `json:"duration_unit"`
 	DurationValue int                     `json:"duration_value"`
@@ -310,6 +312,9 @@ func (s *Service) Plans(ctx context.Context) ([]Plan, error) {
 func (s *Service) CreatePlan(ctx context.Context, p Plan) (Plan, error) {
 	if p.Kind == "" {
 		p.Kind = "period"
+	}
+	if err := applyPlanUnits(&p); err != nil {
+		return p, err
 	}
 	if err := normalizePlanDuration(&p); err != nil {
 		return p, err

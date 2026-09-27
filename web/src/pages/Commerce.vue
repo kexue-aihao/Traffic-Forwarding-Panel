@@ -5,7 +5,11 @@ import { useRoute, useRouter } from "vue-router";
 import Modal from "../components/Modal.vue";
 import { api, ApiError, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
-import { displayTimeZoneLabel, formatDateTime } from "../core/format";
+import {
+  displayTimeZoneLabel,
+  formatBytes,
+  formatDateTime,
+} from "../core/format";
 interface ResourceLimits {
   max_rules: number;
   max_connections_per_node: number;
@@ -252,8 +256,8 @@ function emptyPlanForm() {
   return {
     limits: emptyLimits(),
     name: "",
-    price_cents: "1000",
-    quota_bytes: "10737418240",
+    price_yuan: "10.00",
+    quota_gb: "",
     duration_unit: "month" as DurationUnit,
     duration_value: 1,
     kind: "period" as "period" | "addon",
@@ -282,6 +286,18 @@ function createPlan() {
   editingPlan.value = null;
   creating.value = true;
   formError.value = "";
+}
+function quotaText(bytes: string) {
+  return bytes === "0" ? "不限流量" : formatBytes(bytes);
+}
+function quotaGB(bytes: string) {
+  if (bytes === "0") return "";
+  const value = BigInt(bytes);
+  const whole = value / 1073741824n;
+  const fraction = String(
+    ((value % 1073741824n) * 100n) / 1073741824n,
+  ).padStart(2, "0");
+  return fraction === "00" ? String(whole) : String(whole) + "." + fraction;
 }
 function money(cents: string) {
   const n = BigInt(cents);
@@ -453,8 +469,8 @@ function editPlan(plan: Plan) {
   formError.value = "";
   planForm.value = {
     name: plan.name,
-    price_cents: plan.price_cents,
-    quota_bytes: plan.quota_bytes,
+    price_yuan: money(plan.price_cents),
+    quota_gb: quotaGB(plan.quota_bytes),
     duration_unit: plan.duration_unit || "month",
     duration_value: plan.duration_value || plan.months || 1,
     kind: plan.kind,
@@ -623,8 +639,8 @@ watch(
         <template v-if="entitlement"
           ><p>到期 {{ formatDateTime(entitlement.expires_at) }}</p>
           <p class="muted">
-            已用 {{ entitlement.used_bytes }} /
-            {{ entitlement.quota_bytes }} 字节
+            已用 {{ formatBytes(entitlement.used_bytes) }} /
+            {{ quotaText(entitlement.quota_bytes) }}
           </p></template
         >
         <p v-else class="muted">
@@ -684,7 +700,7 @@ watch(
         <h3>{{ plan.name }}</h3>
         <p class="price">¥ {{ money(plan.price_cents) }}</p>
         <p class="muted">
-          {{ durationText(plan) }} · {{ plan.quota_bytes }} 字节
+          {{ durationText(plan) }} · {{ quotaText(plan.quota_bytes) }}
         </p>
         <button
           class="primary"
@@ -1012,17 +1028,19 @@ watch(
           </p>
           <label>名称<input v-model="planForm.name" required /></label
           ><label
-            >价格（分）<input
-              v-model="planForm.price_cents"
-              inputmode="numeric"
-              pattern="[0-9]+"
+            >价格（元）<input
+              v-model="planForm.price_yuan"
+              type="text"
+              pattern="[0-9]+(\.[0-9]{1,2})?"
+              inputmode="decimal"
               required /></label
           ><label
-            >流量配额（字节）<input
-              v-model="planForm.quota_bytes"
-              inputmode="numeric"
-              pattern="[1-9][0-9]*"
-              required
+            >流量配额（GB）<input
+              v-model="planForm.quota_gb"
+              type="text"
+              pattern="[0-9]+(\.[0-9]+)?"
+              inputmode="decimal"
+              placeholder="留空表示不限流量"
           /></label>
           <fieldset v-if="planForm.kind === 'period'">
             <legend>套餐限制</legend>

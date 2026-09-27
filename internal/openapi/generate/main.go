@@ -197,8 +197,8 @@ func main() {
 	planFields["duration_unit"] = schema{"type": "string", "enum": []string{"", "day", "week", "month", "year"}, "description": "Period unit, paired with duration_value. Empty only for add-ons or legacy months input. Largest unit is year."}
 	planFields["duration_value"] = schema{"type": "integer", "minimum": 0, "maximum": 3650, "description": "Positive integer for period plans: day 1..3650, week 1..520, month 1..120, year 1..10. Add-ons use 0 with an empty unit."}
 	planFields["months"] = schema{"type": "integer", "minimum": 0, "maximum": 120, "description": "Legacy input when the duration pair is omitted. Output is monthly count (year x 12); 0 for day/week/add-on. If supplied with the pair, must agree. Legacy edits are only allowed for monthly plans."}
-	requestFrom("PlanCreate", "Plan", "name price_cents quota_bytes months? duration_unit? duration_value? kind? limits?")
-	requestFrom("PlanUpdate", "Plan", "name price_cents quota_bytes months? duration_unit? duration_value? kind version limits?")
+	requestFrom("PlanCreate", "Plan", "name price_cents? quota_bytes? price_yuan? quota_gb? months? duration_unit? duration_value? kind? limits?")
+	requestFrom("PlanUpdate", "Plan", "name price_cents? quota_bytes? price_yuan? quota_gb? months? duration_unit? duration_value? kind version limits?")
 	model("PlanActive", schema{"active": flag}, "active")
 	model("PlanActiveResult", schema{"id": str, "active": flag}, "id", "active")
 	model("OrderCreate", schema{"channel": schema{"type": "string", "enum": []string{"epay", "epusdt", "bepusdt", "tokenpay", "cryptomus"}}, "amount_cents": money, "idempotency_key": str}, "channel", "amount_cents", "idempotency_key")

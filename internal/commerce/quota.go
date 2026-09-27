@@ -38,6 +38,10 @@ func (s *Service) AllocateWithMultiplier(ctx context.Context, tx *sql.Tx, user, 
 		return nil, err
 	}
 	remaining := e.Quota - allocated
+	if e.Quota == 0 {
+		// Zero quota is unlimited. Each lease remains bounded and reclaimable.
+		remaining = 16 << 20
+	}
 	if remaining <= 0 {
 		return nil, contract.ErrEntitlementUnavailable
 	}

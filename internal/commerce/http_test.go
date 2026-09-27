@@ -1,6 +1,7 @@
 package commerce
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"net/http"
@@ -51,6 +52,46 @@ func TestHTTPPlanDuration(t *testing.T) {
 		if tc.want == 200 {
 			var p Plan
 			if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil || p.DurationUnit != tc.unit || p.DurationValue < 1 {
+				t.Fatal(p, err)
+			}
+		}
+	}
+}
+
+func TestHTTPPlanHumanUnitsAndUnlimitedQuota(t *testing.T) {
+	s := fixture(t)
+	price := "1"
+	quota := "1"
+	if _, err := s.CreatePlan(context.Background(), Plan{Name: "direct-addon", Kind: "addon", PriceYuan: &price, QuotaGB: &quota}); err != nil {
+		t.Fatal("direct human addon:", err)
+	}
+	mux := http.NewServeMux()
+	s.Register(mux, HTTPOptions{Authenticate: func(*http.Request) (contract.User, error) {
+		return contract.User{ID: "admin", Role: "admin"}, nil
+	}})
+	for _, tc := range []struct {
+		body  string
+		want  int
+		price int64
+		quota int64
+	}{
+		{`{"name":"human","price_yuan":"12.50","quota_gb":"1.5","months":1}`, 200, 1250, 1610612736},
+		{`{"name":"unlimited","price_yuan":"1","quota_gb":"","months":1}`, 200, 100, 0},
+		{`{"name":"human addon","kind":"addon","price_yuan":"1","quota_gb":"1","duration_unit":"","duration_value":0}`, 200, 100, 1073741824},
+		{`{"name":"bad price","price_yuan":"0.001","quota_gb":"1","months":1}`, 400, 0, 0},
+		{`{"name":"bad quota","price_yuan":"1","quota_gb":"0.0000000001","months":1}`, 400, 0, 0},
+	} {
+		r := httptest.NewRequest("POST", "http://example.test/api/v1/plans", strings.NewReader(tc.body))
+		r.Header.Set("Origin", "http://example.test")
+		r.Header.Set("X-Requested-With", "fetch")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("%s: %d %s", tc.body, w.Code, w.Body.String())
+		}
+		if tc.want == 200 {
+			var p Plan
+			if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil || p.Price != tc.price || p.Quota != tc.quota {
 				t.Fatal(p, err)
 			}
 		}

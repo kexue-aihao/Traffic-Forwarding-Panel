@@ -2454,9 +2454,29 @@
             "pattern": "^-?[0-9]+$",
             "type": "string"
           },
+          "price_yuan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "quota_bytes": {
             "pattern": "^-?[0-9]+$",
             "type": "string"
+          },
+          "quota_gb": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "version": {
             "format": "int64",
@@ -2549,15 +2569,33 @@
             "pattern": "^-?[0-9]+$",
             "type": "string"
           },
+          "price_yuan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "quota_bytes": {
             "pattern": "^-?[0-9]+$",
             "type": "string"
+          },
+          "quota_gb": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
-          "name",
-          "price_cents",
-          "quota_bytes"
+          "name"
         ],
         "type": "object"
       },
@@ -2630,9 +2668,29 @@
             "pattern": "^-?[0-9]+$",
             "type": "string"
           },
+          "price_yuan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "quota_bytes": {
             "pattern": "^-?[0-9]+$",
             "type": "string"
+          },
+          "quota_gb": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "version": {
             "format": "int64",
@@ -2641,8 +2699,6 @@
         },
         "required": [
           "name",
-          "price_cents",
-          "quota_bytes",
           "kind",
           "version"
         ],

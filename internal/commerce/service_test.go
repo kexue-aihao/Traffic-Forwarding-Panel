@@ -126,3 +126,35 @@ func TestLeaseOldCycleAndUsageReplay(t *testing.T) {
 		t.Fatal("changed replay accepted")
 	}
 }
+
+func TestUnlimitedPlanAllocatesMultipleLeases(t *testing.T) {
+	s := fixture(t)
+	ctx := context.Background()
+	if err := s.Write(ctx, func(tx *sql.Tx) error {
+		return s.post(ctx, tx, "unlimited", 10000, "test", "fund-unlimited")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.CreatePlan(ctx, Plan{Name: "unlimited", Price: 100, Quota: 0, Months: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Purchase(ctx, "unlimited", p.ID, "unlimited-buy", 0); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if err = s.Write(ctx, func(tx *sql.Tx) error {
+			_, err := s.Allocate(ctx, tx, "unlimited", "rule-"+string(rune('a'+i)), "node")
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var allocated int64
+	if err = s.DB.QueryRow("SELECT allocated FROM commerce_entitlements WHERE user_id=?", "unlimited").Scan(&allocated); err != nil {
+		t.Fatal(err)
+	}
+	if allocated != 3*(16<<20) {
+		t.Fatalf("unlimited allocation was capped: %d", allocated)
+	}
+}
