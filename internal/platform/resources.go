@@ -171,7 +171,7 @@ func (s *Server) groups(w http.ResponseWriter, r *http.Request) {
 	where := ""
 	args := []any{}
 	if u.Role != "admin" {
-		where = " WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=g.id AND iu.id=?"
+		where = " WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=iu.id)) WHERE gig.group_id=g.id AND iu.id=?"
 		args = append(args, u.ID)
 		where += tokenGroupScope(u, "gig.group_id", &args) + ")"
 	}
@@ -251,6 +251,7 @@ func (s *Server) groups(w http.ResponseWriter, r *http.Request) {
 // GET /groups 的列表响应（那个接口普通用户也能调）。
 func (s *Server) groupJoinKey(w http.ResponseWriter, r *http.Request) {
 	group := r.PathValue("id")
+	actor, _ := UserFromContext(r.Context())
 	var key, raw string
 	if e := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT join_key,payload FROM cp_groups WHERE id=?`), group).Scan(&key, &raw); e != nil {
 		fail(w, 404, "unknown group")
@@ -261,6 +262,10 @@ func (s *Server) groupJoinKey(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "链式出口通过已有出口组组成，不接入设备")
 		return
 	}
+	if actor.Role != "admin" && g.OwnerID != actor.ID {
+		fail(w, 403, "只有出口设备组所有者可以读取接入密钥")
+		return
+	}
 	reply(w, 200, map[string]any{"group_id": group, "join_key": key})
 }
 
@@ -268,12 +273,20 @@ func (s *Server) groupJoinKey(w http.ResponseWriter, r *http.Request) {
 // 唯一手段，界面上必须把这句话说清楚。
 func (s *Server) rotateGroupJoinKey(w http.ResponseWriter, r *http.Request) {
 	group := r.PathValue("id")
+	actor, _ := UserFromContext(r.Context())
+	if actor.Role != "admin" {
+		var raw string
+		var g contract.Group
+		if err := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT payload FROM cp_groups WHERE id=?`), group).Scan(&raw); err != nil || json.Unmarshal([]byte(raw), &g) != nil || g.OwnerID != actor.ID {
+			fail(w, 403, "只有出口设备组所有者可以轮换接入密钥")
+			return
+		}
+	}
 	key, e := storage.RandomKey()
 	if e != nil {
 		fail(w, 500, "access key generation failed")
 		return
 	}
-	actor, _ := UserFromContext(r.Context())
 	e = s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
 		g, err := s.groupTx(r.Context(), tx, group)
 		if err != nil {
@@ -302,6 +315,18 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 	var g contract.Group
 	if !decode(w, r, &g) {
 		return
+	}
+	actor, _ := UserFromContext(r.Context())
+	selfExit := actor.Role != "admin"
+	if selfExit {
+		if r.Method != http.MethodPost || g.Type != contract.GroupExit || actor.IdentityGroupID == "" {
+			fail(w, 403, "普通用户只能创建自己的出口设备组")
+			return
+		}
+		g.UserIDs = nil
+		g.IdentityGroupIDs = []string{actor.IdentityGroupID}
+		g.OwnerID = actor.ID
+		g.Multiplier = "1"
 	}
 	// Older clients submitted individual users. Resolve them to their current
 	// identity groups, then persist only the identity-group authorization.
@@ -367,7 +392,6 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	actor, _ := UserFromContext(r.Context())
 	oldVersion := g.Version
 	g.ID = r.PathValue("id")
 	create := g.ID == ""
@@ -378,6 +402,21 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		g.Version++
 	}
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		if !create {
+			previous, err := s.groupTx(r.Context(), tx, g.ID)
+			if err != nil {
+				return err
+			}
+			g.OwnerID = previous.OwnerID
+		} else if !selfExit {
+			g.OwnerID = ""
+		}
+		if g.OwnerID != "" {
+			g.Multiplier = "1"
+			if g.Type != contract.GroupExit {
+				return errors.New("个人出口必须为单端出口")
+			}
+		}
 		for _, identityGroupID := range g.IdentityGroupIDs {
 			if _, err := s.identityGroupForUpdate(r.Context(), tx, identityGroupID); err != nil {
 				return errors.New("身份用户组不存在")
@@ -404,7 +443,7 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 			if e != nil {
 				return e
 			}
-			_, e = tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_groups(id,name,payload,version,join_key) VALUES(?,?,?,?,?)`), g.ID, g.Name, strJSON(g), g.Version, key)
+			_, e = tx.ExecContext(r.Context(), s.q(`INSERT INTO cp_groups(id,name,payload,version,join_key,owner_id) VALUES(?,?,?,?,?,?)`), g.ID, g.Name, strJSON(g), g.Version, key, g.OwnerID)
 			if e != nil {
 				return e
 			}
@@ -919,7 +958,7 @@ func (s *Server) diagnoseRule(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "diagnostic unavailable")
 		return
 	}
-	if err := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users u ON u.identity_group_id=gig.identity_group_id WHERE u.id=? AND gig.group_id=?`), owner, rule.GroupID).Scan(&membership); err != nil {
+	if err := s.Store.DB.QueryRowContext(r.Context(), s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users u ON u.identity_group_id=gig.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=u.id)) WHERE u.id=? AND gig.group_id=?`), owner, rule.GroupID).Scan(&membership); err != nil {
 		fail(w, 500, "diagnostic unavailable")
 		return
 	}

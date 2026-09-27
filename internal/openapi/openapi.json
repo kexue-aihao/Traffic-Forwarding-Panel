@@ -1005,6 +1005,9 @@
           "name": {
             "type": "string"
           },
+          "owner_id": {
+            "type": "string"
+          },
           "port_max": {
             "format": "int64",
             "type": "integer"
@@ -2388,6 +2391,9 @@
               "$ref": "#/components/schemas/PaymentChannelSettings"
             },
             "type": "object"
+          },
+          "telegram": {
+            "$ref": "#/components/schemas/TelegramPaymentSettings"
           },
           "version": {
             "type": "integer"
@@ -4186,6 +4192,97 @@
         ],
         "type": "object"
       },
+      "TelegramPayment": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "coin_amount": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "transaction_id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "TelegramPaymentConfirm": {
+        "additionalProperties": false,
+        "properties": {
+          "transaction_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id"
+        ],
+        "type": "object"
+      },
+      "TelegramPaymentPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TelegramPayment"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "TelegramPaymentSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "bot_token": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "bot_token_set": {
+            "type": "boolean"
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "rates": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "wallet_addresses": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "wallet_addresses"
+        ],
+        "type": "object"
+      },
       "TerminalCommand": {
         "additionalProperties": false,
         "properties": {
@@ -4724,7 +4821,8 @@
             "enum": [
               "webhook",
               "feishu",
-              "discord"
+              "discord",
+              "telegram"
             ],
             "type": "string"
           },
@@ -5049,6 +5147,112 @@
         ],
         "summary": "Add current quota without changing expiry; exact replay",
         "x-role": "user"
+      }
+    },
+    "/admin/telegram/payments": {
+      "get": {
+        "operationId": "get_admin_telegram_payments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramPaymentPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Latest 100 manual Telegram payment intents",
+        "x-role": "admin"
+      }
+    },
+    "/admin/telegram/payments/{id}/confirm": {
+      "post": {
+        "operationId": "post_admin_telegram_payments_id_confirm",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramPaymentConfirm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramPayment"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Manually confirm a transfer to a configured Telegram wallet address",
+        "x-role": "admin"
       }
     },
     "/agent/ack": {
@@ -7579,6 +7783,200 @@
           }
         ],
         "summary": "Poll one looking glass result",
+        "x-role": "user"
+      }
+    },
+    "/my-exit-groups": {
+      "post": {
+        "operationId": "post_my-exit-groups",
+        "parameters": [
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "ownerBearer": []
+          }
+        ],
+        "summary": "Create an exit device group owned by the current user",
+        "x-role": "user"
+      }
+    },
+    "/my-exits": {
+      "post": {
+        "operationId": "post_my-exits",
+        "parameters": [
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Exit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Exit"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "ownerBearer": []
+          }
+        ],
+        "summary": "Register an exit owned by the current user; no extra charge",
+        "x-role": "user"
+      }
+    },
+    "/my-exits/{id}": {
+      "put": {
+        "operationId": "put_my-exits_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Exit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Exit"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "ownerBearer": []
+          }
+        ],
+        "summary": "Update an exit owned by the current user",
         "x-role": "user"
       }
     },
@@ -11132,6 +11530,60 @@
         ],
         "summary": "Cancel pending work; completed import items remain",
         "x-role": "user"
+      }
+    },
+    "/telegram/login": {
+      "get": {
+        "operationId": "get_telegram_login",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [],
+        "summary": "One-time Telegram login; first binding requires an existing cookie session",
+        "x-role": "public"
+      },
+      "post": {
+        "operationId": "post_telegram_login",
+        "responses": {
+          "303": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [],
+        "summary": "Consume a one-time Telegram account binding token",
+        "x-role": "public"
       }
     },
     "/users": {

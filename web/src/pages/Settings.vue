@@ -43,6 +43,13 @@ interface PaymentChannelSettings {
 interface PaymentSettings {
   version: number;
   channels: Record<string, PaymentChannelSettings>;
+  telegram: {
+    bot_token: string;
+    bot_token_set: boolean;
+    disabled: boolean;
+    rates: Record<string, string>;
+    wallet_addresses: Record<string, string>;
+  };
 }
 interface PaymentProtocol {
   id: string;
@@ -66,10 +73,34 @@ function blankChannel(): PaymentChannelSettings {
   return { gateway: "", merchant_id: "", key: "", crypto_currency: "", signature_algorithm: "", epay_mode: "", method: "", notify_url: "", return_url: "", fee_percent: "", fee_fixed: "", rate: "", configured: false, key_set: false };
 }
 const paymentRows = ref<PaymentRow[]>([]);
+const telegramBotToken = ref("");
+const telegramBotTokenSet = ref(false);
+const telegramDisabled = ref(false);
+const telegramRates = ref<Record<string, string>>({});
+interface TelegramPayment { id: string; user_id: string; network: string; amount_cents: number; coin_amount: string; address: string; status: string; transaction_id: string; }
+const telegramPayments = ref<TelegramPayment[]>([]);
+const transactionHashes = ref<Record<string, string>>({});
+const paymentReviewError = ref("");
+const reviewing = ref(false);
+async function loadTelegramPayments() {
+  paymentReviewError.value = "";
+  try { telegramPayments.value = (await api<{items: TelegramPayment[]}>("/admin/telegram/payments")).items; }
+  catch (e) { paymentReviewError.value = errorText(e); }
+}
+async function confirmTelegramPayment(p: TelegramPayment) {
+  reviewing.value = true; paymentReviewError.value = "";
+  try {
+    await api("/admin/telegram/payments/" + encodeURIComponent(p.id) + "/confirm", "POST", {transaction_id: transactionHashes.value[p.id] || ""});
+    notice("充值已核实入账。"); await loadTelegramPayments();
+  } catch (e) { paymentReviewError.value = errorText(e); }
+  finally { reviewing.value = false; }
+}
+const telegramAddresses = ref<Record<string, string>>({});
 const paymentVersion = ref(0),
   paymentError = ref(""),
   paymentBusy = ref(false),
   paymentLoading = ref(false);
+const selectedPaymentId = ref("epay");
 function fillPaymentRows(channels: Record<string, PaymentChannelSettings>) {
   paymentRows.value = paymentProtocols.map((protocol) => ({
     ...protocol,
@@ -88,6 +119,13 @@ async function loadPayments() {
     const result = await api<PaymentSettings>("/payment-settings");
     paymentVersion.value = result.version;
     fillPaymentRows(result.channels || {});
+    telegramBotToken.value = "";
+    telegramBotTokenSet.value = Boolean(result.telegram?.bot_token_set);
+    telegramDisabled.value = Boolean(result.telegram?.disabled);
+    telegramRates.value = {...(result.telegram?.rates || {})};
+    telegramAddresses.value = Object.fromEntries(
+      TelegramNetworks.map((network) => [network, result.telegram?.wallet_addresses?.[network] || ""]),
+    );
   } catch (e) {
     paymentError.value = errorText(e);
   } finally {
@@ -124,9 +162,22 @@ async function savePayments() {
     const result = await api<PaymentSettings>("/payment-settings", "PUT", {
       version: paymentVersion.value,
       channels,
+      telegram: {
+        bot_token: telegramBotToken.value,
+        disabled: telegramDisabled.value,
+        rates: telegramRates.value,
+        wallet_addresses: telegramAddresses.value,
+      },
     });
     paymentVersion.value = result.version;
     fillPaymentRows(result.channels || {});
+    telegramBotToken.value = "";
+    telegramBotTokenSet.value = Boolean(result.telegram?.bot_token_set);
+    telegramDisabled.value = Boolean(result.telegram?.disabled);
+    telegramRates.value = {...(result.telegram?.rates || {})};
+    telegramAddresses.value = Object.fromEntries(
+      TelegramNetworks.map((network) => [network, result.telegram?.wallet_addresses?.[network] || ""]),
+    );
     notice("支付通道已保存，立即生效。");
   } catch (e) {
     paymentError.value = errorText(e);
@@ -134,6 +185,16 @@ async function savePayments() {
     paymentBusy.value = false;
   }
 }
+const TelegramNetworks = [
+  "trc20-usdt",
+  "erc20-usdt",
+  "bep20-usdt",
+  "polygon-usdt",
+  "trx",
+  "pol",
+  "eth",
+  "bnb",
+];
 const form = ref<Settings | null>(null),
   error = ref(""),
   busy = ref(false),
@@ -306,7 +367,23 @@ onMounted(() => {
       <p v-if="paymentError" class="error" role="alert">{{ paymentError }}</p>
       <p v-if="paymentLoading" class="empty">正在读取支付通道…</p>
       <template v-else>
-        <details v-for="row in paymentRows" :key="row.id" class="payment-channel">
+        <label
+          >支付协议<Select
+            v-model="selectedPaymentId"
+            aria-label="支付协议"
+          >
+            <option v-for="protocol in paymentProtocols" :key="protocol.id" :value="protocol.id">
+              {{ protocol.name }}
+            </option>
+          </Select></label
+        >
+        <details
+          v-for="row in paymentRows"
+          v-show="row.id === selectedPaymentId"
+          :key="row.id"
+          class="payment-channel"
+          open
+        >
           <summary>
             <strong>{{ row.name }}</strong>
             <span class="muted small">
@@ -407,6 +484,67 @@ onMounted(() => {
           </button>
         </div>
       </template>
+    </section>
+    <section
+      v-if="allowed && form"
+      class="card"
+      aria-labelledby="telegram-payment-title"
+    >
+      <h2 id="telegram-payment-title">Telegram 机器人充值</h2>
+      <p class="small muted">
+        填写 BotFather 生成的 Bot Token 和各网络收款地址。用户在机器人发送
+        <code>/login</code> 绑定站点账号，再发送
+        <code>/pay trc20-usdt 100</code> 发起充值。金额为人民币余额，机器人按管理员配置的“每币人民币价格”报价。首次绑定需正常登录站点，后续 /login 可免密登录。仅支持私聊；本版由管理员核实链上实际到账后手动入账。
+      </p>
+      <label class="check"><input v-model="telegramDisabled" type="checkbox" />暂停 Telegram 命令机器人</label>
+      <label
+        >Bot Token<input
+          v-model="telegramBotToken"
+          type="password"
+          autocomplete="new-password"
+          :placeholder="telegramBotTokenSet ? '留空沿用已保存的 Token' : '123456:AA…'"
+        />
+      </label>
+      <div class="form-grid">
+        <label v-for="network in TelegramNetworks" :key="network">
+          {{ network }} 收款地址
+          <input
+            v-model="telegramAddresses[network]"
+            :placeholder="`${network} 地址`"
+            maxlength="256"
+          />
+          每币人民币价格（CNY / 币）
+          <input v-model="telegramRates[network]" inputmode="decimal" placeholder="填写实际汇率，留空不能下单" />
+        </label>
+      </div>
+      <div class="form-actions">
+        <button
+          class="primary"
+          type="button"
+          :disabled="paymentBusy"
+          :data-busy="String(paymentBusy)"
+          :aria-busy="paymentBusy"
+          @click="savePayments"
+        >
+          保存 Telegram 配置
+        </button>
+      </div>
+    </section>
+    <section v-if="allowed && form" class="card" aria-labelledby="telegram-orders-title">
+      <h2 id="telegram-orders-title">Telegram 充值核实</h2>
+      <p class="small muted">显示最近 100 笔订单。请核实网络、币种、数量、收款地址和链上确认数后填写交易哈希。同一链交易只能确认一次。</p>
+      <button type="button" @click="loadTelegramPayments">加载 / 刷新充值订单</button>
+      <p v-if="paymentReviewError" class="error" role="alert">{{ paymentReviewError }}</p>
+      <article v-for="p in telegramPayments" :key="p.id" class="card">
+        <p>{{ p.id }} · 用户 {{ p.user_id }} · {{ p.network }} · {{ p.status }}</p>
+        <p>余额 {{ (p.amount_cents / 100).toFixed(2) }} 元；应付 {{ p.coin_amount }} 币</p>
+        <p class="small">收款地址：{{ p.address }}</p>
+        <template v-if="p.status === 'pending'">
+          <label>交易哈希<input v-model="transactionHashes[p.id]" maxlength="66" placeholder="64 位十六进制交易哈希" /></label>
+          <button type="button" :disabled="reviewing || !transactionHashes[p.id]" @click="confirmTelegramPayment(p)">已核实链上到账，确认入账</button>
+        </template>
+        <p v-else class="small">{{ p.transaction_id }}</p>
+      </article>
     </section>
   </section>
 </template>

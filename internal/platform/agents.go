@@ -123,6 +123,50 @@ func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 				return e
 			}
 		}
+		if s.opts.EventEmitter != nil {
+			recipients := map[string]bool{}
+			rows, e := tx.QueryContext(r.Context(), s.q(`SELECT id FROM cp_users WHERE disabled=0 AND role='admin'`))
+			if e != nil {
+				return e
+			}
+			for rows.Next() {
+				var user string
+				if e = rows.Scan(&user); e != nil {
+					rows.Close()
+					return e
+				}
+				recipients[user] = true
+			}
+			if e = rows.Err(); e != nil {
+				rows.Close()
+				return e
+			}
+			rows.Close()
+			for _, gid := range en.GroupIDs {
+				rows, e = tx.QueryContext(r.Context(), s.q(`SELECT u.id FROM cp_users u JOIN cp_group_identity_groups gig ON gig.identity_group_id=u.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=u.id)) WHERE u.disabled=0 AND gig.group_id=?`), gid)
+				if e != nil {
+					return e
+				}
+				for rows.Next() {
+					var user string
+					if e = rows.Scan(&user); e != nil {
+						rows.Close()
+						return e
+					}
+					recipients[user] = true
+				}
+				if e = rows.Err(); e != nil {
+					rows.Close()
+					return e
+				}
+				rows.Close()
+			}
+			for user := range recipients {
+				if e = s.opts.EventEmitter.EmitEventTx(r.Context(), tx, user, "node.created", map[string]any{"node_id": node.ID, "name": node.Name, "group_ids": en.GroupIDs}); e != nil {
+					return e
+				}
+			}
+		}
 		return nil
 	})
 	if e != nil {
@@ -174,7 +218,7 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 	where := ""
 	args := []any{}
 	if u.Role != "admin" {
-		where = ` WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE ng.node_id=n.id AND iu.id=?`
+		where = ` WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=iu.id)) WHERE ng.node_id=n.id AND iu.id=?`
 		args = append(args, u.ID)
 		where += tokenGroupScope(u, "gig.group_id", &args) + ")"
 	}
@@ -201,7 +245,7 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 	if u.Role != "admin" {
 		// 这台账号能看到哪些组，再收窄到凭据自带的范围。
 		args := []any{u.ID}
-		query := `SELECT gig.group_id FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE iu.id=?` + tokenGroupScope(u, "gig.group_id", &args)
+		query := `SELECT gig.group_id FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=iu.id)) WHERE iu.id=?` + tokenGroupScope(u, "gig.group_id", &args)
 		rows, e := s.Store.DB.QueryContext(r.Context(), s.q(query), args...)
 		if e != nil {
 			fail(w, 500, "query failed")
@@ -290,7 +334,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "config unavailable")
 		return
 	}
-	rows, e := tx.QueryContext(r.Context(), s.q(`SELECT r.payload,g.payload,u.disabled,u.role,CASE WHEN EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id) THEN 1 ELSE 0 END FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
+	rows, e := tx.QueryContext(r.Context(), s.q(`SELECT r.payload,g.payload,u.disabled,u.role,CASE WHEN EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=u.id))) THEN 1 ELSE 0 END FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
 	if e != nil {
 		fail(w, 500, "config unavailable")
 		return
@@ -478,7 +522,7 @@ func (s *Server) visibleNodes(ctx context.Context, u contract.User, group string
 	query := "SELECT n.id,n.payload,n.last_seen FROM cp_nodes n WHERE 1=1"
 	args := []any{}
 	if u.Role != "admin" {
-		query = "SELECT n.id,n.payload,n.last_seen FROM cp_nodes n WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE ng.node_id=n.id AND iu.id=?"
+		query = "SELECT n.id,n.payload,n.last_seen FROM cp_nodes n WHERE EXISTS(SELECT 1 FROM cp_node_groups ng JOIN cp_group_identity_groups gig ON gig.group_id=ng.group_id JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=iu.id)) WHERE ng.node_id=n.id AND iu.id=?"
 		args = append(args, u.ID)
 		query += tokenGroupScope(u, "gig.group_id", &args) + ")"
 	}
@@ -507,7 +551,7 @@ func (s *Server) visibleNodes(ctx context.Context, u contract.User, group string
 	args = []any{}
 	filters := []string{}
 	if u.Role != "admin" {
-		clause := "EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=cp_node_groups.group_id AND iu.id=?"
+		clause := "EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=iu.id)) WHERE gig.group_id=cp_node_groups.group_id AND iu.id=?"
 		args = append(args, u.ID)
 		filters = append(filters, clause+tokenGroupScope(u, "gig.group_id", &args)+")")
 	}

@@ -60,14 +60,14 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	if err != nil {
 		return nil, err
 	}
-	if len(stored.Channels) > 0 {
+	if stored.Version > 0 {
 		if len(configs) > 0 {
 			slog.WarnContext(ctx, "启动参数里的支付通道配置被数据库里的设置覆盖：改配置请到面板的站点设置")
 		}
 		configs = stored.Channels
 	} else if len(configs) > 0 {
 		// 第一次启动：把配置文件/环境变量里的通道落库，面板上就能直接看到并接着改。
-		if _, err := savePaymentSettings(ctx, store, 0, configs, nil); err != nil {
+		if _, err := savePaymentSettings(ctx, store, 0, PaymentSettings{Channels: configs, Telegram: stored.Telegram}, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -96,8 +96,34 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	if err := billing.Migrate(ctx); err != nil {
 		return nil, err
 	}
-	control := platform.New(store, platform.Options{Origin: opts.Origin, TrustProxy: opts.TrustProxy, SecureCookies: opts.SecureCookies, Entitlements: billing, LeaseCurrent: billing.LeaseCurrent, RetireLease: billing.RetireLease, ResourceLimits: billing.LimitsTx, ActiveEntitlement: billing.HasActiveEntitlement, OfflineNodeTime: opts.OfflineNodeTime, OfflineNodeRetention: opts.OfflineNodeRetention, UserRateLimit: opts.UserRateLimit, DefaultRateLimit: opts.DefaultRateLimit})
+	control := platform.New(store, platform.Options{Origin: opts.Origin, TrustProxy: opts.TrustProxy, SecureCookies: opts.SecureCookies, Entitlements: billing, EventEmitter: billing, LeaseCurrent: billing.LeaseCurrent, RetireLease: billing.RetireLease, ResourceLimits: billing.LimitsTx, ActiveEntitlement: billing.HasActiveEntitlement, OfflineNodeTime: opts.OfflineNodeTime, OfflineNodeRetention: opts.OfflineNodeRetention, UserRateLimit: opts.UserRateLimit, DefaultRateLimit: opts.DefaultRateLimit})
 	billing.PaymentAllowed = control.PaymentAllowed
+	billing.PaymentReceived = func(ctx context.Context, tx *sql.Tx, user, order string, amount int64) error {
+		rows, err := tx.QueryContext(ctx, "SELECT id FROM cp_users WHERE role='admin' AND disabled=0")
+		if err != nil {
+			return err
+		}
+		admins := []string{}
+		for rows.Next() {
+			var id string
+			if err = rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			admins = append(admins, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, admin := range admins {
+			if err = billing.EmitEventTx(ctx, tx, admin, "payment.received", map[string]any{"user_id": user, "order_id": order, "amount_cents": amount}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if err := control.MigrateProbeHistory(ctx); err != nil {
 		return nil, err
 	}
@@ -119,6 +145,12 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	// 支付通道配置：面板上保存之后立刻生效，不必重启进程。
 	mux.HandleFunc("GET /api/v1/payment-settings", control.Admin(application.getPaymentSettings))
 	mux.HandleFunc("PUT /api/v1/payment-settings", control.Admin(application.putPaymentSettings))
+	// Telegram /login is a public one-time handoff page; the token itself is
+	// the capability and expires after ten minutes.
+	mux.HandleFunc("GET /api/v1/telegram/login", application.telegramLogin)
+	mux.HandleFunc("POST /api/v1/telegram/login", application.telegramLogin)
+	mux.HandleFunc("POST /api/v1/admin/telegram/payments/{id}/confirm", control.Admin(application.confirmTelegramPayment))
+	mux.HandleFunc("GET /api/v1/admin/telegram/payments", control.Admin(application.listTelegramPayments))
 	return application, nil
 }
 
@@ -133,5 +165,6 @@ func (a *App) RunBackground(ctx context.Context) {
 	workers.Go(func() { _ = a.Commerce.RunReconciliation(ctx) })
 	workers.Go(func() { _ = a.Commerce.RunAutoRenewLoop(ctx) })
 	workers.Go(func() { _ = a.Commerce.RunWebhookLoop(ctx) })
+	workers.Go(func() { a.RunTelegramBot(ctx) })
 	workers.Wait()
 }

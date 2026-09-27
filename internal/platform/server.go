@@ -26,6 +26,9 @@ import (
 type Entitlements interface {
 	Allocate(context.Context, *sql.Tx, string, string, string) (*contract.Lease, error)
 }
+type EventEmitter interface {
+	EmitEventTx(context.Context, *sql.Tx, string, string, map[string]any) error
+}
 type Options struct {
 	Origin               string
 	SecureCookies        bool
@@ -36,6 +39,7 @@ type Options struct {
 	DefaultRateLimit     *RateLimit
 	AdminTestBytes       int64
 	Entitlements         Entitlements
+	EventEmitter         EventEmitter
 	ResourceLimits       func(context.Context, *sql.Tx, string) (contract.ResourceLimits, error)
 	// ActiveEntitlement 报告用户是否有未过期的权益。探针是付费能力，普通用户
 	// 要有它才能看 —— 用函数字段而不是扩充 Entitlements 接口，与旁边的
@@ -174,6 +178,22 @@ func (s *Server) Authenticate(r *http.Request) (contract.User, error) {
 	}
 	return u, nil
 }
+
+// CreateSessionTx creates a session only for an enabled, previously authenticated account.
+func (s *Server) CreateSessionTx(ctx context.Context, tx *sql.Tx, userID string) (string, time.Time, error) {
+	var disabled int
+	query := "SELECT disabled FROM cp_users WHERE id=?"
+	if s.Store.Dialect != "sqlite" {
+		query += " FOR UPDATE"
+	}
+	if err := tx.QueryRowContext(ctx, s.q(query), userID).Scan(&disabled); err != nil || disabled != 0 {
+		return "", time.Time{}, errors.New("account unavailable")
+	}
+	t, exp := token(), time.Now().Add(12*time.Hour)
+	_, err := tx.ExecContext(ctx, s.q("INSERT INTO cp_sessions(token_hash,user_id,expires_at) VALUES(?,?,?)"), digest(t), userID, exp.Unix())
+	return t, exp, err
+}
+
 func (s *Server) RequireUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, e := s.Authenticate(r)
@@ -337,6 +357,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/exits", s.RequireUser(s.exits))
 	mux.HandleFunc("POST /api/v1/exits", s.admin(s.saveExit))
 	mux.HandleFunc("PUT /api/v1/exits/{id}", s.admin(s.saveExit))
+	mux.HandleFunc("POST /api/v1/my-exits", s.RequireUser(s.saveExit))
+	mux.HandleFunc("PUT /api/v1/my-exits/{id}", s.RequireUser(s.saveExit))
 	mux.HandleFunc("GET /api/v1/auth/tokens", s.RequireUser(s.listTokens))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/rotate-token", s.admin(s.rotateNodeToken))
 	mux.HandleFunc("POST /api/v1/agent/leases/retire", s.agent(s.retireLease))
@@ -380,10 +402,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/identity-groups/{id}", s.admin(s.deleteIdentityGroup))
 	mux.HandleFunc("GET /api/v1/groups", s.RequireUser(s.groups))
 	mux.HandleFunc("POST /api/v1/groups", s.admin(s.saveGroup))
+	mux.HandleFunc("POST /api/v1/my-exit-groups", s.RequireUser(s.saveGroup))
 	mux.HandleFunc("PUT /api/v1/groups/{id}", s.admin(s.saveGroup))
 	mux.HandleFunc("DELETE /api/v1/groups/{id}", s.admin(s.deleteGroup))
-	mux.HandleFunc("GET /api/v1/groups/{id}/join-key", s.admin(s.groupJoinKey))
-	mux.HandleFunc("POST /api/v1/groups/{id}/join-key", s.admin(s.rotateGroupJoinKey))
+	mux.HandleFunc("GET /api/v1/groups/{id}/join-key", s.RequireUser(s.groupJoinKey))
+	mux.HandleFunc("POST /api/v1/groups/{id}/join-key", s.RequireUser(s.rotateGroupJoinKey))
 	mux.HandleFunc("GET /api/v1/nodes", s.RequireUser(s.nodes))
 	mux.HandleFunc("POST /api/v1/nodes/enrollment", s.admin(s.enroll))
 	mux.HandleFunc("GET /api/v1/rules", s.RequireUser(s.rules))

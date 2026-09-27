@@ -210,7 +210,7 @@ func main() {
 	model("ReferralBound", schema{"bound": flag}, "bound")
 	model("CommissionPolicy", schema{"rate_bps": schema{"type": "integer", "minimum": 0, "maximum": 10000}}, "rate_bps")
 	model("CommissionResolution", schema{"action": schema{"type": "string", "enum": []string{"settle", "reverse"}}, "reason": str}, "action", "reason")
-	model("WebhookCreate", schema{"format": schema{"type": "string", "enum": []string{"webhook", "feishu", "discord"}}, "url": schema{"type": "string", "format": "uri", "maxLength": 2048}, "events": array(str)}, "url", "events")
+	model("WebhookCreate", schema{"format": schema{"type": "string", "enum": []string{"webhook", "feishu", "discord", "telegram"}}, "url": schema{"type": "string", "format": "uri", "maxLength": 2048}, "events": array(str)}, "url", "events")
 	model("WebhookSecret", schema{"id": str, "url": str, "events": array(str), "secret": str, "created_at": date}, "id", "url", "events", "secret", "created_at")
 	model("WebhookDelivery", schema{"event_id": str, "subscription_id": str, "attempts": num, "status": schema{"type": "string", "enum": []string{"pending", "failed", "delivered", "suppressed", "access_revoked"}}, "next_at": date, "last_error": str, "delivered_at": str}, "event_id", "subscription_id", "attempts", "status", "next_at", "last_error", "delivered_at")
 	model("PaymentChannel", schema{"id": str, "name": str, "enabled": flag, "status": str, "reason": str}, "id", "name", "enabled", "status", "reason")
@@ -223,7 +223,11 @@ func main() {
 		"notify_url": str, "return_url": str, "fee_percent": str, "fee_fixed": str, "rate": str,
 		"configured": flag, "key_set": flag,
 	})
-	model("PaymentSettings", schema{"version": num, "channels": schema{"type": "object", "additionalProperties": ref("PaymentChannelSettings")}}, "version", "channels")
+	model("TelegramPaymentSettings", schema{"bot_token": schema{"type": "string", "writeOnly": true}, "bot_token_set": flag, "disabled": flag, "rates": schema{"type": "object", "additionalProperties": str}, "wallet_addresses": schema{"type": "object", "additionalProperties": str}}, "wallet_addresses")
+	model("PaymentSettings", schema{"version": num, "channels": schema{"type": "object", "additionalProperties": ref("PaymentChannelSettings")}, "telegram": ref("TelegramPaymentSettings")}, "version", "channels")
+	model("TelegramPayment", schema{"id": str, "user_id": str, "network": str, "amount_cents": num, "coin_amount": str, "address": str, "status": str, "transaction_id": str, "created_at": num})
+	model("TelegramPaymentPage", schema{"items": array(ref("TelegramPayment"))}, "items")
+	model("TelegramPaymentConfirm", schema{"transaction_id": str}, "transaction_id")
 	// 规则分类：只影响控制台怎么分组，不进发给 Agent 的配置，也不动规则版本。
 	model("RuleCategory", schema{"ids": schema{"type": "array", "items": str, "minItems": 1, "maxItems": 500}, "category": schema{"type": "string", "maxLength": 32}}, "ids", "category")
 	model("RuleCategoryResult", schema{"updated": num, "category": str}, "updated", "category")
@@ -284,6 +288,9 @@ func main() {
 		{"GET", "/exits", "", "ExitPage", "200", "user", "Authorized exit directory; credentials redacted", true},
 		{"POST", "/exits", "Exit", "Exit", "201", "admin", "Register a managed exit", false},
 		{"PUT", "/exits/{id}", "Exit", "Exit", "200", "admin", "Update managed exit with version check", false},
+		{"POST", "/my-exits", "Exit", "Exit", "201", "user", "Register an exit owned by the current user; no extra charge", false},
+		{"PUT", "/my-exits/{id}", "Exit", "Exit", "200", "user", "Update an exit owned by the current user", false},
+		{"POST", "/my-exit-groups", "GroupCreate", "Group", "201", "user", "Create an exit device group owned by the current user", false},
 		{"POST", "/tasks/rules/preview", "ImportPreviewInput", "ImportPreview", "200", "user", "Transactional dry run; no resource or money changes persist", false},
 		{"POST", "/rules/{id}/network-diagnostic", "Empty", "Diagnostic", "202", "user", "Queue an authorized TCP rule network diagnostic", false},
 		{"GET", "/diagnostics/{id}", "", "Diagnostic", "200", "user", "Read sanitized diagnostic result with current authorization", false},
@@ -401,6 +408,10 @@ func main() {
 		{"GET", "/payment-channels", "", "PaymentChannelPage", "200", "user", "Five supported payment protocols; Cyber excluded", false},
 		{"GET", "/payment-settings", "", "PaymentSettings", "200", "admin", "Saved channel configuration; merchant keys are never returned, only whether one is stored", false},
 		{"PUT", "/payment-settings", "PaymentSettings", "PaymentSettings", "200", "admin", "Versioned channel configuration; an empty key keeps the stored one and an omitted channel is removed", false},
+		{"GET", "/telegram/login", "", "", "200", "public", "One-time Telegram login; first binding requires an existing cookie session", false},
+		{"POST", "/telegram/login", "", "", "303", "public", "Consume a one-time Telegram account binding token", false},
+		{"GET", "/admin/telegram/payments", "", "TelegramPaymentPage", "200", "admin", "Latest 100 manual Telegram payment intents", false},
+		{"POST", "/admin/telegram/payments/{id}/confirm", "TelegramPaymentConfirm", "TelegramPayment", "200", "admin", "Manually confirm a transfer to a configured Telegram wallet address", false},
 		{"GET", "/payments/epay/notify", "", "", "200", "provider", "EPay signed query parameters; literal provider acknowledgement", false},
 		{"POST", "/payments/epay/notify", "PaymentNotify", "", "200", "provider", "EPay signed form callback", false},
 		{"POST", "/payments/{channel}/notify", "PaymentNotify", "", "200", "provider", "Configured provider signed callback; literal provider acknowledgement", false},

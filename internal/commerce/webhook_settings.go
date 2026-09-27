@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const webhookEvents = "*,wallet.recharge,wallet.purchase,wallet.purchase_refund,purchase.refunded,commission.refunded,wallet.addon,wallet.redeem,wallet.commission,wallet.commission_reversal,wallet.refund_reserve,wallet.refund_release,entitlement.purchased,entitlement.addon,entitlement.redeemed,refund.completed,refund.canceled,node.offline,node.recovered,entitlement.expiring,entitlement.expired,entitlement.low_quota,alerts.policy_updated"
+const webhookEvents = "*,payment.received,wallet.recharge,wallet.purchase,wallet.purchase_refund,purchase.refunded,commission.refunded,wallet.addon,wallet.redeem,wallet.commission,wallet.commission_reversal,wallet.refund_reserve,wallet.refund_release,entitlement.purchased,entitlement.addon,entitlement.redeemed,refund.completed,refund.canceled,node.created,node.online,node.offline,node.recovered,entitlement.expiring,entitlement.expired,entitlement.low_quota,alerts.policy_updated"
 
 type WebhookSettings struct {
 	Events     []string   `json:"events"`

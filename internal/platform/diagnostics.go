@@ -129,7 +129,7 @@ func (s *Server) claimDiagnostic(w http.ResponseWriter, r *http.Request) {
 	var out *contract.Diagnostic
 	err = s.Store.Write(r.Context(), storage.Normal, func(tx *sql.Tx) error {
 		// Recheck owner and current group access at dispatch. Requests expire in 2 minutes.
-		q := `SELECT d.id,d.payload FROM cp_diagnostics d JOIN cp_rules r ON r.id=d.rule_id JOIN cp_users u ON u.id=d.user_id WHERE d.node_id=? AND d.created_at>? AND (d.status='pending' OR (d.status='running' AND d.claimed_at<?)) AND r.deleted=0 AND u.disabled=0 AND (u.role='admin' OR EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id)) ORDER BY d.created_at,d.id LIMIT 1`
+		q := `SELECT d.id,d.payload FROM cp_diagnostics d JOIN cp_rules r ON r.id=d.rule_id JOIN cp_users u ON u.id=d.user_id WHERE d.node_id=? AND d.created_at>? AND (d.status='pending' OR (d.status='running' AND d.claimed_at<?)) AND r.deleted=0 AND u.disabled=0 AND (u.role='admin' OR EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=u.id)))) ORDER BY d.created_at,d.id LIMIT 1`
 		var id, raw string
 		e := tx.QueryRowContext(r.Context(), s.q(q), node, time.Now().Add(-2*time.Minute).Unix(), time.Now().Add(-30*time.Second).Unix()).Scan(&id, &raw)
 		if errors.Is(e, sql.ErrNoRows) {

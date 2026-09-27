@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net/http"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
@@ -24,7 +25,7 @@ func (s *Server) exits(w http.ResponseWriter, r *http.Request) {
 	where := ""
 	args := []any{}
 	if actor.Role != "admin" {
-		where = " WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=e.group_id AND iu.id=?"
+		where = " WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=iu.id)) WHERE gig.group_id=e.group_id AND iu.id=?"
 		args = append(args, actor.ID)
 		where += tokenGroupScope(actor, "gig.group_id", &args) + ")"
 	}
@@ -34,7 +35,7 @@ func (s *Server) exits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args = append(args, n, o)
-	rows, err := s.Store.DB.QueryContext(r.Context(), s.q("SELECT e.payload,n.last_seen FROM cp_exits e JOIN cp_nodes n ON n.id=e.node_id"+where+" ORDER BY e.id LIMIT ? OFFSET ?"), args...)
+	rows, err := s.Store.DB.QueryContext(r.Context(), s.q("SELECT e.payload,n.last_seen,g.owner_id FROM cp_exits e JOIN cp_nodes n ON n.id=e.node_id JOIN cp_groups g ON g.id=e.group_id"+where+" ORDER BY e.id LIMIT ? OFFSET ?"), args...)
 	if err != nil {
 		fail(w, 500, "exit query failed")
 		return
@@ -44,8 +45,9 @@ func (s *Server) exits(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var raw string
 		var seen int64
+		var owner string
 		var e contract.Exit
-		if rows.Scan(&raw, &seen) != nil || json.Unmarshal([]byte(raw), &e) != nil {
+		if rows.Scan(&raw, &seen, &owner) != nil || json.Unmarshal([]byte(raw), &e) != nil {
 			fail(w, 500, "exit query failed")
 			return
 		}
@@ -54,7 +56,7 @@ func (s *Server) exits(w http.ResponseWriter, r *http.Request) {
 		for i := range e.Tunnel.Chain {
 			e.Tunnel.Chain[i].Token = ""
 		}
-		if actor.Role != "admin" {
+		if actor.Role != "admin" && owner != actor.ID {
 			e.Tunnel = contract.Tunnel{}
 		}
 		items = append(items, e)
@@ -67,6 +69,11 @@ func (s *Server) exits(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 	actor, _ := UserFromContext(r.Context())
+	userRoute := strings.Contains(r.URL.Path, "/my-exits")
+	if actor.Role != "admin" && !userRoute {
+		fail(w, 403, "普通用户只能管理自己的出口")
+		return
+	}
 	var e contract.Exit
 	if !decode(w, r, &e) {
 		return
@@ -96,6 +103,20 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 		}
 		if !group.CanHostExit() {
 			return errors.New("出口节点只能关联出口类型的设备组")
+		}
+		if actor.Role != "admin" {
+			if group.OwnerID != actor.ID {
+				return errors.New("只有出口设备组所有者可以管理该出口")
+			}
+			if !create {
+				var oldGroup string
+				if scanErr := tx.QueryRowContext(r.Context(), s.q("SELECT group_id FROM cp_exits WHERE id=?"), e.ID).Scan(&oldGroup); scanErr != nil {
+					return scanErr
+				}
+				if oldGroup != e.GroupID {
+					return errors.New("普通用户不能移动已有出口")
+				}
+			}
 		}
 		if group.Type == contract.GroupExit && len(e.Tunnel.Chain) > 0 {
 			return errors.New("多跳路由请配置链式出口设备组")
@@ -177,6 +198,12 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 	if err := tx.QueryRowContext(ctx, s.q("SELECT role FROM cp_users WHERE id=?"), rule.UserID).Scan(&role); err != nil {
 		return "", err
 	}
+	if g.OwnerID != "" {
+		if g.OwnerID != rule.UserID {
+			return "", errors.New("personal exit belongs to another user")
+		}
+		g.Multiplier = "1"
+	}
 	if role != "admin" {
 		authorized, err := s.groupAuthorized(ctx, tx, rule.ExitGroupID, rule.UserID)
 		if err != nil || !authorized {
@@ -256,6 +283,7 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 	for rows.Next() {
 		var raw string
 		var seen int64
+
 		var e contract.Exit
 		if err = rows.Scan(&raw, &seen); err != nil {
 			return "", err

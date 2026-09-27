@@ -19,7 +19,7 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 		return err
 	}
 	return s.Store.Write(ctx, storage.Critical, func(tx *sql.Tx) error {
-		rows, e := tx.QueryContext(ctx, s.q(`SELECT r.payload,g.payload,u.disabled,u.role,CASE WHEN EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id) THEN 1 ELSE 0 END FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
+		rows, e := tx.QueryContext(ctx, s.q(`SELECT r.payload,g.payload,u.disabled,u.role,CASE WHEN EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=u.id))) THEN 1 ELSE 0 END FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
 		if e != nil {
 			return e
 		}

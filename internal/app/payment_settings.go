@@ -22,7 +22,19 @@ import (
 type PaymentSettings struct {
 	Version  int64                           `json:"version"`
 	Channels map[string]PaymentConfiguration `json:"channels"`
+	Telegram TelegramSettings                `json:"telegram"`
 }
+
+type TelegramSettings struct {
+	BotToken        string            `json:"bot_token"`
+	Rates           map[string]string `json:"rates"`
+	Disabled        bool              `json:"disabled"`
+	WalletAddresses map[string]string `json:"wallet_addresses"`
+}
+
+// TelegramNetworks is the set of network names accepted by /pay. Keeping the
+// list in one place makes the bot command, validation and settings form agree.
+var TelegramNetworks = []string{"trc20-usdt", "erc20-usdt", "bep20-usdt", "polygon-usdt", "trx", "pol", "eth", "bnb"}
 
 // PaymentChannelView 是回给界面的通道配置。密钥只回一个「有没有」，绝不回明文；
 // 保存时留空表示沿用已经存下来的那一把。
@@ -35,32 +47,84 @@ type PaymentChannelView struct {
 type PaymentSettingsView struct {
 	Version  int64                         `json:"version"`
 	Channels map[string]PaymentChannelView `json:"channels"`
+	Telegram TelegramSettingsView          `json:"telegram"`
+}
+
+type TelegramSettingsView struct {
+	BotToken        string            `json:"bot_token"`
+	BotTokenSet     bool              `json:"bot_token_set"`
+	Rates           map[string]string `json:"rates"`
+	Disabled        bool              `json:"disabled"`
+	WalletAddresses map[string]string `json:"wallet_addresses"`
 }
 
 func migratePaymentSettings(ctx context.Context, store *storage.Store) error {
-	return storage.MigrateNamespace(ctx, store.DB, store.Dialect, "payment_settings", 1, func(conn *sql.Conn) error {
-		_, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS cp_payment_settings(id BIGINT PRIMARY KEY,payload TEXT NOT NULL,version BIGINT NOT NULL)`)
-		return err
+	return storage.MigrateNamespace(ctx, store.DB, store.Dialect, "payment_settings", 3, func(conn *sql.Conn) error {
+		if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS cp_payment_settings(id BIGINT PRIMARY KEY,payload TEXT NOT NULL,version BIGINT NOT NULL)`); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS cp_telegram_login_tokens(token_hash VARCHAR(64) PRIMARY KEY,chat_id VARCHAR(128) NOT NULL,expires_at BIGINT NOT NULL,used INTEGER NOT NULL DEFAULT 0)`); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS cp_telegram_bindings(chat_id VARCHAR(128) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,updated_at BIGINT NOT NULL)`); err != nil {
+			return err
+		}
+		_, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS cp_telegram_payment_intents(id VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,chat_id VARCHAR(128) NOT NULL,network VARCHAR(32) NOT NULL,amount BIGINT NOT NULL,address TEXT NOT NULL,status VARCHAR(32) NOT NULL,created_at BIGINT NOT NULL,transaction_id VARCHAR(128) NOT NULL DEFAULT '')`)
+		if err != nil {
+			return err
+		}
+		for _, col := range []struct{ table, name, def string }{
+			{"cp_telegram_login_tokens", "user_id", "VARCHAR(64) NOT NULL DEFAULT ''"},
+			{"cp_telegram_payment_intents", "coin_amount", "VARCHAR(100) NOT NULL DEFAULT ''"},
+		} {
+			if err := storage.EnsureColumn(ctx, conn, store.Dialect, col.table, col.name, col.def); err != nil {
+				return err
+			}
+		}
+		for _, query := range []string{
+			"CREATE TABLE IF NOT EXISTS cp_telegram_offsets(bot_id VARCHAR(64) PRIMARY KEY,update_offset BIGINT NOT NULL)",
+			"CREATE TABLE IF NOT EXISTS cp_telegram_receipts(receipt_id VARCHAR(160) PRIMARY KEY,order_id VARCHAR(64) NOT NULL)",
+		} {
+			if _, err := conn.ExecContext(ctx, query); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
 // loadPaymentSettings 读回保存过的通道配置。没有那一行就返回空的一份 —— 空表示
 // 「面板上还没配过」，与「配了但一条通道都没有」是同一件事，不额外区分。
 func loadPaymentSettings(ctx context.Context, store *storage.Store) (PaymentSettings, error) {
-	settings := PaymentSettings{Channels: map[string]PaymentConfiguration{}}
+	settings := PaymentSettings{Channels: map[string]PaymentConfiguration{}, Telegram: TelegramSettings{WalletAddresses: map[string]string{}}}
 	var raw string
 	err := store.DB.QueryRowContext(ctx, store.Rebind(`SELECT payload,version FROM cp_payment_settings WHERE id=1`)).Scan(&raw, &settings.Version)
 	if errors.Is(err, sql.ErrNoRows) {
-		return PaymentSettings{Channels: map[string]PaymentConfiguration{}}, nil
+		return PaymentSettings{Channels: map[string]PaymentConfiguration{}, Telegram: TelegramSettings{WalletAddresses: map[string]string{}}}, nil
 	}
 	if err != nil {
 		return settings, err
 	}
-	if err = json.Unmarshal([]byte(raw), &settings.Channels); err != nil {
+	var payload struct {
+		Channels map[string]PaymentConfiguration `json:"channels"`
+		Telegram TelegramSettings                `json:"telegram"`
+	}
+	if err = json.Unmarshal([]byte(raw), &payload); err != nil {
 		return settings, err
 	}
+	if payload.Channels == nil {
+		// v1 stored the channel map directly; accept it during upgrade.
+		if err = json.Unmarshal([]byte(raw), &payload.Channels); err != nil {
+			return settings, err
+		}
+	}
+	settings.Channels = payload.Channels
+	settings.Telegram = payload.Telegram
 	if settings.Channels == nil {
 		settings.Channels = map[string]PaymentConfiguration{}
+	}
+	if settings.Telegram.WalletAddresses == nil {
+		settings.Telegram.WalletAddresses = map[string]string{}
 	}
 	return settings, nil
 }
@@ -68,8 +132,11 @@ func loadPaymentSettings(ctx context.Context, store *storage.Store) (PaymentSett
 // savePaymentSettings 落盘并返回新的版本号。版本号是乐观锁：两个管理员同时在改，
 // 后一个会拿到冲突而不是把人家的改动覆盖掉。audit 与写入在同一个事务里 ——
 // 改了通道却查不到是谁改的，比不改更糟。
-func savePaymentSettings(ctx context.Context, store *storage.Store, expected int64, channels map[string]PaymentConfiguration, audit func(context.Context, *sql.Tx) error) (int64, error) {
-	payload, err := json.Marshal(channels)
+func savePaymentSettings(ctx context.Context, store *storage.Store, expected int64, settings PaymentSettings, audit func(context.Context, *sql.Tx) error) (int64, error) {
+	payload, err := json.Marshal(struct {
+		Channels map[string]PaymentConfiguration `json:"channels"`
+		Telegram TelegramSettings                `json:"telegram"`
+	}{settings.Channels, settings.Telegram})
 	if err != nil {
 		return expected, err
 	}
@@ -119,7 +186,7 @@ func (a *App) paymentSettingsView(ctx context.Context) (PaymentSettingsView, err
 	if err != nil {
 		return PaymentSettingsView{}, err
 	}
-	view := PaymentSettingsView{Version: stored.Version, Channels: map[string]PaymentChannelView{}}
+	view := PaymentSettingsView{Version: stored.Version, Channels: map[string]PaymentChannelView{}, Telegram: TelegramSettingsView{BotTokenSet: stored.Telegram.BotToken != "", Disabled: stored.Telegram.Disabled, Rates: stored.Telegram.Rates, WalletAddresses: stored.Telegram.WalletAddresses}}
 	// 五种协议一个不少地列出来：调用方不必自己维护这份清单，界面上没配过的那几条
 	// 也能直接渲染成空表单。
 	for _, name := range paymentChannelNames {
@@ -195,12 +262,51 @@ func (a *App) putPaymentSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		next[name] = cfg.PaymentConfiguration
 	}
+	telegram := TelegramSettings{BotToken: strings.TrimSpace(in.Telegram.BotToken), Disabled: in.Telegram.Disabled, Rates: in.Telegram.Rates, WalletAddresses: map[string]string{}}
+	if telegram.BotToken != "" && !telegramBotTokenPattern.MatchString(telegram.BotToken) {
+		replyError(w, 400, "invalid Telegram Bot Token")
+		return
+	}
+	if telegram.BotToken == "" {
+		telegram.BotToken = stored.Telegram.BotToken
+	}
+	if telegram.Rates == nil {
+		telegram.Rates = stored.Telegram.Rates
+	}
+	for network, rate := range telegram.Rates {
+		if !validTelegramNetwork(network) {
+			replyError(w, 400, "invalid Telegram rate network")
+			return
+		}
+		if strings.TrimSpace(rate) != "" {
+			if _, err := telegramCoinAmount(100, rate, network); err != nil {
+				replyError(w, 400, "invalid Telegram exchange rate")
+				return
+			}
+		}
+	}
+	if in.Telegram.WalletAddresses == nil {
+		for network, address := range stored.Telegram.WalletAddresses {
+			telegram.WalletAddresses[network] = address
+		}
+	}
+	for network, address := range in.Telegram.WalletAddresses {
+		network = strings.ToLower(strings.TrimSpace(network))
+		address = strings.TrimSpace(address)
+		if !validTelegramNetwork(network) || len(address) > 256 {
+			replyError(w, 400, "invalid Telegram wallet address")
+			return
+		}
+		if address != "" {
+			telegram.WalletAddresses[network] = address
+		}
+	}
 	// 先建一遍再存：校验不过就什么都不写，生效的还是原来那一份。
 	if err := a.applyPaymentChannels(next); err != nil {
 		replyError(w, 400, err.Error())
 		return
 	}
-	_, err = savePaymentSettings(r.Context(), a.store, in.Version, next, func(ctx context.Context, tx *sql.Tx) error {
+	_, err = savePaymentSettings(r.Context(), a.store, in.Version, PaymentSettings{Channels: next, Telegram: telegram}, func(ctx context.Context, tx *sql.Tx) error {
 		return a.Platform.AuditTx(ctx, tx, actor, "payment.update", "payments")
 	})
 	if err != nil {
@@ -215,6 +321,15 @@ func (a *App) putPaymentSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	replyJSON(w, 200, view)
+}
+
+func validTelegramNetwork(network string) bool {
+	for _, n := range TelegramNetworks {
+		if n == network {
+			return true
+		}
+	}
+	return false
 }
 
 // validChannelName 只认面板列出来的那几种协议：名字会进回调路径与适配器工厂，

@@ -48,6 +48,7 @@ type IdentityGroup struct {
 type Group struct {
 	ID               string         `json:"id"`
 	Name             string         `json:"name"`
+	OwnerID          string         `json:"owner_id,omitempty"`
 	Type             string         `json:"type"`
 	DirectPolicy     string         `json:"direct_policy,omitempty"`
 	ChainGroupIDs    []string       `json:"chain_group_ids,omitempty"`

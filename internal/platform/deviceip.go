@@ -79,7 +79,7 @@ func (s *Server) ownerDeviceIPs(ctx context.Context, u contract.User, group stri
 	query := `SELECT n.id,n.payload,g.id,g.payload FROM cp_nodes n JOIN cp_node_groups ng ON ng.node_id=n.id JOIN cp_groups g ON g.id=ng.group_id`
 	args := []any{}
 	if u.Role != "admin" {
-		query += ` WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=ng.group_id AND iu.id=?`
+		query += ` WHERE EXISTS(SELECT 1 FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=iu.id)) WHERE gig.group_id=ng.group_id AND iu.id=?`
 		args = append(args, u.ID)
 		query += tokenGroupScope(u, "gig.group_id", &args) + ")"
 	}

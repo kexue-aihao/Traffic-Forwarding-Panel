@@ -16,7 +16,7 @@ import (
 )
 
 // Version is injected at release build time using -ldflags -X.
-var Version = "0.1.22"
+var Version = "0.1.23"
 
 func (a *Agent) capabilities() []string {
 	result := capabilities()

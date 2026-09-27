@@ -72,16 +72,17 @@ type Order struct {
 }
 type Writer func(context.Context, func(*sql.Tx) error) error
 type Service struct {
-	PaymentAllowed func(context.Context, int64) error
-	DB             *sql.DB
-	Dialect        string
-	Write          Writer
-	Now            func() time.Time
-	reconcileMu    sync.Mutex
-	CheckAccount   func(context.Context, *sql.Tx, string) error
-	webhookClient  *http.Client
-	channelSet     channelSet
-	EventVisible   func(context.Context, *sql.Tx, string, string, string, bool) (bool, error)
+	PaymentAllowed  func(context.Context, int64) error
+	DB              *sql.DB
+	Dialect         string
+	Write           Writer
+	Now             func() time.Time
+	reconcileMu     sync.Mutex
+	CheckAccount    func(context.Context, *sql.Tx, string) error
+	PaymentReceived func(context.Context, *sql.Tx, string, string, int64) error
+	webhookClient   *http.Client
+	channelSet      channelSet
+	EventVisible    func(context.Context, *sql.Tx, string, string, string, bool) (bool, error)
 }
 
 var ErrAccountDisabled = errors.New("account disabled")

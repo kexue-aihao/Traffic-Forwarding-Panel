@@ -141,7 +141,7 @@ func (s *Service) CreateNotification(ctx context.Context, user, rawURL string, e
 	if !validNotificationURL(rawURL, format) {
 		return WebhookSubscription{}, "", errors.New("invalid notification destination or format")
 	}
-	if len(rawURL) > 2048 || !validWebhookURL(rawURL) || len(events) == 0 || len(events) > 32 {
+	if len(rawURL) > 2048 || (format != "telegram" && !validWebhookURL(rawURL)) || len(events) == 0 || len(events) > 32 {
 		return WebhookSubscription{}, "", errors.New("webhook requires HTTPS URL and events")
 	}
 	if err := validateWebhookEvents(events); err != nil {
@@ -217,6 +217,7 @@ func (s *Service) ListWebhooks(ctx context.Context, user string) ([]WebhookSubsc
 			until := time.UnixMilli(muted).UTC()
 			v.MutedUntil = &until
 		}
+		v.URL = notificationListURL(v.URL, v.Format)
 		v.Events = strings.Split(events, ",")
 		v.Enabled = enabled != 0
 		v.CreatedAt = parse(created)

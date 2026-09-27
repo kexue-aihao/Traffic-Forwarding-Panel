@@ -99,6 +99,8 @@ const importMode = ref("create"),
   >([]),
   previewSource = ref(""),
   hookFormat = ref("webhook"),
+  telegramToken = ref(""),
+  telegramChatID = ref(""),
   purchaseID = ref(""),
   purchaseAmount = ref(""),
   purchaseReason = ref(""),
@@ -168,21 +170,25 @@ const hookEvents = ref("*"),
 const eventOptions = [
   { value: "*", label: "全部事件" },
   { value: "node.offline,node.recovered", label: "节点离线和恢复" },
+  { value: "node.created,node.online", label: "新增机器和上线" },
   {
     value: "entitlement.expiring,entitlement.expired,entitlement.low_quota",
     label: "套餐到期和低配额",
   },
   {
     value: "wallet.recharge,refund.completed,refund.canceled",
-    label: "充值和退款",
+    label: "财务收款和退款",
   },
 ];
 const eventNames: Record<string, string> = {
   "node.offline": "节点离线",
   "node.recovered": "节点恢复",
+  "node.online": "节点上线",
+  "node.created": "新增机器",
   "entitlement.expiring": "套餐即将到期",
   "entitlement.expired": "套餐已到期",
   "entitlement.low_quota": "套餐剩余流量不足",
+  "payment.received": "财务收款（管理员）",
   "wallet.recharge": "充值到账",
   "wallet.purchase": "购买扣款",
   "entitlement.purchased": "套餐已购买",
@@ -358,16 +364,39 @@ async function bindInvitation() {
 }
 async function createHook() {
   await run(async () => {
+    const url =
+      hookFormat.value === "telegram"
+        ? (() => {
+            const token = telegramToken.value.trim();
+            const chatID = telegramChatID.value.trim();
+            if (!token || !chatID) {
+              throw Error("请输入 Telegram Bot Token 和群组 Chat ID。");
+            }
+            return `https://api.telegram.org/bot${token}/sendMessage?chat_id=${encodeURIComponent(chatID)}`;
+          })()
+        : hookURL.value.trim();
     const x = await api<{ secret: string }>("/webhooks", "POST", {
-      url: hookURL.value,
+      url,
       format: hookFormat.value,
       events: hookEvents.value.split(","),
     });
     secret.value = x.secret;
     secretLabel.value = "通知签名密钥（仅显示本次）";
     hookURL.value = "";
+    telegramToken.value = "";
+    telegramChatID.value = "";
     await load();
   });
+}
+
+function hookDestination(h: Hook) {
+  if (h.format !== "telegram") return h.url;
+  try {
+    const chatID = new URL(h.url).searchParams.get("chat_id") || "未知";
+    return `Telegram 机器人 · Chat ID ${chatID}`;
+  } catch {
+    return "Telegram 机器人";
+  }
 }
 async function removeHook(id: string) {
   await run(async () => {
@@ -572,9 +601,31 @@ onMounted(load);
             <option value="webhook">签名 Webhook</option>
             <option value="feishu">飞书群机器人</option>
             <option value="discord">Discord Webhook</option>
+            <option value="telegram">Telegram 机器人</option>
           </Select></label
         >
-        <label
+        <template v-if="hookFormat === 'telegram'">
+          <label
+            >Bot Token<input
+              v-model="telegramToken"
+              type="password"
+              placeholder="从 @BotFather 获取的 Token"
+              required
+              maxlength="128"
+              autocomplete="off" /></label
+          ><label
+            >群组 Chat ID<input
+              v-model="telegramChatID"
+              placeholder="例如 -1001234567890 或 @频道用户名"
+              required
+              maxlength="128"
+              autocomplete="off" /></label
+          ><p class="small muted">
+            先在 Telegram 的 @BotFather 创建机器人，再把机器人拉入群组并授予发消息权限。Chat ID
+            可通过 Telegram Bot API 的 getUpdates 获取。
+          </p>
+        </template>
+        <label v-else
           >接收地址<input
             v-model="hookURL"
             type="url"
@@ -592,7 +643,7 @@ onMounted(load);
       <p v-if="!hooks.length" class="muted">暂无通知地址。</p>
       <div v-for="h in hooks" :key="h.id" class="card">
         <p>
-          {{ h.url }} · {{ h.enabled ? "已启用" : "已停用"
+          {{ hookDestination(h) }} · {{ h.enabled ? "已启用" : "已停用"
           }}<span v-if="hookMuted(h)">
             · 静默至 {{ formatDateTime(h.muted_until!) }}</span
           >

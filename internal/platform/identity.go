@@ -396,7 +396,7 @@ func (s *Server) groupVisible(ctx context.Context, q queryRower, u contract.User
 		return true, nil
 	}
 	args := []any{group, u.ID}
-	query := `SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND iu.id=?` + tokenGroupScope(u, "gig.group_id", &args)
+	query := `SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users iu ON iu.identity_group_id=gig.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=iu.id)) WHERE gig.group_id=? AND iu.id=?` + tokenGroupScope(u, "gig.group_id", &args)
 	var n int
 	if err := q.QueryRowContext(ctx, s.q(query), args...).Scan(&n); err != nil {
 		return false, err
@@ -472,7 +472,7 @@ func (s *Server) rotateNodeToken(w http.ResponseWriter, r *http.Request) {
 // userGroups 列出某个账号有权访问的设备组。只用于校验凭据范围 —— 这条判断问的
 // 是「这个账号能不能看到」，与调用方自己的身份无关。
 func (s *Server) userGroups(ctx context.Context, user string) (map[string]bool, error) {
-	rows, e := s.Store.DB.QueryContext(ctx, s.q(`SELECT gig.group_id FROM cp_group_identity_groups gig JOIN cp_users u ON u.identity_group_id=gig.identity_group_id WHERE u.id=?`), user)
+	rows, e := s.Store.DB.QueryContext(ctx, s.q(`SELECT gig.group_id FROM cp_group_identity_groups gig JOIN cp_users u ON u.identity_group_id=gig.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=u.id)) WHERE u.id=?`), user)
 	if e != nil {
 		return nil, e
 	}

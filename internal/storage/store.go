@@ -478,6 +478,17 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=11").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		if err = EnsureColumn(ctx, conn, s.Dialect, "cp_groups", "owner_id", "VARCHAR(64) NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(11)"); err != nil {
+			return err
+		}
+	}
 	if s.Dialect == "sqlite" {
 		_, err = conn.ExecContext(ctx, "COMMIT")
 	}

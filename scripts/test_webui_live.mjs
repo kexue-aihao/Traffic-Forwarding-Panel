@@ -1199,10 +1199,12 @@ try {
         await admin.request.get(base + "/api/v1/payment-settings")
       ).json();
       assert.equal(beforePayment.channels.epay.configured, false, "初始没有配置任何支付通道");
+      await pickOption(admin, "支付协议", "cryptomus");
+      await pickOption(admin, "支付协议", "epay");
       const epayCard = admin
         .locator("details.payment-channel")
         .filter({ hasText: "易支付 EPay" });
-      await epayCard.locator("summary").first().click();
+      await epayCard.getByLabel("网关地址").waitFor();
       await epayCard.getByLabel("网关地址").fill("https://pay.example.test");
       await epayCard.getByLabel("商户号").fill("merchant-1");
       await epayCard.getByLabel("商户密钥").fill("merchant-secret-key");

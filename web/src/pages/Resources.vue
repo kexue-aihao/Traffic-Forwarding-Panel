@@ -1137,10 +1137,8 @@ const labels: Record<string, string> = {
               <th
                 v-if="
                   resource === 'rules' ||
-                  (['groups', 'identity-groups', 'users'].includes(
-                    resource,
-                  ) &&
-                    canManage)
+                  resource === 'groups' ||
+                  (['identity-groups', 'users'].includes(resource) && canManage)
                 "
               >
                 操作
@@ -1175,16 +1173,14 @@ const labels: Record<string, string> = {
               <td
                 v-if="
                   resource === 'rules' ||
-                  (['groups', 'identity-groups', 'users'].includes(
-                    resource,
-                  ) &&
-                    canManage)
+                  resource === 'groups' ||
+                  (['identity-groups', 'users'].includes(resource) && canManage)
                 "
                 data-label="操作"
               >
                 <div class="toolbar">
                   <button
-                    v-if="resource === 'groups' && row.type !== 'chain_exit'"
+                    v-if="resource === 'groups' && row.type !== 'chain_exit' && (canManage || row.owner_id === state.user?.id)"
                     @click="onboardGroup(row)"
                   >
                     接入设备
@@ -1196,7 +1192,7 @@ const labels: Record<string, string> = {
                     设备
                   </button>
                   <button
-                    v-if="resource === 'groups'"
+                    v-if="resource === 'groups' && canManage"
                     @click="openAdvanced(row)"
                   >
                     高级设置
@@ -1211,12 +1207,12 @@ const labels: Record<string, string> = {
                     网络诊断
                   </button>
                   <button
-                    v-if="resource !== 'users'"
+                    v-if="resource !== 'users' && (resource === 'rules' || canManage)"
                     @click="open(row)"
                   >
                     编辑</button
                   ><button
-                    v-if="['rules', 'groups'].includes(resource)"
+                    v-if="resource === 'rules' || (resource === 'groups' && canManage)"
                     class="danger"
                     @click="
                       deleting = row;

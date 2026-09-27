@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import Select from "../components/Select.vue";
 import Modal from "../components/Modal.vue";
+import OnboardPanel from "../components/OnboardPanel.vue";
 import { api, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
 import { isPhysicalExitGroup } from "../core/groups";
@@ -28,8 +29,10 @@ interface Choice {
   id: string;
   name: string;
   type?: string;
+  owner_id?: string;
 }
 const admin = computed(() => adminSite && state.user?.role === "admin"),
+  userExit = computed(() => !!state.user && !admin.value),
   items = ref<Exit[]>([]),
   groups = ref<Choice[]>([]),
   nodes = ref<Choice[]>([]),
@@ -38,6 +41,12 @@ const admin = computed(() => adminSite && state.user?.role === "admin"),
   busy = ref(false),
   page = ref(1),
   total = ref(0);
+const groupDialog = ref(false),
+  groupName = ref("我的出口设备组"),
+  groupBusy = ref(false),
+  groupError = ref(""),
+  groupAccessKey = ref(""),
+  groupID = ref("");
 async function all(path: string) {
   const out: Choice[] = [];
   for (let p = 1; ; p++) {
@@ -67,7 +76,7 @@ async function open(v?: Exit) {
       all("/groups"),
       all("/nodes"),
     ]);
-    groups.value = groups.value.filter(isPhysicalExitGroup);
+    groups.value = groups.value.filter((g) => isPhysicalExitGroup(g) && (admin.value || g.owner_id === state.user?.id));
     form.value = v
       ? (JSON.parse(JSON.stringify(v)) as Exit)
       : {
@@ -91,8 +100,9 @@ async function save() {
   busy.value = true;
   error.value = "";
   try {
+    const base = admin.value ? "/exits" : "/my-exits";
     await api(
-      "/exits" + (form.value.id ? "/" + encodeURIComponent(form.value.id) : ""),
+      base + (form.value.id ? "/" + encodeURIComponent(form.value.id) : ""),
       form.value.id ? "PUT" : "POST",
       form.value,
     );
@@ -103,6 +113,37 @@ async function save() {
     error.value = errorText(e);
   } finally {
     busy.value = false;
+  }
+}
+async function createMyExitGroup() {
+  if (groupBusy.value) return;
+  groupBusy.value = true;
+  groupError.value = "";
+  try {
+    const group = await api<{ id: string }>("/my-exit-groups", "POST", {
+      name: groupName.value.trim(),
+      type: "exit",
+      blocked_protocols: [],
+      disabled_networks: [],
+      disabled_transports: [],
+      chain_group_ids: [],
+      multiplier: "1",
+      port_min: 10000,
+      port_max: 60000,
+      max_rules: 0,
+    });
+    groupID.value = group.id;
+    groupAccessKey.value = (
+      await api<{ join_key: string }>(
+        `/groups/${encodeURIComponent(group.id)}/join-key`,
+      )
+    ).join_key;
+    groupDialog.value = true;
+    await load();
+  } catch (e) {
+    groupError.value = errorText(e);
+  } finally {
+    groupBusy.value = false;
   }
 }
 async function move(n: number) {
@@ -116,11 +157,14 @@ onMounted(load);
     <div class="page-heading">
       <div>
         <p class="eyebrow">ROUTING</p>
-        <h1>出口管理</h1>
+        <h1>单端出口</h1>
       </div>
       <div class="toolbar">
         <button @click="load">刷新</button
-        ><button v-if="admin" class="primary" @click="open()">新增出口</button>
+        ><button v-if="admin || userExit" class="primary" @click="open()">
+          {{ admin ? "新增出口" : "绑定我的出口设备" }}
+        </button>
+        <button v-if="userExit" @click="createMyExitGroup">新增我的出口设备组</button>
       </div>
     </div>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
@@ -129,12 +173,15 @@ onMounted(load);
         规则可在授权出口组内按权重自动选择在线节点，也可指定出口。计费倍率为入口组
         × 出口组；在线状态依据节点心跳。
       </p>
+      <p v-if="userExit" class="muted small">
+        普通用户的出口只归自己使用，不计入额外费用。先创建出口设备组并执行接入命令，再绑定已上线的出口设备。
+      </p>
       <p v-if="!items.length">暂无授权出口。</p>
       <div v-for="v in items" :key="v.id" class="task-row">
         <span
           >{{ v.name }} · {{ v.transport }} · 权重 {{ v.weight }} ·
           {{ v.enabled ? (v.online ? "在线" : "离线") : "已停用" }}</span
-        ><button v-if="admin" @click="open(v)">编辑出口</button>
+        ><button @click="open(v)">编辑出口</button>
       </div>
       <div class="toolbar">
         <button :disabled="page <= 1" @click="move(page - 1)">上一页</button
@@ -207,5 +254,18 @@ onMounted(load);
         </div>
       </form></Modal
     >
+    <Modal
+      v-if="groupDialog"
+      title="接入我的出口设备"
+      :busy="groupBusy"
+      @close="groupDialog = false"
+    >
+      <p v-if="groupError" class="error" role="alert">{{ groupError }}</p>
+      <p class="muted small">设备组 {{ groupID }} 已创建。把下面的命令复制到你的出口机器上，注册成功后回到本页绑定出口设备。</p>
+      <OnboardPanel :access-key="groupAccessKey" />
+      <div class="form-actions">
+        <button type="button" @click="groupDialog = false">完成</button>
+      </div>
+    </Modal>
   </section>
 </template>

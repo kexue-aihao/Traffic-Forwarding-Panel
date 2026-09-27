@@ -51,7 +51,7 @@ func (s *Server) identityGroupForUpdate(ctx context.Context, tx *sql.Tx, groupID
 
 func (s *Server) groupAuthorized(ctx context.Context, q rowQuerier, groupID, userID string) (bool, error) {
 	var count int
-	err := q.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users u ON u.identity_group_id=gig.identity_group_id WHERE gig.group_id=? AND u.id=?`), groupID, userID).Scan(&count)
+	err := q.QueryRowContext(ctx, s.q(`SELECT COUNT(*) FROM cp_group_identity_groups gig JOIN cp_users u ON u.identity_group_id=gig.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=u.id)) WHERE gig.group_id=? AND u.id=?`), groupID, userID).Scan(&count)
 	return count > 0, err
 }
 

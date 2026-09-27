@@ -219,4 +219,15 @@ Agent 诊断需 `diagnostics-v1`，只探测该节点当前有授权、已启用
 
 购买退款按累计比例计算配额和佣金回冲，不支持扣回已使用/预留配额；已结算佣金余额不足则整笔回滚。旧购买无来源分摊时不能自动退款。外部支付退款仍由管理员凭实际商户退款证据确认。`Commission.refunded_cents` 返回已回冲金额字符串，手工结算/回冲只处理剩余部分。
 
-通知 `format` 为 `webhook`（默认）、`feishu` 或 `discord`。飞书仅允许 `https://open.feishu.cn/open-apis/bot/v2/hook/…`，Discord 仅允许 `https://discord.com/api/webhooks/…`；保留原 HTTPS/DNS/重定向限制、outbox 重试和权限复核。聊天消息只含事件类型及编号，Discord 禁用 mentions，飞书检查响应业务码；HMAC 对实际投递体签名。事件新增 `wallet.purchase_refund`。
+通知 `format` 为 `webhook`（默认）、`feishu`、`discord` 或 `telegram`。飞书仅允许 `https://open.feishu.cn/open-apis/bot/v2/hook/…`，Discord 仅允许 `https://discord.com/api/webhooks/…`；Telegram 使用 `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<CHAT_ID>`，只接受 `api.telegram.org`、`sendMessage` 路径和单个 `chat_id` 参数。保留原 HTTPS/DNS/重定向限制、outbox 重试和权限复核。聊天消息只含事件类型及编号，Discord 禁用 mentions，飞书检查响应业务码，Telegram 检查响应 `ok`；HMAC 对实际投递体签名。Bot Token 属于敏感凭据，页面列表只显示 Telegram Chat ID。事件新增 `wallet.purchase_refund`。
+
+站点设置还可配置运营方 Telegram Bot Token 与 `trc20-usdt`、`erc20-usdt`、`bep20-usdt`、`polygon-usdt`、`trx`、`pol`、`eth`、`bnb` 收款地址。机器人支持 `/login` 一次性账号绑定链接，以及 `/pay <网络> <金额>` 充值意图；手动地址转账必须通过管理员确认接口 `POST /admin/telegram/payments/{id}/confirm` 后才会入账。
+
+### v0.1.23 Telegram 与个人出口
+
+- POST /my-exit-groups 创建当前用户的单端出口组，服务端固定倍率为 1；同身份组其他用户不可见、不可用。入口套餐及正常流量计费保留，不增加出口倍率。POST /my-exits、PUT /my-exits/{id} 管理自己的出口。
+- Telegram 命令仅接受用户与机器人私聊。首次 /login 链接需要先完成站点正常登录，再确认绑定；已绑定时生成免密临时链接。链接十分钟有效，GET 不消费，带同源校验的 POST 原子消费并创建会话。停用账号不可登录。
+- PaymentSettings.telegram 增加 disabled 和 rates。rates[network] 是管理员填写的每币 CNY 价格，钱包仍按 CNY 整数分结算；未配置汇率不允许下单。/pay <network> 显示地址，/pay <network> <CNY金额> 创建固定报价订单；重放同一 Telegram update 不重复创建。
+- GET /admin/telegram/payments 返回最近 100 笔人工充值意图。POST /admin/telegram/payments/{id}/confirm 要求 32 字节十六进制交易哈希；管理员须先在链上核实收款。核实、账本、通知、状态、审计在同一事务内提交；同链交易哈希跨币种不可重复入账。同订单同交易号重放不再计账。
+- payment.received 发送给启用的管理员；wallet.recharge 继续发送给充值用户。node.created、node.online、node.offline、node.recovered 覆盖新增、首次上线、离线与恢复。通知订阅在运营与任务配置 Bot Token / Chat ID。
+- 手动地址模式没有链上扫描或自动确认；需要管理员维护汇率并核实实际到账。私钥不存储在站点。
