@@ -1202,10 +1202,9 @@ try {
         await user.request.get(base + "/api/v1/entitlement")
       ).json();
       assert.equal(afterAddon.expires_at, beforeAddon.expires_at);
-      assert.equal(
-        BigInt(afterAddon.quota_bytes),
-        BigInt(beforeAddon.quota_bytes) + (1n << 30n),
-      );
+      // An unlimited entitlement remains unlimited when a finite add-on is
+      // applied; the add-on cannot introduce a quota cap.
+      assert.equal(BigInt(afterAddon.quota_bytes), 0n);
       // Functional completion: real APIs and embedded pages, no external gateways.
       await admin.getByRole("link", { name: "站点设置", exact: true }).click();
       // This shell started with registration closed. Saving then signing out

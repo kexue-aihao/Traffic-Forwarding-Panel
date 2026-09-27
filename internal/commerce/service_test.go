@@ -151,7 +151,7 @@ func TestUnlimitedPlanAllocatesMultipleLeases(t *testing.T) {
 		}
 	}
 	var allocated int64
-	if err = s.DB.QueryRow("SELECT allocated FROM commerce_entitlements WHERE user_id=?", "unlimited").Scan(&allocated); err != nil {
+	if err = s.DB.QueryRow(s.q("SELECT allocated FROM commerce_entitlements WHERE user_id=?"), "unlimited").Scan(&allocated); err != nil {
 		t.Fatal(err)
 	}
 	if allocated != 3*(16<<20) {
