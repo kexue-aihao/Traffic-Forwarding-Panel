@@ -4,13 +4,25 @@ export const advancedSections = [
     fields: [
       {
         key: "allowed_host",
+        label: "Host / SNI 白名单",
         value: [],
         description: "Host / SNI 白名单，与其他入站屏蔽选项冲突。",
       },
-      { key: "blocked_host", value: [], description: "Host / SNI 黑名单。" },
-      { key: "blocked_path", value: [], description: "HTTP Path 黑名单。" },
+      {
+        key: "blocked_host",
+        label: "Host / SNI 黑名单",
+        value: [],
+        description: "Host / SNI 黑名单。",
+      },
+      {
+        key: "blocked_path",
+        label: "HTTP Path 黑名单",
+        value: [],
+        description: "HTTP Path 黑名单。",
+      },
       {
         key: "blocked_protocol",
+        label: "应用协议屏蔽",
         value: [],
         description: "应用协议黑名单，当前支持 http、socks。",
       },
@@ -21,12 +33,14 @@ export const advancedSections = [
     fields: [
       {
         key: "tls_inbound_policy",
+        label: "TLS 入站策略",
         value: 0,
         description:
           "0：宽松模式，允许普通规则；1：只允许 TLS 入站规则；2：只允许 TLS 入站规则，且只允许管理员独立监听端口。",
       },
       {
         key: "tls_reject_empty_sni",
+        label: "拒绝空 SNI",
         value: false,
         description: "TLS 防扫策略，是否拒绝空 SNI 连接。",
       },
@@ -35,9 +49,15 @@ export const advancedSections = [
   {
     title: "UDP 选项",
     fields: [
-      { key: "disable_udp", value: false, description: "是否禁用 UDP。" },
+      {
+        key: "disable_udp",
+        label: "禁用 UDP",
+        value: false,
+        description: "是否禁用 UDP。",
+      },
       {
         key: "udp_over_tcp",
+        label: "UDP over TCP",
         value: false,
         description: "是否通过 TCP 承载 UDP；不能与 disable_udp 同时启用。",
       },
@@ -48,6 +68,7 @@ export const advancedSections = [
     fields: [
       {
         key: "ipv6_group",
+        label: "IPv6 对端优先设备组",
         value: [],
         description: "对端地址优先度使用的设备组列表。",
       },
@@ -58,12 +79,14 @@ export const advancedSections = [
     fields: [
       {
         key: "max_fail",
+        label: "最大连续失败次数",
         value: 3,
         description:
           "入口连接隧道出口或入口直出时，开始转移前容忍的最大连续失败次数。",
       },
       {
         key: "fail_timout_sec",
+        label: "故障转移时长（秒）",
         value: 30,
         description: "入口连接隧道出口或入口直出时的转移时长，单位为秒。",
       },
@@ -74,15 +97,22 @@ export const advancedSections = [
     fields: [
       {
         key: "reverse_group",
+        label: "反向隧道设备组",
         value: [],
         description: "反向隧道使用的设备组列表。",
       },
       {
         key: "protocol",
+        label: "反向隧道协议",
         value: "tls",
         description: "反向隧道协议，默认 tls；可选 tls、tls_simple、ws、http。",
       },
-      { key: "tls", value: {}, description: "反向隧道 TLS 配置对象。" },
+      {
+        key: "tls",
+        label: "反向隧道 TLS 配置",
+        value: {},
+        description: "反向隧道 TLS 配置对象。",
+      },
     ],
   },
 ];
@@ -92,16 +122,13 @@ type Settings = Record<string, unknown>;
 export function initialGroupAdvanced(group: Record<string, unknown>): Settings {
   if (group.advanced && typeof group.advanced === "object")
     return normalize({ ...group.advanced });
-  const defaults: Settings = Object.fromEntries(
-    advancedSections.flatMap((section) =>
-      section.fields.map((field) => [field.key, field.value]),
-    ),
-  );
   // Keep application blocks from groups created before the separate editor.
-  defaults.blocked_protocol = ((group.blocked_protocols || []) as string[])
+  const migrated: Settings = {};
+  const blockedProtocol = ((group.blocked_protocols || []) as string[])
     .filter((value) => ["app:http", "app:socks", "socks"].includes(value))
     .map((value) => value.replace(/^app:/, ""));
-  return defaults;
+  if (blockedProtocol.length) migrated.blocked_protocol = blockedProtocol;
+  return migrated;
 }
 
 function normalize(value: unknown): Settings {

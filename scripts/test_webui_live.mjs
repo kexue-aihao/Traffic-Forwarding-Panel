@@ -368,16 +368,111 @@ try {
       assert.equal(savedGroup.type, "entry");
       assert.deepEqual(savedGroup.disabled_transports, []);
       assert.deepEqual(savedGroup.disabled_networks, []);
+      const peerResponse = await admin.request.post(base + "/api/v1/groups", {
+        headers: { Origin: base, "X-Requested-With": "fetch" },
+        data: {
+          name: `advanced-peer-${browserName}`,
+          type: "exit",
+          multiplier: "1",
+          port_min: 10000,
+          port_max: 60000,
+        },
+      });
+      assert.ok(peerResponse.ok(), await peerResponse.text());
+      const advancedPeer = await peerResponse.json();
       const groupRow = admin
         .getByRole("row")
         .filter({ hasText: `group-${browserName}` });
       await groupRow
         .getByRole("button", { name: "高级设置", exact: true })
         .click();
+      await admin.getByText("尚未添加额外参数。", { exact: true }).waitFor();
+      await pickOption(admin, "添加额外参数", "max_fail");
+      await admin.getByRole("button", { name: "添加参数", exact: true }).click();
+      assert.equal(
+        await admin.getByLabel("最大连续失败次数", { exact: true }).inputValue(),
+        "3",
+      );
+      const maxFail = admin.getByLabel("最大连续失败次数", { exact: true });
+      await maxFail.fill("");
+      assert.equal(await maxFail.isVisible(), true, "清空数值时控件应保留");
+      await maxFail.fill("0");
+      for (const key of [
+        "fail_timout_sec", "tls_inbound_policy", "blocked_path",
+        "blocked_protocol", "disable_udp", "ipv6_group", "reverse_group", "tls",
+      ]) {
+        await pickOption(admin, "添加额外参数", key);
+        await admin.getByRole("button", { name: "添加参数", exact: true }).click();
+      }
+      assert.equal(await admin.getByLabel("故障转移时长（秒）", { exact: true }).inputValue(), "30");
+      await admin.getByLabel("故障转移时长（秒）", { exact: true }).fill("0");
+      const tlsPolicySelect = admin.locator('select[aria-label="TLS 入站策略"]');
+      assert.deepEqual(await tlsPolicySelect.locator("option").evaluateAll((options) => options.map((option) => option.value)), ["0", "1", "2"]);
+      await tlsPolicySelect.click();
+      await admin.locator(".select-list .select-option").nth(2).click();
+      assert.equal(await tlsPolicySelect.inputValue(), "2");
+      const blockedPaths = admin.getByLabel("HTTP Path 黑名单", { exact: true });
+      await blockedPaths.pressSequentially("/first//path");
+      await blockedPaths.press("Enter");
+      await blockedPaths.pressSequentially("/second/*literal*/");
+      assert.equal(await blockedPaths.inputValue(), "/first//path\n/second/*literal*/");
+      await admin.getByRole("group", { name: "应用协议屏蔽", exact: true }).getByLabel("SOCKS", { exact: true }).check();
+      await admin.locator("#advanced-disable_udp").check();
+      for (const name of ["IPv6 对端优先设备组", "反向隧道设备组"]) {
+        await admin.getByRole("group", { name, exact: true }).getByLabel(advancedPeer.name, { exact: true }).check();
+      }
+      const tlsConfig = { server_name: "form.example.com", nested: { enabled: false } };
+      await admin.locator("#advanced-tls").fill("[]");
+      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
+      await admin.getByRole("alert").filter({ hasText: "tls 配置必须是 JSON 对象" }).waitFor();
+      await admin.locator("#advanced-tls").fill(JSON.stringify(tlsConfig, null, 2));
+      await pickOption(admin, "添加额外参数", "protocol");
+      await admin.getByRole("button", { name: "添加参数", exact: true }).click();
+      const protocolSelect = admin.locator('select[aria-label="反向隧道协议"]');
+      assert.deepEqual(
+        await protocolSelect.locator("option").evaluateAll((options) =>
+          options.map((option) => option.value),
+        ),
+        ["tls", "tls_simple", "ws", "http"],
+      );
+      await protocolSelect.click();
+      await admin.locator(".select-list .select-option").nth(1).click();
+      assert.equal(
+        await admin.getByLabel("反向隧道协议", { exact: true }).inputValue(),
+        "tls_simple",
+      );
+      await admin
+        .getByRole("button", { name: "移除反向隧道协议", exact: true })
+        .click();
+      await pickOption(admin, "添加额外参数", "protocol");
+      await admin.getByRole("button", { name: "添加参数", exact: true }).click();
+      await admin.locator('select[aria-label="反向隧道协议"]').click();
+      await admin.locator(".select-list .select-option").nth(2).click();
+      assert.equal(await admin.locator('select[aria-label="反向隧道协议"]').inputValue(), "ws");
+      await admin.locator(".advanced-raw summary").click();
       const advanced = admin.getByLabel("设备组高级设置 JSON", { exact: true });
-      assert.match(await advanced.inputValue(), /\/\/ 入站屏蔽选项/);
-      assert.match(await advanced.inputValue(), /"max_fail": 3/);
-      assert.match(await advanced.inputValue(), /"fail_timout_sec": 30/);
+      assert.match(await advanced.inputValue(), /form\.example\.com/, "TLS 表单应同步到 JSONC");
+      await admin.locator(".advanced-raw summary").click();
+      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      const formGroups = await (await admin.request.get(base + "/api/v1/groups?page_size=100")).json();
+      assert.deepEqual(formGroups.items.find((group) => group.id === savedGroup.id).advanced, {
+        max_fail: 0,
+        fail_timout_sec: 0,
+        tls_inbound_policy: 2,
+        blocked_path: ["/first//path", "/second/*literal*/"],
+        blocked_protocol: ["socks"],
+        disable_udp: true,
+        ipv6_group: [advancedPeer.id],
+        reverse_group: [advancedPeer.id],
+        protocol: "ws",
+        tls: tlsConfig,
+      });
+      await groupRow.getByRole("button", { name: "高级设置", exact: true }).click();
+      assert.equal(await maxFail.inputValue(), "0");
+      assert.equal(await admin.getByLabel("TLS 入站策略", { exact: true }).inputValue(), "2");
+      assert.equal(await blockedPaths.inputValue(), "/first//path\n/second/*literal*/");
+      assert.equal(await admin.getByRole("group", { name: "反向隧道设备组", exact: true }).getByLabel(advancedPeer.name, { exact: true }).isChecked(), true);
       if (browserName === "chromium") {
         const screenshotDir = resolve(root, ".gocache/screens");
         await mkdir(screenshotDir, { recursive: true });
@@ -387,6 +482,10 @@ try {
           ["mobile", 320, 900],
         ]) {
           await admin.setViewportSize({ width, height });
+          await admin.locator("dialog").evaluate((el) => { el.scrollTop = 0; });
+          await admin.locator("dialog").evaluate((el) => el.getAnimations().length
+            ? Promise.all(el.getAnimations().map((animation) => animation.finished.catch(() => {})))
+            : Promise.resolve());
           assert.ok(
             await admin
               .locator("dialog")
@@ -397,6 +496,7 @@ try {
           });
           await admin.locator(".advanced-help summary").click();
           await admin
+            .locator(".advanced-help")
             .getByRole("heading", { name: "反向隧道选项", exact: true })
             .scrollIntoViewIfNeeded();
           assert.ok(
@@ -408,14 +508,17 @@ try {
             path: resolve(screenshotDir, `group-advanced-help-${size}.png`),
           });
           await admin.locator(".advanced-help summary").click();
-          await advanced.scrollIntoViewIfNeeded();
           await admin.locator("dialog").evaluate((el) => {
             el.scrollTop = 0;
           });
         }
         await admin.setViewportSize(viewport);
       }
+      await admin.locator(".advanced-raw summary").click();
       await advanced.fill("[]");
+      await admin
+        .getByRole("button", { name: "应用 JSONC", exact: true })
+        .click();
       await admin
         .getByRole("button", { name: "保存高级设置", exact: true })
         .click();
@@ -425,22 +528,25 @@ try {
         .waitFor();
       await advanced.fill("{} /* missing end");
       await admin
-        .getByRole("button", { name: "保存高级设置", exact: true })
+        .getByRole("button", { name: "应用 JSONC", exact: true })
         .click();
       await admin
         .getByRole("alert")
         .filter({ hasText: "块注释未结束" })
         .waitFor();
+      await advanced.fill('{"max_fail": 4}');
+      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
+      await admin.getByRole("alert").filter({ hasText: "请先应用 JSONC" }).waitFor();
       await advanced.fill(
         '{"allowed_host":["example.com"],"blocked_path":["/private"]}',
       );
       await admin
-        .getByRole("button", { name: "保存高级设置", exact: true })
+        .getByRole("button", { name: "应用 JSONC", exact: true })
         .click();
       await admin
-        .getByRole("alert")
-        .filter({ hasText: "allowed_host" })
-        .waitFor();
+        .getByRole("button", { name: "保存高级设置", exact: true })
+        .click();
+      await admin.getByRole("alert").filter({ hasText: "allowed_host" }).waitFor();
       const extraSettings = {
         blocked_protocol: ["socks"],
         disable_udp: true,
@@ -453,6 +559,9 @@ try {
         `// extra settings\n${JSON.stringify(extraSettings, null, 2)}\n/* end */`,
       );
       await admin.getByRole("button", { name: "格式化", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "应用 JSONC", exact: true })
+        .click();
       await admin
         .getByRole("button", { name: "保存高级设置", exact: true })
         .click();
@@ -511,6 +620,7 @@ try {
       await groupRow
         .getByRole("button", { name: "高级设置", exact: true })
         .click();
+      await admin.locator(".advanced-raw summary").click();
       assert.match(await advanced.inputValue(), /"max_fail": 0/);
       assert.match(await advanced.inputValue(), /"fail_timout_sec": 0/);
       assert.doesNotMatch(await advanced.inputValue(), /app:socks/);

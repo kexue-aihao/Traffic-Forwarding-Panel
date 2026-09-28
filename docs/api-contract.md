@@ -103,9 +103,9 @@ Token 明文只在**创建或重置**的那一次响应里出现（库里只有 
 
 设备组的协议屏蔽与转发设置使用独立字段：`blocked_protocols` 仅存应用屏蔽值 `app:http|app:socks`；`disabled_networks` 存禁用的 `tcp|udp`；`disabled_transports` 存禁用的 `direct|direct-tls|tls|ws|wss|http`。后两项为空表示全部允许，界面以正向勾选展示允许的网络协议及转发方式。屏蔽 HTTP 应用流量不会禁用 HTTP 隧道；取消某种转发方式只影响规则可用性，不增加应用检测项，并作用于链式每一跳。
 
-设备组的 `advanced` 是独立的额外设置对象，字段对应参考面板的 `allowed_host`、`blocked_host`、`blocked_path`、`blocked_protocol`、`tls_inbound_policy`、`tls_reject_empty_sni`、`disable_udp`、`udp_over_tcp`、`ipv6_group`、`max_fail`、`fail_timout_sec`、`reverse_group`、`protocol` 和 `tls`。设备组列表通过独立的“高级设置”弹窗编辑 JSON，不再把这些参数塞进新增设备组主表单。白名单与其他入站屏蔽选项冲突、禁用 UDP 同时启用 UDP over TCP、未知协议或超出范围的值会被拒绝。`blocked_protocol` 中的 `http`/`socks` 表示应用协议屏蔽，与转发方式完全独立。旧版顶层 `blocked_protocols` 仍可读取并会迁移到对应策略字段。字段名 `fail_timout_sec` 保留参考文档中的拼写。
+设备组的 `advanced` 是独立的额外设置对象，字段对应参考面板的 `allowed_host`、`blocked_host`、`blocked_path`、`blocked_protocol`、`tls_inbound_policy`、`tls_reject_empty_sni`、`disable_udp`、`udp_over_tcp`、`ipv6_group`、`max_fail`、`fail_timout_sec`、`reverse_group`、`protocol` 和 `tls`。设备组列表通过独立的“高级设置”弹窗配置参数，不再把这些参数塞进新增设备组主表单。白名单与其他入站屏蔽选项冲突、禁用 UDP 同时启用 UDP over TCP、未知协议或超出范围的值会被拒绝。`blocked_protocol` 中的 `http`/`socks` 表示应用协议屏蔽，与转发方式完全独立。旧版顶层 `blocked_protocols` 仍可读取并会迁移到对应策略字段。字段名 `fail_timout_sec` 保留参考文档中的拼写。
 
-“额外设置参数”编辑区支持 JSONC 的行注释、块注释和格式化，按入站屏蔽、TLS、UDP、对端地址优先度、故障转移、反向隧道分组附带中文说明。首次配置的参考模板使用 `max_fail: 3`、`fail_timout_sec: 30`、`protocol: "tls"`；已有设置按保存值打开，不合并模板覆盖原值。所有字段均可省略，显式数值 `0` 在 API 响应中保留。API 本身仅接受 JSON；注释由浏览器在提交前解析。浏览器将 `fail_timeout_sec` 兼容为文档原名 `fail_timout_sec`，若两者值冲突则拒绝提交。高级设置里的协议保存并回读为 `http`/`socks`，内部顶层策略仍使用 `app:http`/`app:socks`，首次编辑会带入旧组已有的应用屏蔽策略。
+高级设置表单通过下拉菜单按需添加参数，按参数类型提供数值、开关、协议枚举、列表和设备组选择控件。新组默认不附加高级参数；添加 `max_fail`、`fail_timout_sec` 或 `protocol` 时分别预填 `3`、`30` 或 `tls`。已有配置按保存值载入，显式数值 `0` 在 API 响应中保留。折叠的 JSONC 兼容编辑器支持行注释、块注释、格式化与未知字段编辑；API 本身仅接受 JSON，注释由浏览器在提交前解析。浏览器将 `fail_timeout_sec` 兼容为文档原名 `fail_timout_sec`，若两者值冲突则拒绝提交。高级设置里的协议保存并回读为 `http`/`socks`，内部顶层策略仍使用 `app:http`/`app:socks`，首次编辑会带入旧组已有的应用屏蔽策略。
 
 上述字段说明描述参考配置的含义。当前组级运行时已接入应用协议屏蔽和 `disable_udp`；Host/Path、TLS 入站策略、UDP over TCP、IPv6 组、组级故障转移与反向隧道参数在此接口完成结构化保存及校验，尚未接入 Agent 执行。规则自身已有的 TLS、故障转移和反向隧道能力不代表这些组级字段已经生效。
 

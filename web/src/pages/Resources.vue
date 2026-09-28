@@ -108,6 +108,8 @@ const onboardTarget = ref<Row | null>(null);
 const joinKey = ref("");
 const confirmRotate = ref(false);
 const advancedTarget = ref<Row | null>(null);
+const advancedGroups = ref<Row[]>([]);
+const advancedGroupsError = ref("");
 
 /**
  * 账号的 API 凭据。
@@ -669,9 +671,16 @@ watch(
   },
 );
 const dirty = computed(() => JSON.stringify(form.value) !== initial.value);
-function openAdvanced(row: Row) {
+async function openAdvanced(row: Row) {
   advancedTarget.value = row;
-  formError.value = "";
+  advancedGroups.value = rows.value;
+  advancedGroupsError.value = "";
+  try {
+    const groups = await choices("/groups");
+    if (advancedTarget.value === row) advancedGroups.value = groups;
+  } catch (e) {
+    if (advancedTarget.value === row) advancedGroupsError.value = errorText(e);
+  }
 }
 async function advancedSaved(group: Row) {
   advancedTarget.value = null;
@@ -2329,6 +2338,8 @@ const labels: Record<string, string> = {
     ><GroupAdvanced
       v-if="advancedTarget"
       :group="advancedTarget"
+      :groups="advancedGroups"
+      :groups-error="advancedGroupsError"
       @close="advancedTarget = null"
       @saved="advancedSaved"
     /><Modal
