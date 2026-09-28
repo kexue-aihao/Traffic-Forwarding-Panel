@@ -24,7 +24,7 @@ import (
 )
 
 // Version is injected at release build time using -ldflags -X.
-var Version = "0.1.29"
+var Version = "0.1.30"
 
 func main() {
 	if err := run(); err != nil {

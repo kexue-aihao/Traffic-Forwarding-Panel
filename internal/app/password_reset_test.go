@@ -63,7 +63,7 @@ func TestTelegramPasswordResetLifecycle(t *testing.T) {
 	if _, err := a.store.DB.Exec("INSERT INTO cp_tokens(id,token_hash,user_id,name,expires_at) VALUES('reset-token','test-hash','bootstrap-admin','test',0)"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.store.DB.Exec("INSERT INTO cp_telegram_login_tokens(token_hash,chat_id,user_id,expires_at,used) VALUES('reset-link','101','bootstrap-admin',?,0)", time.Now().Add(time.Minute).Unix()); err != nil {
+	if _, err := a.store.DB.Exec(a.store.Rebind("INSERT INTO cp_telegram_login_tokens(token_hash,chat_id,user_id,expires_at,used) VALUES('reset-link','101','bootstrap-admin',?,0)"), time.Now().Add(time.Minute).Unix()); err != nil {
 		t.Fatal(err)
 	}
 	request := `{"username":"admin"}`
@@ -126,13 +126,13 @@ func TestTelegramPasswordResetLimitsAndEligibility(t *testing.T) {
 	if w := resetCall(t, a, "confirm", `{"username":"admin","code":"`+code+`","password":"replacement-password"}`); w.Code != 400 {
 		t.Fatal("attempt limit bypass")
 	}
-	if _, err := a.store.DB.Exec("UPDATE cp_telegram_password_resets SET attempts=0,expires_at=?", time.Now().Add(-time.Minute).Unix()); err != nil {
+	if _, err := a.store.DB.Exec(a.store.Rebind("UPDATE cp_telegram_password_resets SET attempts=0,expires_at=?"), time.Now().Add(-time.Minute).Unix()); err != nil {
 		t.Fatal(err)
 	}
 	if w := resetCall(t, a, "confirm", `{"username":"admin","code":"`+code+`","password":"replacement-password"}`); w.Code != 400 {
 		t.Fatal("expired code accepted")
 	}
-	if _, err := a.store.DB.Exec("UPDATE cp_telegram_password_resets SET last_sent_at=?", time.Now().Add(-2*time.Minute).Unix()); err != nil {
+	if _, err := a.store.DB.Exec(a.store.Rebind("UPDATE cp_telegram_password_resets SET last_sent_at=?"), time.Now().Add(-2*time.Minute).Unix()); err != nil {
 		t.Fatal(err)
 	}
 	transport.fail = true
@@ -168,7 +168,7 @@ func TestTelegramPasswordResetHourlyLimitSurvivesSuccess(t *testing.T) {
 	a, transport, _ := setupPasswordReset(t)
 	for i := 0; i < 5; i++ {
 		if i > 0 {
-			if _, err := a.store.DB.Exec("UPDATE cp_telegram_password_resets SET last_sent_at=?", time.Now().Add(-2*time.Minute).Unix()); err != nil {
+			if _, err := a.store.DB.Exec(a.store.Rebind("UPDATE cp_telegram_password_resets SET last_sent_at=?"), time.Now().Add(-2*time.Minute).Unix()); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -182,7 +182,7 @@ func TestTelegramPasswordResetHourlyLimitSurvivesSuccess(t *testing.T) {
 			}
 		}
 	}
-	if _, err := a.store.DB.Exec("UPDATE cp_telegram_password_resets SET last_sent_at=?", time.Now().Add(-2*time.Minute).Unix()); err != nil {
+	if _, err := a.store.DB.Exec(a.store.Rebind("UPDATE cp_telegram_password_resets SET last_sent_at=?"), time.Now().Add(-2*time.Minute).Unix()); err != nil {
 		t.Fatal(err)
 	}
 	if w := resetCall(t, a, "request", `{"username":"admin"}`); w.Code != 200 || transport.sends != 5 {
