@@ -157,6 +157,12 @@ func telegramSend(ctx context.Context, client *http.Client, token, chatID, text 
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("telegram sendMessage status %s", resp.Status)
 	}
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result); err != nil || !result.OK {
+		return errors.New("telegram sendMessage rejected")
+	}
 	return nil
 }
 
@@ -174,7 +180,7 @@ func (a *App) handleTelegramMessage(ctx context.Context, client *http.Client, se
 	send := func(message string) { _ = telegramSend(ctx, client, settings.BotToken, chatID, message) }
 	switch command {
 	case "/start", "/help":
-		send("可用命令：\n/login 生成一次性登录链接\n/pay <网络> <金额> 发起充值\n支持：trc20-usdt、erc20-usdt、bep20-usdt、polygon-usdt、trx、pol、eth、bnb")
+		send("可用命令：\n/login 生成一次性登录链接并绑定账号\n/balance 查询账户余额\n/traffic 查询套餐流量\n/pay <网络> <金额> 发起充值\n支持：trc20-usdt、erc20-usdt、bep20-usdt、polygon-usdt、trx、pol、eth、bnb")
 	case "/login":
 		raw, err := storage.RandomKey()
 		if err != nil {
@@ -202,9 +208,54 @@ func (a *App) handleTelegramMessage(ctx context.Context, client *http.Client, se
 		send("登录链接（10 分钟内有效且只能使用一次）：\n" + link)
 	case "/pay":
 		a.handleTelegramPay(ctx, client, settings, chatID, parts[1:], updateKey, send)
+	case "/balance", "/traffic":
+		if len(parts) != 1 {
+			send("此命令不需要参数。")
+			return
+		}
+		send(a.telegramAccountInfo(ctx, chatID, command))
 	default:
 		send("未知命令。发送 /help 查看用法。")
 	}
+}
+
+func (a *App) telegramAccountInfo(ctx context.Context, chatID, command string) string {
+	var user, username string
+	err := a.store.DB.QueryRowContext(ctx, a.store.Rebind("SELECT u.id,u.username FROM cp_telegram_bindings b JOIN cp_users u ON u.id=b.user_id WHERE b.chat_id=? AND u.disabled=0"), chatID).Scan(&user, &username)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "请先发送 /login 完成站点账号绑定。"
+	}
+	if err != nil {
+		return "账户信息暂时不可用，请稍后重试。"
+	}
+	if command == "/balance" {
+		wallet, err := a.Commerce.Wallet(ctx, user)
+		if err != nil {
+			return "余额暂时不可用，请稍后重试。"
+		}
+		return fmt.Sprintf("账号：%s\n账户余额：%s 元（CNY）", username, contract.FormatAmount(wallet.Balance))
+	}
+	entitlement, err := a.Commerce.Entitlement(ctx, user)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "账号：" + username + "\n暂无套餐流量。"
+	}
+	if err != nil {
+		return "流量信息暂时不可用，请稍后重试。"
+	}
+	status := "有效"
+	if !time.Now().Before(entitlement.ExpiresAt) {
+		status = "已到期"
+	}
+	quota := formatTelegramBytes(entitlement.Quota)
+	if entitlement.Quota == 0 {
+		quota = "不限量"
+	}
+	return fmt.Sprintf("账号：%s\n套餐状态：%s\n已用流量：%s\n套餐流量：%s\n到期时间：%s", username, status, formatTelegramBytes(entitlement.Used), quota, entitlement.ExpiresAt.Format("2006-01-02 15:04 MST"))
+}
+
+func formatTelegramBytes(value int64) string {
+	const gib = 1024 * 1024 * 1024
+	return fmt.Sprintf("%.2f GiB", float64(value)/gib)
 }
 
 func (a *App) telegramBoundUser(ctx context.Context, chatID string) (string, error) {

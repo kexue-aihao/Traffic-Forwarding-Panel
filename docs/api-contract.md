@@ -216,7 +216,9 @@ Cyber已按用户指示从支付渠道列表及本轮验收中排除。
 | GET /purchases/{id}/funding | 无 | 购买所有者/管理员读取来源分摊 |
 | POST /purchases/{id}/refund | `{amount_cents,idempotency_key,reason}` | 管理员购买退款，恢复原来源余额、移除可退配额并回冲佣金 |
 
-SiteSettings 包含 `version,name,announcement,registration,captcha,accent,payments_enabled,currency,minimum_recharge,maximum_recharge,diagnostics_enabled,diagnostics_per_minute,geo_lookup_url`。**对外金额单位是元**（`"1.00"`，最多两位小数的十进制字符串），结算币种 `currency` 固定为 `CNY`；账本内部仍按整数分记账，换算只在边界发生。旧文档里的 `minimum_recharge_cents/maximum_recharge_cents` 仍能读回并自动换算成元，保存时不再写出。注册为 `closed|open|invite`；诊断每分钟1..30次。充值限制按**到账金额**控制新订单，既有回调/查单继续。`geo_lookup_url` 是探针位置图标的地区查询模板，必须 HTTPS 且含 `{ip}`，留空即关闭。开启验证码后，登录与注册都提交 `captcha_id,captcha_answer`。
+SiteSettings 包含 `version,name,logo,announcement,registration,captcha,accent,payments_enabled,currency,minimum_recharge,maximum_recharge,diagnostics_enabled,diagnostics_per_minute,geo_lookup_url`。**对外金额单位是元**（`"1.00"`，最多两位小数的十进制字符串），结算币种 `currency` 固定为 `CNY`；账本内部仍按整数分记账，换算只在边界发生。旧文档里的 `minimum_recharge_cents/maximum_recharge_cents` 仍能读回并自动换算成元，保存时不再写出。注册为 `closed|open|invite`；诊断每分钟1..30次。充值限制按**到账金额**控制新订单，既有回调/查单继续。`geo_lookup_url` 是探针位置图标的地区查询模板，必须 HTTPS 且含 `{ip}`，留空即关闭。开启验证码后，登录与注册都提交 `captcha_id,captcha_answer`。
+
+`logo` 为 PNG/JPEG 的 base64 Data URL，原始图片最大 32 KiB、尺寸最大 512×512；服务端校验真实图片格式与内容，不接受 SVG 或外部 URL。整个配置的 JSON 编码不得超过 65,535 字节，以兼容现有 MySQL `TEXT` 存储。旧配置未提供此字段时使用内置图标，保存空字符串可恢复默认。该字段随公开站点设置读取，用于侧栏品牌和浏览器图标。
 
 Rule 新增 `exit_group_id`、`exit_id`（具体ID或 `auto`），服务端生成 `selected_exit_id,billing_multiplier,exit_unavailable`。受管模式不公开底层 tunnel；授权组过滤、节点心跳、入口/出口协议策略和防同节点选路均在控制面校验。`auto` 使用加权稳定选择，路由改变重新下发并撤销旧租约。
 
@@ -228,7 +230,7 @@ Agent 诊断需 `diagnostics-v1`，只探测该节点当前有授权、已启用
 
 通知 `format` 为 `webhook`（默认）、`feishu`、`discord` 或 `telegram`。飞书仅允许 `https://open.feishu.cn/open-apis/bot/v2/hook/…`，Discord 仅允许 `https://discord.com/api/webhooks/…`；Telegram 使用 `https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<CHAT_ID>`，只接受 `api.telegram.org`、`sendMessage` 路径和单个 `chat_id` 参数。保留原 HTTPS/DNS/重定向限制、outbox 重试和权限复核。聊天消息只含事件类型及编号，Discord 禁用 mentions，飞书检查响应业务码，Telegram 检查响应 `ok`；HMAC 对实际投递体签名。Bot Token 属于敏感凭据，页面列表只显示 Telegram Chat ID。事件新增 `wallet.purchase_refund`。
 
-站点设置还可配置运营方 Telegram Bot Token 与 `trc20-usdt`、`erc20-usdt`、`bep20-usdt`、`polygon-usdt`、`trx`、`pol`、`eth`、`bnb` 收款地址。机器人支持 `/login` 一次性账号绑定链接，以及 `/pay <网络> <金额>` 充值意图；手动地址转账必须通过管理员确认接口 `POST /admin/telegram/payments/{id}/confirm` 后才会入账。
+站点设置还可配置运营方 Telegram Bot Token 与 `trc20-usdt`、`erc20-usdt`、`bep20-usdt`、`polygon-usdt`、`trx`、`pol`、`eth`、`bnb` 收款地址。机器人支持 `/login` 一次性账号绑定链接、`/balance` 查询本人钱包余额、`/traffic` 查询本人当前套餐流量，以及 `/pay <网络> <金额>` 充值意图。查询命令仅接受已绑定、未停用账号的私聊；流量取商业套餐已结算用量，不取节点网卡计数。手动地址转账必须通过管理员确认接口 `POST /admin/telegram/payments/{id}/confirm` 后才会入账。
 
 ### v0.1.23 Telegram 与个人出口
 
@@ -238,3 +240,8 @@ Agent 诊断需 `diagnostics-v1`，只探测该节点当前有授权、已启用
 - GET /admin/telegram/payments 返回最近 100 笔人工充值意图。POST /admin/telegram/payments/{id}/confirm 要求 32 字节十六进制交易哈希；管理员须先在链上核实收款。核实、账本、通知、状态、审计在同一事务内提交；同链交易哈希跨币种不可重复入账。同订单同交易号重放不再计账。
 - payment.received 发送给启用的管理员；wallet.recharge 继续发送给充值用户。node.created、node.online、node.offline、node.recovered 覆盖新增、首次上线、离线与恢复。通知订阅在运营与任务配置 Bot Token / Chat ID。
 - 手动地址模式没有链上扫描或自动确认；需要管理员维护汇率并核实实际到账。私钥不存储在站点。
+# Telegram 忘记密码
+
+`POST /api/v1/auth/password-reset/request` 接收 `{"username":"..."}`，对不存在、未绑定、已停用及发送受限的账号统一返回 200 与相同提示。账号须通过现有 Telegram 机器人 `/login` 绑定；启用机器人后，验证码仅发送至绑定的私聊。每个账号 60 秒内最多发送一次、每小时最多五次，验证码 10 分钟有效，最多可尝试五次。
+
+`POST /api/v1/auth/password-reset/confirm` 接收 `{"username":"...","code":"8 位数字","password":"12 至 72 字节"}`。成功返回 204，单次消费验证码，并撤销该账号全部会话、API Token 与未使用的 Telegram 登录链接。需要 `X-Requested-With: fetch` 和同源 Origin。本人凭旧密码修改及管理员重置流程保持原样。

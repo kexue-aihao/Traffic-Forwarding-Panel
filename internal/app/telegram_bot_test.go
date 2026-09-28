@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/commerce"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/testdb"
 	"net/http"
 	"net/http/httptest"
@@ -124,6 +125,46 @@ func TestTelegramQuoteAndPrivateChat(t *testing.T) {
 		if telegramPrivateUpdate(u) != entry.want {
 			t.Fatal(entry.payload)
 		}
+	}
+}
+
+func TestTelegramAccountQueries(t *testing.T) {
+	a, _ := telegramTestApp(t)
+	ctx := context.Background()
+	if got := a.telegramAccountInfo(ctx, "101", "/balance"); !strings.Contains(got, "请先发送 /login") {
+		t.Fatal(got)
+	}
+	if _, err := a.store.DB.ExecContext(ctx, "INSERT INTO cp_telegram_bindings(chat_id,user_id,updated_at) VALUES('101','bootstrap-admin',0)"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.telegramAccountInfo(ctx, "101", "/traffic"); !strings.Contains(got, "暂无套餐流量") {
+		t.Fatal(got)
+	}
+	if _, err := a.store.DB.ExecContext(ctx, "INSERT INTO commerce_wallets(user_id,balance,version) VALUES('bootstrap-admin',12345,0)"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.telegramAccountInfo(ctx, "101", "/balance"); !strings.Contains(got, "123.45 元") || !strings.Contains(got, "admin") {
+		t.Fatal(got)
+	}
+	plan, err := a.Commerce.CreatePlan(ctx, commerce.Plan{Name: "monthly", Price: 100, Quota: 2 << 30, Months: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ent, err := a.Commerce.Purchase(ctx, "bootstrap-admin", plan.ID, "telegram-query", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.DB.ExecContext(ctx, a.store.Rebind("UPDATE commerce_entitlements SET used=? WHERE id=?"), 1<<30, ent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.telegramAccountInfo(ctx, "101", "/traffic"); !strings.Contains(got, "1.00 GiB") || !strings.Contains(got, "2.00 GiB") || !strings.Contains(got, "有效") {
+		t.Fatal(got)
+	}
+	if _, err := a.store.DB.ExecContext(ctx, "UPDATE cp_users SET disabled=1 WHERE id='bootstrap-admin'"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.telegramAccountInfo(ctx, "101", "/balance"); !strings.Contains(got, "请先发送 /login") {
+		t.Fatal(got)
 	}
 }
 func TestTelegramPaymentReplayAndConfirmation(t *testing.T) {

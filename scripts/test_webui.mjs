@@ -134,6 +134,19 @@ const server = createServer(async (req, res) => {
 
     if (path === "/openapi.json") return json(apiDocument);
 
+    if (path === "/auth/password-reset/request")
+      return json({ message: "验证码已发送。" });
+    if (path === "/auth/password-reset/confirm") {
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      const body = JSON.parse(raw);
+      assert.equal(body.username, "fixture-admin");
+      assert.equal(body.code, "12345678");
+      assert.equal(body.password, "replacement-password");
+      res.writeHead(204);
+      return res.end();
+    }
+
     if (path === "/auth/login") {
       authorized = true;
       expire = false;
@@ -470,6 +483,13 @@ try {
           );
         });
       await page.getByLabel("用户名", { exact: true }).fill("fixture-admin");
+      await page.getByRole("button", { name: "忘记密码" }).click();
+      await page.getByRole("heading", { name: "重置密码" }).waitFor();
+      await page.getByRole("button", { name: "发送验证码" }).click();
+      await page.getByLabel("Telegram 验证码").fill("12345678");
+      await page.getByLabel("新密码").fill("replacement-password");
+      await page.getByRole("button", { name: "确认重置" }).click();
+      await page.getByRole("button", { name: "登录控制台" }).waitFor();
       await page.getByLabel("密码", { exact: true }).fill("fixture-password");
       await page.getByRole("button", { name: "登录控制台" }).click();
       await page

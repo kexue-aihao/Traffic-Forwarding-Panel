@@ -14,6 +14,7 @@ const SettlementCurrency = "CNY"
 type SiteSettings struct {
 	Version              int64  `json:"version"`
 	Name                 string `json:"name"`
+	Logo                 string `json:"logo"`
 	Announcement         string `json:"announcement"`
 	Registration         string `json:"registration"`
 	Captcha              bool   `json:"captcha"`

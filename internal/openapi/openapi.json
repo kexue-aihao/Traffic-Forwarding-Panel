@@ -2325,6 +2325,50 @@
         ],
         "type": "object"
       },
+      "PasswordResetConfirm": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "code",
+          "password"
+        ],
+        "type": "object"
+      },
+      "PasswordResetRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ],
+        "type": "object"
+      },
+      "PasswordResetRequestResult": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
       "PaymentChannel": {
         "additionalProperties": false,
         "properties": {
@@ -4266,6 +4310,9 @@
           "geo_lookup_url": {
             "type": "string"
           },
+          "logo": {
+            "type": "string"
+          },
           "maximum_recharge": {
             "type": "string"
           },
@@ -4297,6 +4344,7 @@
         "required": [
           "version",
           "name",
+          "logo",
           "announcement",
           "registration",
           "captcha",
@@ -6374,6 +6422,89 @@
         ],
         "summary": "Change password and revoke sessions/tokens",
         "x-role": "user"
+      }
+    },
+    "/auth/password-reset/confirm": {
+      "post": {
+        "operationId": "post_auth_password-reset_confirm",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetConfirm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [],
+        "summary": "Verify Telegram code, replace password, revoke sessions and API tokens",
+        "x-role": "public"
+      }
+    },
+    "/auth/password-reset/request": {
+      "post": {
+        "operationId": "post_auth_password-reset_request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordResetRequestResult"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [],
+        "summary": "Send a short-lived code to the account's bound Telegram private chat; response does not disclose account existence",
+        "x-role": "public"
       }
     },
     "/auth/register": {

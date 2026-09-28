@@ -59,7 +59,7 @@ type TelegramSettingsView struct {
 }
 
 func migratePaymentSettings(ctx context.Context, store *storage.Store) error {
-	return storage.MigrateNamespace(ctx, store.DB, store.Dialect, "payment_settings", 3, func(conn *sql.Conn) error {
+	return storage.MigrateNamespace(ctx, store.DB, store.Dialect, "payment_settings", 4, func(conn *sql.Conn) error {
 		if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS cp_payment_settings(id BIGINT PRIMARY KEY,payload TEXT NOT NULL,version BIGINT NOT NULL)`); err != nil {
 			return err
 		}
@@ -84,6 +84,7 @@ func migratePaymentSettings(ctx context.Context, store *storage.Store) error {
 		for _, query := range []string{
 			"CREATE TABLE IF NOT EXISTS cp_telegram_offsets(bot_id VARCHAR(64) PRIMARY KEY,update_offset BIGINT NOT NULL)",
 			"CREATE TABLE IF NOT EXISTS cp_telegram_receipts(receipt_id VARCHAR(160) PRIMARY KEY,order_id VARCHAR(64) NOT NULL)",
+			"CREATE TABLE IF NOT EXISTS cp_telegram_password_resets(user_id VARCHAR(64) PRIMARY KEY,code_hash VARCHAR(128) NOT NULL,expires_at BIGINT NOT NULL,last_sent_at BIGINT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,window_started BIGINT NOT NULL,sends INTEGER NOT NULL)",
 		} {
 			if _, err := conn.ExecContext(ctx, query); err != nil {
 				return err

@@ -46,8 +46,9 @@ type App struct {
 	Commerce *commerce.Service
 	// store 与 origin 留给支付通道的设置接口：它要读写自己的配置表，并按 origin
 	// 补出回调地址。
-	store  *storage.Store
-	origin string
+	store          *storage.Store
+	origin         string
+	telegramClient *http.Client
 }
 
 func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) {
@@ -149,6 +150,8 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	// the capability and expires after ten minutes.
 	mux.HandleFunc("GET /api/v1/telegram/login", application.telegramLogin)
 	mux.HandleFunc("POST /api/v1/telegram/login", application.telegramLogin)
+	mux.HandleFunc("POST /api/v1/auth/password-reset/request", application.requestPasswordReset)
+	mux.HandleFunc("POST /api/v1/auth/password-reset/confirm", application.confirmPasswordReset)
 	mux.HandleFunc("POST /api/v1/admin/telegram/payments/{id}/confirm", control.Admin(application.confirmTelegramPayment))
 	mux.HandleFunc("GET /api/v1/admin/telegram/payments", control.Admin(application.listTelegramPayments))
 	return application, nil

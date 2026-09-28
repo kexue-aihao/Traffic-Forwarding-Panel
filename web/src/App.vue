@@ -4,7 +4,7 @@ import Select from "./components/Select.vue";
 import { useRoute, useRouter } from "vue-router";
 import Icon from "./components/Icon.vue";
 import { api, errorText } from "./core/api";
-import { state, adminSite } from "./core/state";
+import { state, adminSite, site } from "./core/state";
 import type { User } from "./core/state";
 const route = useRoute();
 const router = useRouter();
@@ -14,14 +14,20 @@ const username = ref("");
 const password = ref("");
 const busy = ref(false);
 const error = ref("");
+const recovering = ref(false);
+const resetSent = ref(false);
+const resetCode = ref("");
+const resetPassword = ref("");
 const bootError = ref("");
-const site = ref({
-  name: "流量控制台",
-  announcement: "",
-  registration: "closed",
-  captcha: false,
-  accent: "blue",
-});
+watch(
+  () => site.value.logo,
+  (logo) => {
+    const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!icon) return;
+    icon.href = logo || "/assets/favicon.svg";
+    icon.type = logo ? logo.slice(5, logo.indexOf(";")) : "image/svg+xml";
+  },
+);
 const registering = ref(false),
   registerInvite = ref(""),
   captcha = ref<{ id: string; image: string } | null>(null),
@@ -225,6 +231,32 @@ async function login() {
     busy.value = false;
   }
 }
+async function resetPasswordAction() {
+  busy.value = true;
+  error.value = "";
+  try {
+    if (!resetSent.value) {
+      const result = await api<{ message: string }>("/auth/password-reset/request", "POST", { username: username.value });
+      resetSent.value = true;
+      state.notice = result.message;
+      return;
+    }
+    await api("/auth/password-reset/confirm", "POST", {
+      username: username.value,
+      code: resetCode.value,
+      password: resetPassword.value,
+    });
+    recovering.value = false;
+    resetSent.value = false;
+    resetCode.value = "";
+    resetPassword.value = "";
+    state.notice = "密码已重置，请重新登录。";
+  } catch (e) {
+    error.value = errorText(e);
+  } finally {
+    busy.value = false;
+  }
+}
 async function logout() {
   busy.value = true;
   try {
@@ -263,10 +295,18 @@ onMounted(async () => {
     <div class="layout">
       <aside v-if="!standalone" class="sidebar glass">
         <a class="brand" href="#/overview">
-          <span class="brand-mark brand-gradient">
+          <img
+            v-if="site.logo"
+            class="brand-logo"
+            :src="site.logo"
+            alt="站点 Logo"
+            width="28"
+            height="28"
+          />
+          <span v-else class="brand-mark brand-gradient">
             <Icon name="arrow-right-left" />
           </span>
-          <span>
+          <span class="brand-label">
             <span class="brand-name">{{ site.name }}</span>
             <small>{{ adminSite ? "管理员工作空间" : "用户工作空间" }}</small>
           </span>
@@ -356,12 +396,22 @@ onMounted(async () => {
           </section>
           <section v-else-if="!state.user" class="login card">
             <p class="eyebrow">WELCOME BACK</p>
-            <h1>连接你的网络</h1>
-            <p class="muted">登录后管理转发服务与实时资源。</p>
+            <h1>{{ recovering ? "重置密码" : "连接你的网络" }}</h1>
+            <p class="muted">{{ recovering ? "验证码将发送至账号已绑定的 Telegram 私聊。" : "登录后管理转发服务与实时资源。" }}</p>
             <p v-if="site.announcement" class="site-announcement">
               {{ site.announcement }}
             </p>
-            <form @submit.prevent="login">
+            <form v-if="recovering" @submit.prevent="resetPasswordAction">
+              <label>用户名<input v-model="username" autocomplete="username" required maxlength="64" :readonly="resetSent" /></label>
+              <template v-if="resetSent">
+                <label>Telegram 验证码<input v-model="resetCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{8}" maxlength="8" required /></label>
+                <label>新密码<input v-model="resetPassword" type="password" autocomplete="new-password" minlength="12" maxlength="72" required /></label>
+              </template>
+              <p v-if="error" role="alert" class="error">{{ error }}</p>
+              <button class="primary" :disabled="busy" :aria-busy="busy">{{ resetSent ? "确认重置" : "发送验证码" }}</button>
+              <button v-if="resetSent" type="button" :disabled="busy" @click="resetSent = false; resetCode = ''; error = ''">重新获取验证码</button>
+            </form>
+            <form v-else @submit.prevent="login">
               <label
                 >用户名<input
                   v-model="username"
@@ -406,8 +456,10 @@ onMounted(async () => {
                 {{ registering ? "创建账号" : "登录控制台" }}
               </button>
             </form>
+            <button v-if="!recovering && !registering" type="button" :disabled="busy" @click="recovering = true; error = ''">忘记密码</button>
+            <button v-if="recovering" type="button" :disabled="busy" @click="recovering = false; resetSent = false; resetCode = ''; resetPassword = ''; error = ''">返回登录</button>
             <button
-              v-if="!adminSite && registrationEnabled"
+              v-if="!recovering && !adminSite && registrationEnabled"
               type="button"
               :disabled="busy"
               @click="

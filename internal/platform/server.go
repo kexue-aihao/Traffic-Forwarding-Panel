@@ -161,6 +161,9 @@ func (s *Server) csrf(r *http.Request) bool {
 	u, e := url.Parse(origin)
 	return e == nil && u.Scheme != "" && strings.TrimRight(origin, "/") == strings.TrimRight(expected, "/")
 }
+
+// CheckCSRF applies the same browser origin policy to public write endpoints.
+func (s *Server) CheckCSRF(r *http.Request) bool { return s.csrf(r) }
 func (s *Server) Authenticate(r *http.Request) (contract.User, error) {
 	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 		return s.bearerUser(r)

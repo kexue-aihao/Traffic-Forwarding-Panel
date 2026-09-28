@@ -71,6 +71,71 @@ async function savePaymentChannels(page) {
   assert.equal(response.status(), 200, await response.text());
   await page.locator('button[data-busy="false"]').filter({ hasText: "保存支付通道" }).waitFor();
 }
+async function checkSiteLogo(page, browserName) {
+  await page.getByRole("link", { name: "站点设置", exact: true }).click();
+  const upload = page.getByLabel("上传站点 Logo", { exact: true });
+  await upload.setInputFiles({ name: "unsafe.svg", mimeType: "image/svg+xml", buffer: Buffer.from('<svg onload="alert(1)"/>') });
+  await page.getByRole("alert").filter({ hasText: "Logo 仅支持" }).waitFor();
+  const logo = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 32;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#168c75";
+    ctx.fillRect(0, 0, 32, 32);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(8, 8, 16, 16);
+    return canvas.toDataURL("image/png");
+  });
+  await upload.setInputFiles({ name: "brand.png", mimeType: "image/png", buffer: Buffer.from(logo.split(",")[1], "base64") });
+  await page.getByAltText("Logo 预览", { exact: true }).waitFor();
+  const saveLogo = async () => {
+    const response = page.waitForResponse(r => r.url().endsWith("/api/v1/site") && r.request().method() === "PUT");
+    await page.getByRole("button", { name: "保存站点设置", exact: true }).click();
+    const result = await response;
+    assert.equal(result.status(), 200, await result.text());
+    await page.locator('button[data-busy="true"]').waitFor({ state: "detached" });
+  };
+  await saveLogo();
+  await page.locator(".brand-logo").waitFor();
+  assert.equal(await page.locator(".brand-logo").getAttribute("src"), logo);
+  assert.equal(await page.locator('link[rel="icon"]').getAttribute("href"), logo);
+  await page.reload();
+  await page.locator(".brand-logo").waitFor();
+  assert.equal(await page.locator(".brand-logo").getAttribute("src"), logo);
+  assert.ok(await page.locator(".brand-logo").evaluate(img => img.complete && img.naturalWidth === 32));
+  const visitor = await page.context().browser().newPage();
+  try {
+    await visitor.goto(base + "/");
+    await visitor.getByRole("button", { name: "登录控制台", exact: true }).waitFor();
+    assert.equal(await visitor.locator(".brand-logo").getAttribute("src"), logo);
+    assert.equal(await visitor.locator('link[rel="icon"]').getAttribute("href"), logo);
+  } finally {
+    await visitor.close();
+  }
+  if (browserName === "chromium") {
+    const directory = resolve(root, ".gocache/screens");
+    await mkdir(directory, { recursive: true });
+    const viewport = page.viewportSize();
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.screenshot({ path: resolve(directory, `site-logo-${width}.png`) });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "logo settings overflow");
+      for (const button of await page.locator(".site-logo-editor button").all()) {
+        assert.ok(await button.evaluate(el => {
+          const button = el.getBoundingClientRect();
+          const icon = el.querySelector("svg").getBoundingClientRect();
+          return icon.width <= 24 && icon.height <= 24 && icon.top >= button.top && icon.bottom <= button.bottom && el.scrollWidth <= el.clientWidth;
+        }), "logo button icon or text overflows");
+      }
+    }
+    await page.setViewportSize(viewport);
+  }
+  await page.getByRole("button", { name: "恢复默认", exact: true }).click();
+  await saveLogo();
+  assert.equal(await page.locator(".brand-logo").count(), 0);
+  assert.equal(await page.locator('link[rel="icon"]').getAttribute("href"), "/assets/favicon.svg");
+  console.log(`${browserName}: site logo upload, persistence, favicon and reset PASS`);
+}
 // 自绘下拉走真实点击：展开那层列表再点选项。selectOption 直接改原生 select
 // 的值，碰不到那层 <li>，测不出「选项点不中、下拉切不了」。
 async function pickOption(page, label, value) {
@@ -146,6 +211,11 @@ try {
       const exceptions = [];
       admin.on("pageerror", (e) => exceptions.push(e.message));
       await login(admin, "ui-admin", password, "/admin");
+      await checkSiteLogo(admin, browserName);
+      if (process.argv.includes("--site-logo-only")) {
+        assert.deepEqual(exceptions, []);
+        continue;
+      }
       await admin.getByRole("link", { name: "API 列表", exact: true }).click();
       await admin.getByRole("heading", { name: "全站 API 列表" }).waitFor();
       await admin.getByText(/共 \d+ 个接口/).waitFor();

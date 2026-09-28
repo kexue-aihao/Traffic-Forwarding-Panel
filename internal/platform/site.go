@@ -10,6 +10,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	_ "image/jpeg"
 	"image/png"
 	"net/http"
 	"strings"
@@ -57,6 +58,10 @@ func (s *Server) saveSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := UserFromContext(r.Context())
+	if !validSiteLogo(v.Logo) {
+		fail(w, 400, "logo must be a PNG or JPEG image up to 32 KiB and 512x512 pixels")
+		return
+	}
 	v.Normalize()
 	minimum, maximum, amountErr := v.RechargeRange()
 	if strings.TrimSpace(v.Name) == "" || len(v.Name) > 100 || len(v.Announcement) > 8000 || !contains([]string{"closed", "open", "invite"}, v.Registration) || !contains([]string{"blue", "teal", "violet", "magenta", "amber", "graphite"}, v.Accent) || amountErr != nil || maximum > contract.MaxAmountCents || v.DiagnosticsPerMinute < 1 || v.DiagnosticsPerMinute > 30 || !contract.ValidGeoLookupURL(v.GeoLookupURL) {
@@ -69,13 +74,18 @@ func (s *Server) saveSite(w http.ResponseWriter, r *http.Request) {
 	v.GeoLookupURL = strings.TrimSpace(v.GeoLookupURL)
 	expected := v.Version
 	v.Version++
+	payload := strJSON(v)
+	if len(payload) > 65535 {
+		fail(w, 400, "site settings including logo exceed 64 KiB; reduce logo or announcement size")
+		return
+	}
 	err := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
 		if expected == 0 {
-			if _, err := tx.ExecContext(r.Context(), s.q("INSERT INTO cp_site_settings(id,payload,version) VALUES(1,?,?)"), strJSON(v), v.Version); err != nil {
+			if _, err := tx.ExecContext(r.Context(), s.q("INSERT INTO cp_site_settings(id,payload,version) VALUES(1,?,?)"), payload, v.Version); err != nil {
 				return err
 			}
 		} else {
-			res, err := tx.ExecContext(r.Context(), s.q("UPDATE cp_site_settings SET payload=?,version=? WHERE id=1 AND version=?"), strJSON(v), v.Version, expected)
+			res, err := tx.ExecContext(r.Context(), s.q("UPDATE cp_site_settings SET payload=?,version=? WHERE id=1 AND version=?"), payload, v.Version, expected)
 			if err != nil {
 				return err
 			}
@@ -93,6 +103,30 @@ func (s *Server) saveSite(w http.ResponseWriter, r *http.Request) {
 	// 查询地址换了就立刻生效，不用等下一次回读。
 	s.refreshGeo(v.GeoLookupURL)
 	reply(w, 200, v)
+}
+
+// Keep the encoded logo and other settings within MySQL's existing TEXT column.
+func validSiteLogo(raw string) bool {
+	if raw == "" {
+		return true
+	}
+	if len(raw) > 32*1024*4/3+32 {
+		return false
+	}
+	header, encoded, ok := strings.Cut(raw, ",")
+	if !ok || (header != "data:image/png;base64" && header != "data:image/jpeg;base64") {
+		return false
+	}
+	data, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	if err != nil || len(data) > 32*1024 {
+		return false
+	}
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || header != "data:image/"+format+";base64" || cfg.Width < 1 || cfg.Height < 1 || cfg.Width > 512 || cfg.Height > 512 {
+		return false
+	}
+	_, _, err = image.Decode(bytes.NewReader(data))
+	return err == nil
 }
 
 // PaymentAllowed 判断一笔充值是否落在站点允许的区间里。amount 是整数分：

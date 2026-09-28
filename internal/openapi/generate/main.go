@@ -283,6 +283,9 @@ func main() {
 	model("Captcha", schema{"id": str, "image": str}, "id", "image")
 	model("RegistrationInput", schema{"username": str, "password": str, "invite": str, "captcha_id": str, "captcha_answer": str}, "username", "password")
 	model("RegistrationInvite", schema{"code": str}, "code")
+	model("PasswordResetRequest", schema{"username": str}, "username")
+	model("PasswordResetRequestResult", schema{"message": str}, "message")
+	model("PasswordResetConfirm", schema{"username": str, "code": str, "password": str}, "username", "code", "password")
 	model("DiagnosticDispatch", schema{"diagnostic": nullable(ref("Diagnostic"))}, "diagnostic")
 	model("ImportPreviewInput", schema{"mode": str, "rules": array(ref("Rule"))}, "rules")
 	model("ImportPreview", schema{"mode": str, "items": array(ref("ImportPreviewItem"))}, "mode", "items")
@@ -309,6 +312,8 @@ func main() {
 		{"POST", "/purchases/{id}/refund", "PurchaseRefundInput", "PurchaseRefund", "200", "admin", "Refund unused purchased quota to original wallet funds and reverse commissions", false},
 		{"GET", "/openapi.json", "", "OpenAPIDocument", "200", "public", "OpenAPI 3.1 document", false},
 		{"POST", "/auth/login", "Login", "Session", "200", "public", "Cookie login; rate limited", false},
+		{"POST", "/auth/password-reset/request", "PasswordResetRequest", "PasswordResetRequestResult", "200", "public", "Send a short-lived code to the account's bound Telegram private chat; response does not disclose account existence", false},
+		{"POST", "/auth/password-reset/confirm", "PasswordResetConfirm", "", "204", "public", "Verify Telegram code, replace password, revoke sessions and API tokens", false},
 		{"GET", "/auth/session", "", "Session", "200", "user", "Current account", false},
 		{"POST", "/auth/logout", "Empty", "", "204", "user", "End cookie session", false},
 		{"POST", "/auth/password", "PasswordChange", "", "204", "user", "Change password and revoke sessions/tokens", false},

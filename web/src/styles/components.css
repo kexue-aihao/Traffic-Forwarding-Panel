@@ -293,6 +293,42 @@
   height: 16px;
 }
 
+.brand-label {
+  min-width: 0;
+}
+.brand-logo {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  object-fit: contain;
+}
+.site-logo-editor {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.site-logo-preview {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  flex: none;
+  object-fit: contain;
+}
+.site-logo-editor .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  max-width: 100%;
+}
+.site-logo-editor .icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
 .brand-name {
   display: block;
   font-size: var(--text-sm);

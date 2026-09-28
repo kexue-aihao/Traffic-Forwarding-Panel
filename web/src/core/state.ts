@@ -1,4 +1,4 @@
-import { reactive } from "vue";
+import { reactive, ref } from "vue";
 export interface User {
   id: string;
   username: string;
@@ -15,6 +15,14 @@ export const state = reactive({
   modalDepth: 0,
 });
 export const adminSite = location.pathname.startsWith("/admin");
+export const site = ref({
+  name: "流量控制台",
+  logo: "",
+  announcement: "",
+  registration: "closed",
+  captcha: false,
+  accent: "blue",
+});
 export function notice(value: string) {
   state.notice = value;
 }

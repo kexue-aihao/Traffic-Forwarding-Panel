@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import Select from "../components/Select.vue";
+import Icon from "../components/Icon.vue";
 import { api, errorText } from "../core/api";
-import { adminSite, state, notice } from "../core/state";
+import { adminSite, state, notice, site } from "../core/state";
 interface Settings {
   version: number;
   name: string;
+  logo: string;
   announcement: string;
   registration: string;
   captcha: boolean;
@@ -199,6 +201,36 @@ const form = ref<Settings | null>(null),
   error = ref(""),
   busy = ref(false),
   invite = ref("");
+const logoInput = ref<HTMLInputElement | null>(null);
+const logoLoading = ref(false);
+async function uploadLogo(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file || !form.value) return;
+  error.value = "";
+  logoLoading.value = true;
+  try {
+    if (!["image/png", "image/jpeg"].includes(file.type) || file.size > 32 * 1024)
+      throw Error("Logo 仅支持不超过 32 KB 的 PNG 或 JPEG 图片。");
+    const data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(Error("无法读取图片。"));
+      reader.readAsDataURL(file);
+    });
+    const image = new Image();
+    image.src = data;
+    await image.decode();
+    if (image.naturalWidth > 512 || image.naturalHeight > 512)
+      throw Error("Logo 尺寸不能超过 512 × 512 像素。");
+    form.value.logo = data;
+  } catch (e) {
+    error.value = errorText(e);
+  } finally {
+    input.value = "";
+    logoLoading.value = false;
+  }
+}
 async function load() {
   error.value = "";
   try {
@@ -208,10 +240,12 @@ async function load() {
   }
 }
 async function save() {
+  if (busy.value || logoLoading.value) return;
   busy.value = true;
   error.value = "";
   try {
     form.value = await api<Settings>("/site", "PUT", form.value);
+    site.value.logo = form.value.logo;
     notice("站点设置已保存，刷新页面可查看品牌更新。");
   } catch (e) {
     error.value = errorText(e);
@@ -245,12 +279,52 @@ onMounted(() => {
         <p class="eyebrow">SETTINGS</p>
         <h1>站点设置</h1>
       </div>
-      <button v-if="allowed" :disabled="busy" @click="load">重新加载</button>
+      <button v-if="allowed" :disabled="busy || logoLoading" @click="load">重新加载</button>
     </div>
     <p v-if="!allowed" class="card">仅管理员可以修改站点设置。</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <form v-if="allowed && form" class="card" @submit.prevent="save">
       <h2>品牌与公告</h2>
+      <div class="site-logo-editor">
+        <img
+          v-if="form.logo"
+          class="site-logo-preview"
+          :src="form.logo"
+          alt="Logo 预览"
+          width="64"
+          height="64"
+        />
+        <span v-else class="site-logo-preview">
+          <Icon name="arrow-right-left" />
+        </span>
+        <div class="actions">
+          <input
+            ref="logoInput"
+            type="file"
+            accept="image/png,image/jpeg"
+            class="sr-only"
+            tabindex="-1"
+            aria-label="上传站点 Logo"
+            :disabled="busy || logoLoading"
+            @change="uploadLogo"
+          />
+          <button
+            type="button"
+            :disabled="busy || logoLoading"
+            @click="logoInput?.click()"
+          >
+            <Icon name="plus" />{{ form.logo ? "更换 Logo" : "上传 Logo" }}
+          </button>
+          <button
+            v-if="form.logo"
+            type="button"
+            :disabled="busy || logoLoading"
+            @click="form.logo = ''"
+          >
+            <Icon name="x" />恢复默认
+          </button>
+        </div>
+      </div>
       <label>站点名称<input v-model="form.name" maxlength="100" required /></label
       ><label
         >公告<textarea v-model="form.announcement" maxlength="8000" rows="4" />
@@ -346,7 +420,7 @@ onMounted(() => {
       <div class="form-actions">
         <button
           class="primary"
-          :disabled="busy"
+          :disabled="busy || logoLoading"
           :data-busy="String(busy)"
           :aria-busy="busy"
         >
