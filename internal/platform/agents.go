@@ -357,9 +357,6 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		if rule.ExitUnavailable || disabled != 0 || !rule.Enabled || rule.Lease == nil || !rule.Lease.ExpiresAt.After(time.Now()) || entryPolicyDenied(g, rule) || (role != "admin" && authorized == 0) {
 			continue
 		}
-		if rule.Lease.Limits != (contract.ResourceLimits{}) && !contains(nodeInfo.Capabilities, "resource-limits-v1") {
-			continue
-		}
 		if rule.ProxyProtocol != nil && !contains(nodeInfo.Capabilities, "proxy-protocol-v1") {
 			continue
 		}

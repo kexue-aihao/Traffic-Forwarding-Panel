@@ -25,6 +25,9 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 | POST /users | `{username,role,identity_group_id}` | 管理员创建并指定身份用户组；响应仅此一次返回系统生成的 `initial_password`；旧客户端省略身份组时自动建立独立默认组 |
 | PUT /users/{id}/identity-group | `{identity_group_id}` | 管理员修改用户身份组，现有会话和 Token 的设备组权限随之更新 |
 | POST /users/{id}/reset-password | `{}` | 管理员重置密码，撤销该账号会话和 Token；响应仅此一次返回新 `password` |
+| GET /users/{id}/account | 无 | 管理员读取 `{balance_cents,rule_count,plan_max_rules,max_rules,rule_limit_override}`；金额是整数分字符串，`max_rules=0` 表示不限 |
+| POST /users/{id}/balance-adjustments | `{amount_cents,idempotency_key,reason}` | 管理员按整数分增加/扣减账号余额；幂等键同内容重放不重复入账，不同内容冲突，余额不能扣为负数 |
+| PUT /users/{id}/rule-limit | `{max_rules,reason}` | 管理员设置账号规则数覆盖值（0..100000）；`max_rules:null` 清除覆盖并跟随套餐 |
 | GET /identity-groups | 分页、`q` 匹配名称或 ID | 管理员身份用户组列表，含 `id,name,user_count,device_group_count` |
 | POST /identity-groups | `{id,name}` | 管理员手动指定唯一 ID，新建身份用户组；ID 为 1–64 位字母、数字、下划线或短横线，名称不可重复 |
 | PUT /identity-groups/{id} | `{id,name}` | 管理员修改 ID 和名称；路径使用原 ID；在同一事务中更新用户、设备组授权及存储配置，保留原访问权限，重复 ID/名称返回 409 |
@@ -163,7 +166,7 @@ Webhook 支持 `*` 或 `wallet.recharge|purchase|addon|redeem|commission|commiss
 
 **规则任务与状态诊断**
 
-Group 增加 `max_rules`，0不限，正数是该组每用户的规则上限；创建和导入在同一组锁内检查。套餐另有账号规则总数及每节点共享连接/IP/速率限制，详见下文。`GET /rules/{id}/diagnose` 返回 `{rule_id,node_id,desired_version,applied_version,checks,generated_at}`，只检查控制面记录，普通用户不返回整个Node对象或原始Agent错误。
+Group 增加 `max_rules`，0不限，正数是该组每用户的规则上限；创建和导入在同一组锁内检查。套餐只另有限制账号跨组、跨节点的规则总数，管理员可以给单个账号设覆盖值。`GET /rules/{id}/diagnose` 返回 `{rule_id,node_id,desired_version,applied_version,checks,generated_at}`，只检查控制面记录，普通用户不返回整个Node对象或原始Agent错误。
 
 | 方法/路径 | 请求 | 结果 |
 |---|---|---|
@@ -181,9 +184,9 @@ Cyber已按用户指示从支付渠道列表及本轮验收中排除。
 
 `GET /api/v1/openapi.json` 返回OpenAPI 3.1，源文件为 `internal/openapi/openapi.json`；执行 `go generate ./internal/openapi` 再生成，CI检查路由覆盖和生成漂移。
 
-套餐创建/编辑可带 `limits`：`max_rules`（0..100000）、`max_connections_per_node`、`max_ips_per_node`（0..1000000）、`bytes_per_second_per_node`（0..1000000000000的十进制字符串，B/s）。0表示无商业限制；叠加包只能填写全0。购买/兑换保存权益限制快照，权益和Agent租约返回 `limits`。规则总数按账号跨节点统计（包括停用）；其余限制按账号在单个节点所有规则合计。IP按活动TCP连接/UDP会话来源地址去重，IPv4映射地址归一化。TCP等待带宽令牌，UDP超速丢包；突发量/计数释放时间见实施状态。套餐降级按ID顺序保留前N条可下发规则，不删除原规则。
+套餐创建/编辑的商业 `limits` 只包含 `max_rules`（0..100000），0表示不限规则数；购买/兑换保存规则数限制快照，权益返回该商业限制。规则总数按账号跨节点统计（包括停用），套餐降级按ID顺序保留前N条可下发规则，不删除原规则。Agent 配置中仍可能出现 `ResourceLimits` 的连接/IP/带宽字段，它们是运行时安全能力与兼容字段，不再由套餐限制或账号套餐额度设置。
 
-Agent必须声明 `resource-limits-v1` 才会收到非零限制的规则；`POST /agent/ack` 可附带 `capabilities` 更新本机能力（最多64项、每项64字符）。能力变化会生成新配置版本，必须再次拉取与ACK；它只影响节点自己的配置下发，不能提升用户或管理权限。
+`POST /agent/ack` 可附带 `capabilities` 更新本机能力（最多64项、每项64字符）。Agent 配置中的 `ResourceLimits` 连接/IP/带宽字段仅为运行时安全和旧配置兼容，不由商业套餐或账号规则上限设置；账号规则总数由控制面在创建/导入规则时校验。
 
 ### 状态告警与通知控制
 

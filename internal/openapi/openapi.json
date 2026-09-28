@@ -95,6 +95,57 @@
         ],
         "type": "object"
       },
+      "AccountBalanceAdjustment": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_cents": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount_cents",
+          "idempotency_key",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "AccountRuleLimit": {
+        "additionalProperties": false,
+        "properties": {
+          "max_rules": {
+            "anyOf": [
+              {
+                "maximum": 100000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
       "Ack": {
         "additionalProperties": false,
         "properties": {
@@ -651,7 +702,7 @@
             "type": "string"
           },
           "limits": {
-            "$ref": "#/components/schemas/ResourceLimits"
+            "$ref": "#/components/schemas/PlanLimits"
           },
           "plan_id": {
             "type": "string"
@@ -2439,7 +2490,7 @@
             "type": "string"
           },
           "limits": {
-            "$ref": "#/components/schemas/ResourceLimits"
+            "$ref": "#/components/schemas/PlanLimits"
           },
           "months": {
             "description": "Legacy input when the duration pair is omitted. Output is monthly count (year x 12); 0 for day/week/add-on. If supplied with the pair, must agree. Legacy edits are only allowed for monthly plans.",
@@ -2554,7 +2605,7 @@
             "type": "string"
           },
           "limits": {
-            "$ref": "#/components/schemas/ResourceLimits"
+            "$ref": "#/components/schemas/PlanLimits"
           },
           "months": {
             "description": "Legacy input when the duration pair is omitted. Output is monthly count (year x 12); 0 for day/week/add-on. If supplied with the pair, must agree. Legacy edits are only allowed for monthly plans.",
@@ -2596,6 +2647,19 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "PlanLimits": {
+        "additionalProperties": false,
+        "properties": {
+          "max_rules": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_rules"
         ],
         "type": "object"
       },
@@ -2653,7 +2717,7 @@
             "type": "string"
           },
           "limits": {
-            "$ref": "#/components/schemas/ResourceLimits"
+            "$ref": "#/components/schemas/PlanLimits"
           },
           "months": {
             "description": "Legacy input when the duration pair is omitted. Output is monthly count (year x 12); 0 for day/week/add-on. If supplied with the pair, must agree. Legacy edits are only allowed for monthly plans.",
@@ -4783,6 +4847,46 @@
           "role",
           "identity_group_id",
           "disabled"
+        ],
+        "type": "object"
+      },
+      "UserAccount": {
+        "additionalProperties": false,
+        "properties": {
+          "balance_cents": {
+            "pattern": "^-?[0-9]+$",
+            "type": "string"
+          },
+          "max_rules": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "plan_max_rules": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "rule_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "rule_limit_override": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "balance_cents",
+          "rule_count",
+          "plan_max_rules",
+          "max_rules",
+          "rule_limit_override"
         ],
         "type": "object"
       },
@@ -12276,6 +12380,189 @@
           }
         ],
         "summary": "Replace a token secret in place; the new secret is returned exactly once",
+        "x-role": "admin"
+      }
+    },
+    "/users/{user_id}/account": {
+      "get": {
+        "operationId": "get_users_user_id_account",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAccount"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Read one account's wallet balance and effective rule limit",
+        "x-role": "admin"
+      }
+    },
+    "/users/{user_id}/balance-adjustments": {
+      "post": {
+        "operationId": "post_users_user_id_balance-adjustments",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountBalanceAdjustment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAccount"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Adjust an account wallet balance with an idempotent ledger entry and reason",
+        "x-role": "admin"
+      }
+    },
+    "/users/{user_id}/rule-limit": {
+      "put": {
+        "operationId": "put_users_user_id_rule-limit",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountRuleLimit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAccount"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Set or clear an account rule-count override",
         "x-role": "admin"
       }
     },

@@ -30,6 +30,7 @@ func (s *Service) PlansPage(ctx context.Context, page, size int) ([]Plan, int, e
 		if e = json.Unmarshal([]byte(rawLimits), &p.Limits); e != nil {
 			return nil, 0, e
 		}
+		p.Limits = ruleOnlyLimits(p.Limits)
 		items = append(items, p)
 	}
 	return items, total, rows.Err()

@@ -826,7 +826,7 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 			return err
 		}
 		if !supported {
-			return errors.New("upgrade Agent to enforce plan limits before enabling this rule")
+			return errors.New("Agent does not support this rule configuration")
 		}
 	}
 	if create {
@@ -984,7 +984,7 @@ func (s *Server) diagnoseRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	add("plan_rule_limit", withinLimit, "rule eligible within current plan limit")
-	add("agent_limits_capability", supported, "Agent must support current plan limits")
+	add("agent_feature_capability", supported, "Agent must support the rule features in use")
 	lastSeenAt := time.Unix(lastSeen, 0).UTC()
 	add("node_online", lastSeen > 0 && now.Sub(lastSeenAt) <= 90*time.Second, lastSeenAt.Format(time.RFC3339))
 	add("configuration_ack", desired == applied && applyError == "", map[bool]string{true: "applied", false: "pending or failed"}[desired == applied && applyError == ""])

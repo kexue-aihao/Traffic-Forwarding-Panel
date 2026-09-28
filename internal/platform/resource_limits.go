@@ -32,22 +32,18 @@ func (s *Server) accountLimits(ctx context.Context, tx *sql.Tx, user string) (co
 }
 
 func (s *Server) resourceCapabilities(ctx context.Context, tx *sql.Tx, rule contract.Rule) (bool, error) {
-	limits, err := s.accountLimits(ctx, tx, rule.UserID)
-	if err != nil {
-		return false, err
-	}
-	if limits == (contract.ResourceLimits{}) && !rule.Advanced() && rule.ProxyProtocol == nil {
+	if !rule.Advanced() && rule.ProxyProtocol == nil {
 		return true, nil
 	}
 	var raw string
-	if err = tx.QueryRowContext(ctx, s.q("SELECT payload FROM cp_nodes WHERE id=?"), rule.NodeID).Scan(&raw); err != nil {
+	if err := tx.QueryRowContext(ctx, s.q("SELECT payload FROM cp_nodes WHERE id=?"), rule.NodeID).Scan(&raw); err != nil {
 		return false, err
 	}
 	var node contract.Node
-	if err = json.Unmarshal([]byte(raw), &node); err != nil {
+	if err := json.Unmarshal([]byte(raw), &node); err != nil {
 		return false, err
 	}
-	return (rule.ProxyProtocol == nil || contains(node.Capabilities, "proxy-protocol-v1")) && (limits == (contract.ResourceLimits{}) || contains(node.Capabilities, "resource-limits-v1")) && (!rule.Advanced() || contains(node.Capabilities, "advanced-routing-v1")) && (rule.Transport != "direct-tls" || contains(node.Capabilities, "direct-tls-v1")), nil
+	return (rule.ProxyProtocol == nil || contains(node.Capabilities, "proxy-protocol-v1")) && (!rule.Advanced() || contains(node.Capabilities, "advanced-routing-v1")) && (rule.Transport != "direct-tls" || contains(node.Capabilities, "direct-tls-v1")), nil
 }
 
 // Existing rules are ordered by immutable ID on every node. A downgrade keeps

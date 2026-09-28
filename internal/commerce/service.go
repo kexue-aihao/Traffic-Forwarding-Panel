@@ -19,34 +19,34 @@ import (
 )
 
 type Plan struct {
-	Limits        contract.ResourceLimits `json:"limits"`
-	ID            string                  `json:"id"`
-	Name          string                  `json:"name"`
-	Price         int64                   `json:"price_cents,string"`
-	Quota         int64                   `json:"quota_bytes,string"`
-	PriceYuan     *string                 `json:"price_yuan,omitempty"`
-	QuotaGB       *string                 `json:"quota_gb,omitempty"`
-	Months        int                     `json:"months"`
-	DurationUnit  string                  `json:"duration_unit"`
-	DurationValue int                     `json:"duration_value"`
-	Active        bool                    `json:"active"`
-	Version       int64                   `json:"version"`
-	Kind          string                  `json:"kind"`
+	Limits        contract.PlanLimits `json:"limits"`
+	ID            string              `json:"id"`
+	Name          string              `json:"name"`
+	Price         int64               `json:"price_cents,string"`
+	Quota         int64               `json:"quota_bytes,string"`
+	PriceYuan     *string             `json:"price_yuan,omitempty"`
+	QuotaGB       *string             `json:"quota_gb,omitempty"`
+	Months        int                 `json:"months"`
+	DurationUnit  string              `json:"duration_unit"`
+	DurationValue int                 `json:"duration_value"`
+	Active        bool                `json:"active"`
+	Version       int64               `json:"version"`
+	Kind          string              `json:"kind"`
 }
 type Wallet struct {
 	Currency string `json:"currency"`
 	Balance  int64  `json:"balance_cents,string"`
 }
 type Entitlement struct {
-	Limits    contract.ResourceLimits `json:"limits"`
-	ID        string                  `json:"id"`
-	UserID    string                  `json:"user_id"`
-	PlanID    string                  `json:"plan_id"`
-	Version   int64                   `json:"version"`
-	StartsAt  time.Time               `json:"starts_at"`
-	ExpiresAt time.Time               `json:"expires_at"`
-	Quota     int64                   `json:"quota_bytes,string"`
-	Used      int64                   `json:"used_bytes,string"`
+	Limits    contract.PlanLimits `json:"limits"`
+	ID        string              `json:"id"`
+	UserID    string              `json:"user_id"`
+	PlanID    string              `json:"plan_id"`
+	Version   int64               `json:"version"`
+	StartsAt  time.Time           `json:"starts_at"`
+	ExpiresAt time.Time           `json:"expires_at"`
+	Quota     int64               `json:"quota_bytes,string"`
+	Used      int64               `json:"used_bytes,string"`
 }
 type Ledger struct {
 	ID        string    `json:"id"`
@@ -132,7 +132,7 @@ func (s *Service) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS commerce_lease_reservations(lease_id VARCHAR(64) PRIMARY KEY,budget BIGINT NOT NULL,closed INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS commerce_attempts(order_id VARCHAR(64) PRIMARY KEY,state VARCHAR(32) NOT NULL,provider_id VARCHAR(128) NOT NULL,updated_at VARCHAR(40) NOT NULL)`,
 	}
-	err := storage.MigrateNamespace(ctx, s.DB, s.Dialect, "commerce", 8, func(conn *sql.Conn) error {
+	err := storage.MigrateNamespace(ctx, s.DB, s.Dialect, "commerce", 9, func(conn *sql.Conn) error {
 		var current int
 		if err := conn.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM commerce_schema").Scan(&current); err != nil {
 			return err
@@ -211,6 +211,11 @@ func (s *Service) Migrate(ctx context.Context) error {
 				return err
 			}
 			if err := storage.EnsureColumn(ctx, conn, s.Dialect, "commerce_plans", "duration_value", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
+		}
+		if current < 9 {
+			if err := s.migrateAccountAdjustments(ctx, conn); err != nil {
 				return err
 			}
 		}
@@ -305,6 +310,7 @@ func (s *Service) Plans(ctx context.Context) ([]Plan, error) {
 		if e = json.Unmarshal([]byte(rawLimits), &p.Limits); e != nil {
 			return nil, e
 		}
+		p.Limits = ruleOnlyLimits(p.Limits)
 		out = append(out, p)
 	}
 	return out, rows.Err()

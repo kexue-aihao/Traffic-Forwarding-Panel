@@ -29,8 +29,8 @@ type limitsQuery interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func (s *Service) entitlementLimits(ctx context.Context, q limitsQuery, ent string) (contract.ResourceLimits, error) {
-	var limits contract.ResourceLimits
+func (s *Service) entitlementLimits(ctx context.Context, q limitsQuery, ent string) (contract.PlanLimits, error) {
+	var limits contract.PlanLimits
 	var raw string
 	err := q.QueryRowContext(ctx, s.q("SELECT payload FROM commerce_entitlement_limits WHERE entitlement_id=?"), ent).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -45,26 +45,39 @@ func (s *Service) entitlementLimits(ctx context.Context, q limitsQuery, ent stri
 	return limits, limits.Validate()
 }
 
+func ruleOnlyLimits(limits contract.PlanLimits) contract.PlanLimits {
+	return contract.PlanLimits{MaxRules: limits.MaxRules}
+}
+
 // LimitsTx reads the immutable entitlement policy, never today's plan settings.
 // The caller serializes rule creation and purchases with the account row lock.
 func (s *Service) LimitsTx(ctx context.Context, tx *sql.Tx, user string) (contract.ResourceLimits, error) {
+	var limits contract.PlanLimits
 	var ent string
 	q := "SELECT id FROM commerce_entitlements WHERE user_id=? ORDER BY version DESC LIMIT 1"
 	if s.Dialect != "sqlite" {
 		q += " FOR UPDATE"
 	}
 	err := tx.QueryRowContext(ctx, s.q(q), user).Scan(&ent)
-	if errors.Is(err, sql.ErrNoRows) {
-		return contract.ResourceLimits{}, nil
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return contract.ResourceLimits{}, err
 	}
-	return s.entitlementLimits(ctx, tx, ent)
+	if err == nil {
+		limits, err = s.entitlementLimits(ctx, tx, ent)
+		if err != nil {
+			return contract.ResourceLimits{}, err
+		}
+	}
+	if override, exists, err := s.userRuleLimit(ctx, tx, user); err != nil {
+		return contract.ResourceLimits{}, err
+	} else if exists {
+		limits.MaxRules = override
+	}
+	return contract.ResourceLimits{MaxRules: limits.MaxRules}, nil
 }
 
 func (s *Service) savePlanLimits(ctx context.Context, tx *sql.Tx, p Plan) error {
-	raw, err := json.Marshal(p.Limits)
+	raw, err := json.Marshal(ruleOnlyLimits(p.Limits))
 	if err != nil {
 		return err
 	}
@@ -76,8 +89,8 @@ func (s *Service) savePlanLimits(ctx context.Context, tx *sql.Tx, p Plan) error 
 	return err
 }
 
-func (s *Service) snapshotLimits(ctx context.Context, tx *sql.Tx, ent string, limits contract.ResourceLimits) error {
-	raw, err := json.Marshal(limits)
+func (s *Service) snapshotLimits(ctx context.Context, tx *sql.Tx, ent string, limits contract.PlanLimits) error {
+	raw, err := json.Marshal(ruleOnlyLimits(limits))
 	if err != nil {
 		return err
 	}

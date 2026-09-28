@@ -119,7 +119,7 @@ func main() {
 			panic(err)
 		}
 	}
-	for _, v := range []any{contract.SiteSettings{}, contract.Exit{}, contract.Diagnostic{}, platform.ImportPreviewItem{}, commerce.PurchaseRefund{}, contract.User{}, contract.UserCreated{}, contract.UserPasswordReset{}, contract.IdentityGroup{}, contract.Group{}, contract.Node{}, contract.Rule{}, contract.Config{}, contract.Registration{}, contract.Registered{}, contract.Ack{}, contract.Probe{}, contract.UsageBatch{}, contract.APIError{}, commerce.Plan{}, commerce.Wallet{}, commerce.Order{}, commerce.Ledger{}, commerce.Entitlement{}, commerce.AutoRenew{}, commerce.RedeemCode{}, commerce.ReferralCode{}, commerce.Commission{}, commerce.Refund{}, commerce.WebhookSubscription{}, commerce.WebhookSettings{}, alerts.Policy{}, commerce.Event{}, platform.Task{}, platform.ProbeHistoryPoint{}, contract.APIToken{}, contract.DeviceIP{}} {
+	for _, v := range []any{contract.SiteSettings{}, contract.Exit{}, contract.Diagnostic{}, contract.PlanLimits{}, platform.ImportPreviewItem{}, commerce.PurchaseRefund{}, commerce.UserAccount{}, contract.User{}, contract.UserCreated{}, contract.UserPasswordReset{}, contract.IdentityGroup{}, contract.Group{}, contract.Node{}, contract.Rule{}, contract.Config{}, contract.Registration{}, contract.Registered{}, contract.Ack{}, contract.Probe{}, contract.UsageBatch{}, contract.APIError{}, commerce.Plan{}, commerce.Wallet{}, commerce.Order{}, commerce.Ledger{}, commerce.Entitlement{}, commerce.AutoRenew{}, commerce.RedeemCode{}, commerce.ReferralCode{}, commerce.Commission{}, commerce.Refund{}, commerce.WebhookSubscription{}, commerce.WebhookSettings{}, alerts.Policy{}, commerce.Event{}, platform.Task{}, platform.ProbeHistoryPoint{}, contract.APIToken{}, contract.DeviceIP{}} {
 		wire(reflect.TypeOf(v))
 	}
 	str, num, flag := scalar("string"), scalar("integer"), scalar("boolean")
@@ -144,6 +144,8 @@ func main() {
 	model("DeviceIPPage", schema{"items": nullable(array(ref("DeviceIP"))), "total": num}, "items", "total")
 	model("UserCreate", schema{"username": str, "role": schema{"type": "string", "enum": []string{"user", "admin"}}, "identity_group_id": str}, "username", "role")
 	model("UserIdentityGroup", schema{"identity_group_id": str}, "identity_group_id")
+	model("AccountBalanceAdjustment", schema{"amount_cents": money, "idempotency_key": schema{"type": "string", "minLength": 1, "maxLength": 128}, "reason": schema{"type": "string", "minLength": 1, "maxLength": 500}}, "amount_cents", "idempotency_key", "reason")
+	model("AccountRuleLimit", schema{"max_rules": nullable(schema{"type": "integer", "minimum": 0, "maximum": 100000}), "reason": schema{"type": "string", "minLength": 1, "maxLength": 500}}, "reason")
 	identityGroupID := schema{"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "Administrator-specified identity group ID; editable with references updated atomically."}
 	model("IdentityGroupCreate", schema{"id": identityGroupID, "name": schema{"type": "string", "minLength": 1, "maxLength": 190}}, "id", "name")
 	userCreatedFields := schemas["UserCreated"].(schema)["properties"].(schema)
@@ -323,6 +325,9 @@ func main() {
 		{"GET", "/users", "", "UserPage", "200", "admin", "List users", true},
 		{"POST", "/users", "UserCreate", "UserCreated", "201", "admin", "Create user and return the system-generated initial password exactly once", false},
 		{"PUT", "/users/{id}/identity-group", "UserIdentityGroup", "", "204", "admin", "Assign a user to an identity group", false},
+		{"GET", "/users/{user_id}/account", "", "UserAccount", "200", "admin", "Read one account's wallet balance and effective rule limit", false},
+		{"POST", "/users/{user_id}/balance-adjustments", "AccountBalanceAdjustment", "UserAccount", "200", "admin", "Adjust an account wallet balance with an idempotent ledger entry and reason", false},
+		{"PUT", "/users/{user_id}/rule-limit", "AccountRuleLimit", "UserAccount", "200", "admin", "Set or clear an account rule-count override", false},
 		{"POST", "/users/{id}/reset-password", "Empty", "UserPasswordReset", "200", "admin", "Reset a user password, revoke sessions and tokens, and return the replacement exactly once", false},
 		{"PUT", "/users/{id}/status", "UserStatus", "", "204", "admin", "Disable/enable non-administrator; revoke sessions", false},
 		{"GET", "/identity-groups", "", "IdentityGroupPage", "200", "admin", "List identity groups and reference counts", true},

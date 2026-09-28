@@ -225,12 +225,107 @@ try {
       await createdUserRow
         .getByRole("cell", { name: identity.id, exact: true })
         .waitFor();
+      const managedUsers = await (
+        await admin.request.get(base + "/api/v1/users?page_size=100")
+      ).json();
+      const userID = managedUsers.items.find((item) => item.username === username).id;
       assert.equal(
         await createdUserRow
-          .getByRole("button", { name: "网络诊断", exact: true })
+        .getByRole("button", { name: "网络诊断", exact: true })
           .count(),
         0,
       );
+      await createdUserRow
+        .getByRole("button", { name: "余额与规则", exact: true })
+        .click();
+      await admin.getByText("余额 ¥0.00 · 规则 0 / 不限", { exact: true }).waitFor();
+      await admin.getByLabel("调整金额（元）", { exact: true }).fill("10.25");
+      await admin.getByLabel("调整原因", { exact: true }).first().fill("UI balance credit");
+      const balanceEndpoint = `**/api/v1/users/${userID}/balance-adjustments`;
+      let failedCredit = false;
+      let firstCreditBody;
+      await admin.route(balanceEndpoint, async (route) => {
+        if (failedCredit || route.request().method() !== "POST") {
+          await route.continue();
+          return;
+        }
+        failedCredit = true;
+        firstCreditBody = route.request().postDataJSON();
+        // Let the server commit, then discard the response as a lost connection.
+        const requestHeaders = route.request().headers();
+        const response = await fetch(route.request().url(), {
+          method: "POST",
+          headers: {
+            "Content-Type": requestHeaders["content-type"] || "application/json",
+            "Cookie": requestHeaders.cookie || "",
+            "X-Requested-With": "fetch",
+          },
+          body: route.request().postData(),
+        });
+        await response.arrayBuffer();
+        await route.abort("failed");
+      });
+      await admin.getByRole("button", { name: "确认调整余额", exact: true }).click();
+      await admin.getByText("上次余额调整的结果未确认。", { exact: false }).waitFor();
+      await admin.unroute(balanceEndpoint);
+      await admin.getByRole("button", { name: "关闭对话框", exact: true }).click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      await createdUserRow
+        .getByRole("button", { name: "余额与规则", exact: true })
+        .click();
+      assert.equal(await admin.getByLabel("调整金额（元）", { exact: true }).inputValue(), "10.25");
+      assert.equal(await admin.getByLabel("调整原因", { exact: true }).first().inputValue(), "UI balance credit");
+      let retryCreditBody;
+      const retriedCredit = admin.waitForRequest((request) => {
+        if (
+          request.url().includes(`/api/v1/users/${userID}/balance-adjustments`) &&
+          request.method() === "POST"
+        ) {
+          retryCreditBody = request.postDataJSON();
+          return true;
+        }
+        return false;
+      });
+      await admin.getByRole("button", { name: "确认调整余额", exact: true }).click();
+      await retriedCredit;
+      assert.equal(
+        retryCreditBody.idempotency_key,
+        firstCreditBody.idempotency_key,
+        "网络中断后的余额重试必须复用幂等键",
+      );
+      assert.equal(retryCreditBody.amount_cents, firstCreditBody.amount_cents);
+      assert.equal(retryCreditBody.reason, firstCreditBody.reason);
+      await admin.getByText("余额 ¥10.25 · 规则 0 / 不限", { exact: true }).waitFor();
+      await admin.getByLabel("调整金额（元）", { exact: true }).fill("-10.25");
+      await admin.getByLabel("调整原因", { exact: true }).first().fill("UI balance correction");
+      await admin.getByRole("button", { name: "确认调整余额", exact: true }).click();
+      await admin.getByText("余额 ¥0.00 · 规则 0 / 不限", { exact: true }).waitFor();
+      await admin.getByLabel("最大规则总数", { exact: true }).fill("2");
+      await admin.getByLabel("调整原因", { exact: true }).nth(1).fill("UI rule allowance");
+      const accountLimitSaved = admin.waitForResponse((response) =>
+        response.url().includes(`/api/v1/users/${userID}/rule-limit`) &&
+        response.request().method() === "PUT",
+      );
+      await admin.getByRole("button", { name: "保存规则上限", exact: true }).click();
+      const savedAccount = await accountLimitSaved;
+      const savedAccountBody = await savedAccount.json();
+      assert.equal(savedAccount.status(), 200, JSON.stringify(savedAccountBody));
+      assert.equal(savedAccountBody.max_rules, 2, JSON.stringify(savedAccountBody));
+      await admin.getByText("余额 ¥0.00 · 规则 0 / 2", { exact: true }).waitFor();
+      await admin.getByLabel("最大规则总数", { exact: true }).fill("");
+      await admin.getByLabel("调整原因", { exact: true }).nth(1).fill("Restore plan limit");
+      const accountLimitCleared = admin.waitForResponse((response) =>
+        response.url().includes(`/api/v1/users/${userID}/rule-limit`) &&
+        response.request().method() === "PUT",
+      );
+      await admin.getByRole("button", { name: "保存规则上限", exact: true }).click();
+      const clearedAccount = await accountLimitCleared;
+      const clearedAccountBody = await clearedAccount.json();
+      assert.equal(clearedAccount.status(), 200, JSON.stringify(clearedAccountBody));
+      assert.equal(clearedAccountBody.rule_limit_override, null, JSON.stringify(clearedAccountBody));
+      await admin.getByText("余额 ¥0.00 · 规则 0 / 不限", { exact: true }).waitFor();
+      await admin.getByRole("button", { name: "关闭", exact: true }).click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
       await createdUserRow
         .getByRole("button", { name: "重置密码", exact: true })
         .click();
@@ -616,11 +711,6 @@ try {
         .getByLabel("名称", { exact: true })
         .fill(`plan-${browserName}`);
       await admin.getByLabel("账号规则总数", { exact: true }).fill("3");
-      await admin.getByLabel("每节点最大连接数", { exact: true }).fill("10");
-      await admin.getByLabel("每节点活跃 IP 数", { exact: true }).fill("2");
-      await admin
-        .getByLabel("每节点上下行合计（B/s）", { exact: true })
-        .fill("1048576");
       await admin.getByRole("button", { name: "确认提交" }).click();
       await admin.locator("dialog").waitFor({ state: "detached" });
       const periodCard = admin.locator("article").filter({
@@ -1060,10 +1150,7 @@ try {
       const beforeAddon = await (
         await user.request.get(base + "/api/v1/entitlement")
       ).json();
-      assert.equal(beforeAddon.limits.max_rules, 3);
-      assert.equal(beforeAddon.limits.max_connections_per_node, 10);
-      assert.equal(beforeAddon.limits.max_ips_per_node, 2);
-      assert.equal(beforeAddon.limits.bytes_per_second_per_node, "1048576");
+      assert.deepEqual(beforeAddon.limits, { max_rules: 3 });
       // 有了权益，探针才可见：只包含本组设备，且对普通用户隐藏公网 IP。
       await user.evaluate(() => { location.hash = "#/probes"; });
       await user

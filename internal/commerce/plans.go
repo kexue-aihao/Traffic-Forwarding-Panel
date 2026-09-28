@@ -11,10 +11,11 @@ import (
 )
 
 func validatePlan(p Plan) error {
+	p.Limits = ruleOnlyLimits(p.Limits)
 	if err := p.Limits.Validate(); err != nil {
 		return err
 	}
-	if p.Kind == "addon" && p.Limits != (contract.ResourceLimits{}) {
+	if p.Kind == "addon" && p.Limits != (contract.PlanLimits{}) {
 		return errors.New("add-ons cannot change limits")
 	}
 	if strings.TrimSpace(p.Name) == "" || len(p.Name) > 200 || p.Price <= 0 || p.Price > 100000000 || p.Quota < 0 {
@@ -39,6 +40,7 @@ func (s *Service) planTx(ctx context.Context, tx *sql.Tx, id string) (Plan, erro
 			err = nil
 		} else if err == nil {
 			err = json.Unmarshal([]byte(raw), &p.Limits)
+			p.Limits = ruleOnlyLimits(p.Limits)
 		}
 	}
 	return p, err

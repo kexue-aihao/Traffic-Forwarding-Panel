@@ -73,6 +73,10 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 			if err != nil {
 				return err
 			}
+			legacyLimits := rule.Lease != nil && rule.Lease.Limits != (contract.ResourceLimits{})
+			if legacyLimits {
+				rule.Lease.Limits = contract.ResourceLimits{}
+			}
 			valid := allowed && rule.Lease != nil && rule.Lease.ExpiresAt.After(time.Now())
 			if valid {
 				var retired int
@@ -91,6 +95,17 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 				}
 			}
 			if valid {
+				if legacyLimits {
+					res, err := tx.ExecContext(ctx, s.q(`UPDATE cp_rules SET payload=? WHERE id=? AND version=? AND deleted=0`), strJSON(rule), rule.ID, rule.Version)
+					if err != nil {
+						return err
+					}
+					n, _ := res.RowsAffected()
+					if n != 1 {
+						return errConflict
+					}
+					changed = true
+				}
 				continue
 			}
 			oldLease := rule.Lease

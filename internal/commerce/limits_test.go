@@ -10,10 +10,10 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/payment"
 )
 
-func TestResourceLimitsPurchaseRedeemSnapshotAndUpgrade(t *testing.T) {
+func TestPlanRuleLimitSnapshotAndLegacyLimits(t *testing.T) {
 	s := fixture(t)
 	ctx := context.Background()
-	original := contract.ResourceLimits{MaxRules: 2, MaxConnectionsPerNode: 3, MaxIPsPerNode: 1, BytesPerSecondPerNode: 65536}
+	original := contract.PlanLimits{MaxRules: 2}
 	p, err := s.CreatePlan(ctx, Plan{Name: "limited", Price: 100, Quota: 64 << 20, Months: 1, Limits: original})
 	if err != nil {
 		t.Fatal(err)
@@ -43,8 +43,8 @@ func TestResourceLimitsPurchaseRedeemSnapshotAndUpgrade(t *testing.T) {
 	}
 	if err = s.Write(ctx, func(tx *sql.Tx) error {
 		lease, err := s.Allocate(ctx, tx, "alice", "rule", "node")
-		if err == nil && lease.Limits != original {
-			t.Fatalf("lease lost snapshot: %+v", lease)
+		if err == nil && lease.Limits != (contract.ResourceLimits{}) {
+			t.Fatalf("commercial rule cap leaked into Agent resource controls: %+v", lease)
 		}
 		return err
 	}); err != nil {
@@ -78,7 +78,7 @@ func TestResourceLimitsPurchaseRedeemSnapshotAndUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = s.Entitlement(ctx, "alice")
-	if err != nil || got.Limits != (contract.ResourceLimits{}) || got.ID != ent.ID {
+	if err != nil || got.Limits != (contract.PlanLimits{}) || got.ID != ent.ID {
 		t.Fatal(got, err)
 	}
 }

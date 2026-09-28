@@ -10,26 +10,18 @@ import {
   formatBytes,
   formatDateTime,
 } from "../core/format";
-interface ResourceLimits {
+interface PlanLimits {
   max_rules: number;
-  max_connections_per_node: number;
-  max_ips_per_node: number;
-  bytes_per_second_per_node: string;
 }
-function emptyLimits(): ResourceLimits {
-  return {
-    max_rules: 0,
-    max_connections_per_node: 0,
-    max_ips_per_node: 0,
-    bytes_per_second_per_node: "0",
-  };
+function emptyLimits(): PlanLimits {
+  return { max_rules: 0 };
 }
-function limitsText(limits?: ResourceLimits) {
+function limitsText(limits?: PlanLimits) {
   const l = limits || emptyLimits();
-  return `规则 ${l.max_rules || "不限"} · 每节点连接 ${l.max_connections_per_node || "不限"} · 每节点活跃 IP ${l.max_ips_per_node || "不限"} · 每节点合计带宽 ${l.bytes_per_second_per_node && l.bytes_per_second_per_node !== "0" ? l.bytes_per_second_per_node + " B/s" : "不限"}`;
+  return `规则总数 ${l.max_rules || "不限"}`;
 }
 interface Plan {
-  limits?: ResourceLimits;
+  limits?: PlanLimits;
   id: string;
   name: string;
   price_cents: string;
@@ -70,7 +62,7 @@ interface Channel {
   rate?: string;
 }
 interface Entitlement {
-  limits?: ResourceLimits;
+  limits?: PlanLimits;
   id: string;
   plan_id: string;
   version: number;
@@ -1045,8 +1037,7 @@ watch(
           <fieldset v-if="planForm.kind === 'period'">
             <legend>套餐限制</legend>
             <p class="small muted">
-              0 表示不限。规则数包含停用规则，按账号跨节点统计；连接、活跃 IP
-              和上下行合计带宽由同一账号在每个节点的所有规则共享。编辑仅影响后续购买或兑换。
+              0 表示不限。规则数包含停用规则，按账号跨节点统计。编辑仅影响后续购买或兑换。
             </p>
             <label
               >账号规则总数<input
@@ -1054,29 +1045,6 @@ watch(
                 type="number"
                 min="0"
                 max="100000"
-                required
-            /></label>
-            <label
-              >每节点最大连接数<input
-                v-model.number="planForm.limits.max_connections_per_node"
-                type="number"
-                min="0"
-                max="1000000"
-                required
-            /></label>
-            <label
-              >每节点活跃 IP 数<input
-                v-model.number="planForm.limits.max_ips_per_node"
-                type="number"
-                min="0"
-                max="1000000"
-                required
-            /></label>
-            <label
-              >每节点上下行合计（B/s）<input
-                v-model="planForm.limits.bytes_per_second_per_node"
-                inputmode="numeric"
-                pattern="[0-9]+"
                 required
             /></label>
           </fieldset>

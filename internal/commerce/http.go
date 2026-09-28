@@ -121,6 +121,55 @@ func (s *Service) Register(mux *http.ServeMux, o HTTPOptions) {
 		v, total, e := s.PlansPage(r.Context(), page, size)
 		send(w, map[string]any{"items": v, "total": total}, e)
 	}))
+	mux.HandleFunc("GET /api/v1/users/{user_id}/account", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		v, err := s.UserAccount(r.Context(), r.PathValue("user_id"))
+		send(w, v, err)
+	}))
+	mux.HandleFunc("POST /api/v1/users/{user_id}/balance-adjustments", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		var in struct {
+			Amount int64  `json:"amount_cents,string"`
+			Key    string `json:"idempotency_key"`
+			Reason string `json:"reason"`
+		}
+		if err := decode(w, r, &in); err != nil {
+			send(w, nil, err)
+			return
+		}
+		if err := s.AdjustUserBalance(r.Context(), u.ID, r.PathValue("user_id"), in.Key, in.Reason, in.Amount); err != nil {
+			send(w, nil, err)
+			return
+		}
+		v, err := s.UserAccount(r.Context(), r.PathValue("user_id"))
+		send(w, v, err)
+	}))
+	mux.HandleFunc("PUT /api/v1/users/{user_id}/rule-limit", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		var in struct {
+			MaxRules *int   `json:"max_rules"`
+			Reason   string `json:"reason"`
+		}
+		if err := decode(w, r, &in); err != nil {
+			send(w, nil, err)
+			return
+		}
+		if err := s.SetUserRuleLimit(r.Context(), u.ID, r.PathValue("user_id"), in.MaxRules, in.Reason); err != nil {
+			send(w, nil, err)
+			return
+		}
+		v, err := s.UserAccount(r.Context(), r.PathValue("user_id"))
+		send(w, v, err)
+	}))
 	mux.HandleFunc("POST /api/v1/plans", secure(func(w http.ResponseWriter, r *http.Request, u contract.User) {
 		if u.Role != "admin" {
 			http.Error(w, "forbidden", 403)

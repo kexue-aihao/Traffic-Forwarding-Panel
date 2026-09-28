@@ -126,6 +126,219 @@ interface UserToken {
   permanent: boolean;
   last_used_at?: string | null;
 }
+interface UserAccount {
+  balance_cents: string;
+  rule_count: number;
+  plan_max_rules: number;
+  max_rules: number;
+  rule_limit_override: number | null;
+}
+const accountUser = ref<Row | null>(null);
+const userAccount = ref<UserAccount | null>(null);
+const accountBusy = ref(false);
+const accountError = ref("");
+const balanceDraft = ref("");
+const balanceReason = ref("");
+const ruleLimitDraft = ref("");
+const ruleLimitReason = ref("");
+interface PendingBalanceAdjustment {
+  user_id: string;
+  amount_cents: string;
+  reason: string;
+  idempotency_key: string;
+}
+const pendingBalanceAdjustment = ref<PendingBalanceAdjustment | null>(null);
+function balanceAdjustmentStorageKey(userID: string) {
+  return `tfp-balance-adjustment:${encodeURIComponent(state.user?.id || "unknown")}:${encodeURIComponent(userID)}`;
+}
+function centsToBalanceDraft(value: string) {
+  const amount = BigInt(value);
+  const absolute = amount < 0n ? -amount : amount;
+  const major = absolute / 100n;
+  const minor = String(absolute % 100n).padStart(2, "0");
+  return `${amount < 0n ? "-" : ""}${major}.${minor}`;
+}
+function readPendingBalanceAdjustment(userID: string) {
+  try {
+    const raw = sessionStorage.getItem(balanceAdjustmentStorageKey(userID));
+    if (!raw) return null;
+    const saved = JSON.parse(raw) as Partial<PendingBalanceAdjustment>;
+    if (
+      saved.user_id !== userID ||
+      typeof saved.amount_cents !== "string" ||
+      !/^-?[1-9]\d*$/.test(saved.amount_cents) ||
+      typeof saved.reason !== "string" ||
+      typeof saved.idempotency_key !== "string" ||
+      !saved.idempotency_key
+    )
+      return null;
+    return {
+      user_id: saved.user_id,
+      amount_cents: saved.amount_cents,
+      reason: saved.reason,
+      idempotency_key: saved.idempotency_key,
+    };
+  } catch {
+    return null;
+  }
+}
+function persistPendingBalanceAdjustment(value: PendingBalanceAdjustment) {
+  pendingBalanceAdjustment.value = value;
+  try {
+    sessionStorage.setItem(
+      balanceAdjustmentStorageKey(value.user_id),
+      JSON.stringify(value),
+    );
+  } catch {
+    /* the in-memory intent still protects retries in the current view */
+  }
+}
+function clearPendingBalanceAdjustment() {
+  const userID = pendingBalanceAdjustment.value?.user_id;
+  pendingBalanceAdjustment.value = null;
+  if (!userID) return;
+  try {
+    sessionStorage.removeItem(balanceAdjustmentStorageKey(userID));
+  } catch {
+    /* storage may be unavailable */
+  }
+}
+function restorePendingBalanceAdjustment(userID: string) {
+  const pending = readPendingBalanceAdjustment(userID);
+  pendingBalanceAdjustment.value = pending;
+  if (pending) {
+    balanceDraft.value = centsToBalanceDraft(pending.amount_cents);
+    balanceReason.value = pending.reason;
+  }
+}
+function accountMoney(cents: string) {
+  const amount = BigInt(cents);
+  const absolute = amount < 0n ? -amount : amount;
+  return `${amount < 0n ? "-" : ""}¥${absolute / 100n}.${String(absolute % 100n).padStart(2, "0")}`;
+}
+function ruleLimitLabel(maximum: number) {
+  return maximum === 0 ? "不限" : String(maximum);
+}
+async function openUserAccount(row: Row) {
+  accountUser.value = row;
+  userAccount.value = null;
+  accountError.value = "";
+  balanceDraft.value = "";
+  balanceReason.value = "";
+  ruleLimitDraft.value = "";
+  ruleLimitReason.value = "";
+  restorePendingBalanceAdjustment(String(row.id));
+  await loadUserAccount();
+}
+async function loadUserAccount() {
+  if (!accountUser.value) return;
+  accountBusy.value = true;
+  accountError.value = "";
+  try {
+    userAccount.value = await api<UserAccount>(
+      `/users/${encodeURIComponent(String(accountUser.value.id))}/account`,
+    );
+    ruleLimitDraft.value =
+      userAccount.value.rule_limit_override === null
+        ? ""
+        : String(userAccount.value.rule_limit_override);
+  } catch (e) {
+    accountError.value = errorText(e);
+  } finally {
+    accountBusy.value = false;
+  }
+}
+async function adjustUserBalance() {
+  if (!accountUser.value || accountBusy.value) return;
+  const match = /^([+-]?)(\d+)(?:\.(\d{1,2}))?$/.exec(balanceDraft.value.trim());
+  if (!match) {
+    accountError.value = "请输入最多两位小数的正数或负数金额。";
+    return;
+  }
+  const cents = BigInt(match[2]) * 100n + BigInt((match[3] || "").padEnd(2, "0") || "0");
+  const delta = match[1] === "-" ? -cents : cents;
+  if (delta === 0n) {
+    accountError.value = "调整金额不能为 0。";
+    return;
+  }
+  const reason = balanceReason.value.trim();
+  if (!reason) {
+    accountError.value = "请填写调整原因。";
+    return;
+  }
+  const amountCents = delta.toString();
+  const pending = pendingBalanceAdjustment.value;
+  if (
+    pending &&
+    (pending.user_id !== String(accountUser.value.id) ||
+      pending.amount_cents !== amountCents ||
+      pending.reason !== reason)
+  ) {
+    accountError.value =
+      "存在尚未确认的余额调整，请保持原金额和原因重试，或先放弃后重新填写。";
+    return;
+  }
+  const intent: PendingBalanceAdjustment = pending || {
+    user_id: String(accountUser.value.id),
+    amount_cents: amountCents,
+    reason,
+    idempotency_key: crypto.randomUUID(),
+  };
+  // Persist before the request: a response can be lost after the server commits.
+  persistPendingBalanceAdjustment(intent);
+  accountBusy.value = true;
+  accountError.value = "";
+  try {
+    userAccount.value = await api<UserAccount>(
+      `/users/${encodeURIComponent(String(accountUser.value.id))}/balance-adjustments`,
+      "POST",
+      {
+        amount_cents: intent.amount_cents,
+        idempotency_key: intent.idempotency_key,
+        reason: intent.reason,
+      },
+    );
+    clearPendingBalanceAdjustment();
+    balanceDraft.value = "";
+    balanceReason.value = "";
+    notice("账户余额已调整，账本记录已保存。");
+  } catch (e) {
+    accountError.value = `${errorText(e)} 若请求结果不确定，请保留当前内容重试；也可放弃待重试调整后重新填写。`;
+  } finally {
+    accountBusy.value = false;
+  }
+}
+function discardPendingBalanceAdjustment() {
+  clearPendingBalanceAdjustment();
+  balanceDraft.value = "";
+  balanceReason.value = "";
+  accountError.value = "";
+  notice("已放弃待重试的余额调整。");
+}
+async function saveUserRuleLimit() {
+  if (!accountUser.value || accountBusy.value) return;
+  const raw = String(ruleLimitDraft.value).trim();
+  const maximum = raw === "" ? null : Number(raw);
+  if (maximum !== null && (!Number.isInteger(maximum) || maximum < 0 || maximum > 100000)) {
+    accountError.value = "规则上限须为 0–100000 的整数，0 表示不限。";
+    return;
+  }
+  accountBusy.value = true;
+  accountError.value = "";
+  try {
+    userAccount.value = await api<UserAccount>(
+      `/users/${encodeURIComponent(String(accountUser.value.id))}/rule-limit`,
+      "PUT",
+      { max_rules: maximum, reason: ruleLimitReason.value.trim() },
+    );
+    ruleLimitReason.value = "";
+    notice(maximum === null ? "规则上限已恢复为跟随套餐。" : "账号规则上限已更新。");
+  } catch (e) {
+    accountError.value = errorText(e);
+  } finally {
+    accountBusy.value = false;
+  }
+}
 const tokenUser = ref<Row | null>(null);
 const userTokens = ref<UserToken[]>([]);
 const issueTokenName = ref("");
@@ -1226,6 +1439,12 @@ const labels: Record<string, string> = {
                   </button>
                   <button
                     v-if="resource === 'users'"
+                    @click="openUserAccount(row)"
+                  >
+                    余额与规则
+                  </button>
+                  <button
+                    v-if="resource === 'users'"
                     @click="openPasswordReset(row)"
                   >
                     重置密码
@@ -1486,6 +1705,91 @@ const labels: Record<string, string> = {
           </div>
         </form>
       </template>
+    </Modal>
+    <Modal
+      v-if="accountUser"
+      :title="`账号额度 · ${accountUser.username}`"
+      :busy="accountBusy"
+      @close="accountUser = null"
+    >
+      <p v-if="accountError" class="error" role="alert">{{ accountError }}</p>
+      <p v-if="pendingBalanceAdjustment" class="warning">
+        上次余额调整的结果未确认。请保持下面的金额和原因重试；确认未入账后，
+        可以放弃这次待重试调整。
+      </p>
+      <p v-if="userAccount" class="muted">
+        余额 {{ accountMoney(userAccount.balance_cents) }} · 规则
+        {{ userAccount.rule_count }} / {{ ruleLimitLabel(userAccount.max_rules) }}
+      </p>
+      <p v-if="userAccount" class="small muted">
+        套餐规则上限：{{ ruleLimitLabel(userAccount.plan_max_rules) }}<span
+          v-if="userAccount.rule_limit_override !== null"
+        > · 当前账号使用自定义上限</span>
+      </p>
+      <form @submit.prevent="adjustUserBalance">
+        <fieldset>
+          <legend>调整余额</legend>
+          <label
+            >调整金额（元）<input
+              v-model="balanceDraft"
+              type="text"
+              inputmode="decimal"
+              pattern="[+-]?[0-9]+(\.[0-9]{1,2})?"
+              placeholder="例如 20 或 -5.50"
+              required
+          /></label>
+          <p class="small muted">正数增加余额，负数扣减余额；扣减不能超过现有余额。</p>
+          <label
+            >调整原因<input
+              v-model="balanceReason"
+              maxlength="500"
+              required
+          /></label>
+          <div class="form-actions">
+            <button class="primary" type="submit" :disabled="accountBusy">
+              确认调整余额
+            </button>
+            <button
+              v-if="pendingBalanceAdjustment"
+              class="danger"
+              type="button"
+              :disabled="accountBusy"
+              @click="discardPendingBalanceAdjustment"
+            >
+              放弃待重试调整
+            </button>
+          </div>
+        </fieldset>
+      </form>
+      <form @submit.prevent="saveUserRuleLimit">
+        <fieldset>
+          <legend>账号规则上限</legend>
+          <label
+            >最大规则总数<input
+              v-model="ruleLimitDraft"
+              type="number"
+              min="0"
+              max="100000"
+              step="1"
+              placeholder="留空跟随套餐"
+          /></label>
+          <p class="small muted">0 表示不限；留空会恢复为跟随套餐。</p>
+          <label
+            >调整原因<input
+              v-model="ruleLimitReason"
+              maxlength="500"
+              required
+          /></label>
+          <div class="form-actions">
+            <button class="primary" type="submit" :disabled="accountBusy">
+              保存规则上限
+            </button>
+            <button type="button" :disabled="accountBusy" @click="accountUser = null">
+              关闭
+            </button>
+          </div>
+        </fieldset>
+      </form>
     </Modal>
     <Modal
       v-if="editing"
