@@ -299,5 +299,5 @@ func (a *Agent) retire(ctx context.Context) error {
 }
 
 func capabilities() []string {
-	return []string{"tcp", "udp", "direct", "direct-tls", "tls", "ws", "wss", "http", "chain:3", "resource-limits-v1", "advanced-routing-v1", "proxy-protocol-v1", "diagnostics-v1", "block:http", "block:socks", "looking-glass-v1", "probe"}
+	return []string{"tcp", "udp", "direct", "direct-tls", "tls", "ws", "wss", "http", "chain:3", "resource-limits-v1", "advanced-routing-v1", "proxy-protocol-v1", "diagnostics-v1", "block:http", "block:socks", "looking-glass-v1", "probe", "obfuscation-v1", "obfuscation:random-padding", "obfuscation:timing-perturb", "obfuscation:tls-mimic"}
 }

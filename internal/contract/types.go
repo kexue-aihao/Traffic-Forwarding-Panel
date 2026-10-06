@@ -107,7 +107,13 @@ type Tunnel struct {
 	Mux        bool   `json:"mux,omitempty"`
 	Reverse    string `json:"reverse,omitempty"`
 	// Chain lists the remaining exits after Endpoint; at most two are allowed.
-	Chain []TunnelHop `json:"chain,omitempty"`
+	Chain       []TunnelHop        `json:"chain,omitempty"`
+	Obfuscation *ObfuscationConfig `json:"obfuscation,omitempty"`
+}
+
+type ObfuscationConfig struct {
+	Strategy string         `json:"strategy"`
+	Params   map[string]any `json:"params,omitempty"`
 }
 
 // TunnelHop is one authenticated, encrypted exit in an ordered tunnel chain.

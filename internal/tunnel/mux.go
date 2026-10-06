@@ -75,6 +75,7 @@ func (p *MuxPool) Close() {
 func (c Client) DialRoute(ctx context.Context, transport, network, target string, t contract.Tunnel) (*Session, error) {
 	c.useMux = t.Mux
 	c.reverse = t.Reverse
+	c.obfuscation = t.Obfuscation
 	return c.DialChain(ctx, transport, t.Endpoint, t.ServerName, t.Token, network, target, t.Chain)
 }
 

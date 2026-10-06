@@ -111,7 +111,25 @@ Token 明文只在**创建或重置**的那一次响应里出现（库里只有 
 
 兼容已有数据库和旧客户端的混合 `blocked_protocols`：读取/保存时把 `network:*`、`transport:*` 和历史裸值迁移到各自字段；历史裸 `http` 仍指 HTTP 隧道，裸 `socks` 转为 `app:socks`。保存后仅持久化拆分后的字段。规则仍只允许进一步收紧应用屏蔽；下发 Agent 时合并组与规则的应用拒绝项，转发限制不进入应用识别器。未知应用默认允许；不会检查未解密 HTTPS 路径。
 
-加密规则的 `tunnel` 为 `{endpoint,server_name,token,chain?,mux?,reverse?}`。`chain` 最多两项，每项 `{transport,endpoint,server_name,token}`，加首出口共最多三出口；`mux=true` 复用 TLS 载波，`reverse` 使用出口主动建立的认证载波。服务端保存前检查重复地址与跳数，实际连接再检查出口稳定身份和白名单。列表与创建/修改返回都隐藏每跳 token；只在完整身份（承载/地址/证书名）不变时保留省略的旧 token。分配节点的配置接口才下发凭据。出口需配置证书、稳定唯一 ID 和下一跳白名单，见 [Agent 文档](../examples/agent-README.md)。
+加密规则的 `tunnel` 为 `{endpoint,server_name,token,chain?,mux?,reverse?,obfuscation?}`。`chain` 最多两项，每项 `{transport,endpoint,server_name,token}`，加首出口共最多三出口；`mux=true` 复用 TLS 载波，`reverse` 使用出口主动建立的认证载波。`obfuscation` 为可选混淆配置 `{strategy,params?}`，在 TLS 层与 Session 层之间插入混淆层，降低流量特征置信度。
+
+混淆策略包括 `random-padding`（随机填充 1-255 字节）、`timing-perturb`（1-50ms 随机延迟）、`tls-mimic`（TLS 1.2 应用数据记录格式封装）。节点需声明 `obfuscation-v1` 基础能力及对应策略能力（如 `obfuscation:random-padding`）。控制面在规则分发前检查节点能力，不支持混淆的旧 Agent 不会收到混淆配置。混淆配置示例：
+
+```json
+{
+  "obfuscation": {
+    "strategy": "random-padding",
+    "params": {
+      "min_pad": 10,
+      "max_pad": 255
+    }
+  }
+}
+```
+
+`params` 可选，各策略有默认值。`strategy` 为 `"none"` 或留空 `obfuscation` 字段时禁用混淆。链式隧道每一跳可独立配置混淆策略。
+
+服务端保存前检查重复地址与跳数，实际连接再检查出口稳定身份和白名单。列表与创建/修改返回都隐藏每跳 token；只在完整身份（承载/地址/证书名）不变时保留省略的旧 token。分配节点的配置接口才下发凭据。出口需配置证书、稳定唯一 ID 和下一跳白名单，见 [Agent 文档](../examples/agent-README.md)。
 
 故障转移规则可附 `backends:[{target,weight,disabled}]`（TCP、最多16个、权重1–100）。Agent 使用加权调度；连接失败剔除，10秒健康检查恢复，只影响新连接。TLS 共享端口使用 `shared_tls:{parent_id,server_name}`；母子规则必须同账号/组/节点/监听地址，SNI 必须精确小写 DNS 名称，空/未匹配 SNI 关闭连接，客户端验证原始回源 TLS。
 

@@ -199,11 +199,12 @@ type openRequest struct {
 	Reverse string               `json:"reverse,omitempty"`
 }
 type Client struct {
-	TLS     *tls.Config
-	Timeout time.Duration
-	Pool    *MuxPool
-	useMux  bool
-	reverse string
+	TLS         *tls.Config
+	Timeout     time.Duration
+	Pool        *MuxPool
+	useMux      bool
+	reverse     string
+	obfuscation *contract.ObfuscationConfig
 }
 
 func (c Client) Dial(ctx context.Context, transport, endpoint, serverName, token, network, target string) (*Session, error) {
@@ -310,6 +311,17 @@ func (c Client) dial(ctx context.Context, transport, endpoint, serverName, token
 			return nil, err
 		}
 		conn = t
+
+		// Apply obfuscation layer if configured
+		if c.obfuscation != nil {
+			strategy, err := newObfuscator(c.obfuscation)
+			if err != nil {
+				return nil, fmt.Errorf("obfuscation init: %w", err)
+			}
+			if strategy != nil {
+				conn = &obfsConn{Conn: conn, strategy: strategy}
+			}
+		}
 	}
 	if err = c.open(conn, token, network, target, chain, visited); err != nil {
 		return nil, err
@@ -382,7 +394,8 @@ type Server struct {
 	Allowed map[string]bool
 	// NextHops is an operator-owned allowlist, including local outbound secrets.
 	// Requested hops must match these entries; an empty list disables chaining.
-	NextHops []contract.TunnelHop
+	NextHops    []contract.TunnelHop
+	Obfuscation *contract.ObfuscationConfig
 	// NodeID must be stable and unique across logical exits used in a chain.
 	NodeID      string
 	Client      Client
@@ -536,6 +549,18 @@ func (s *Server) handle(raw net.Conn, transport string) {
 			return
 		}
 		conn = t
+
+		// Apply obfuscation layer if configured
+		if s.Obfuscation != nil {
+			strategy, err := newObfuscator(s.Obfuscation)
+			if err != nil {
+				// Log error but don't block service (backward compatibility)
+				return
+			}
+			if strategy != nil {
+				conn = &obfsConn{Conn: conn, strategy: strategy}
+			}
+		}
 	}
 	s.serveRequest(conn, true)
 }

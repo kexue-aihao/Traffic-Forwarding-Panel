@@ -162,6 +162,86 @@ target 的主机部分；目标是纯 IP、证书签的却是域名时，在规�
 
 所有隧道均支持 TCP 和 UDP，UDP 使用明确报文帧；由于承载基于 TCP，UDP 仍存在队头阻塞。客户端到入口及出口到目标没有自动加密；业务协议自身是否加密独立判断。CONNECT 仅用于本产品入口到出口协议，尚不承诺兼容任意第三方 HTTP/CDN 代理。
 
+## 流量混淆
+
+在 TLS 层与 Session 层之间可选启用混淆层，降低流量特征置信度。混淆层对 Session 协议完全透明，保持隧道性能优化（零拷贝读取、帧合并写入、缓冲复用）。
+
+Agent 声明 `obfuscation-v1` 表示支持混淆基础能力，具体策略通过 `obfuscation:strategy-name` 声明。控制面在规则分发前检查节点能力，不支持混淆的旧 Agent 不会收到混淆配置。
+
+配置通过规则的 `tunnel.obfuscation` 字段传递：
+
+```json
+{
+  "transport": "tls",
+  "tunnel": {
+    "endpoint": "exit.example.com:9443",
+    "server_name": "exit.example.com",
+    "token": "SAME_EXIT_TOKEN",
+    "obfuscation": {
+      "strategy": "random-padding",
+      "params": {
+        "min_pad": 10,
+        "max_pad": 255
+      }
+    }
+  }
+}
+```
+
+### 支持的混淆策略
+
+| 策略 | 能力声明 | 作用 | 开销 |
+|---|---|---|---|
+| `random-padding` | `obfuscation:random-padding` | 随机填充 1-255 字节，混淆数据包大小特征 | 混淆 ~5 μs/op，解混淆零拷贝 |
+| `timing-perturb` | `obfuscation:timing-perturb` | 1-50ms 随机延迟，扰动时序特征，数据透传 | 延迟开销 |
+| `tls-mimic` | `obfuscation:tls-mimic` | TLS 1.2 应用数据记录格式封装 | 固定 5 字节 |
+
+**RandomPadding 示例**：
+
+```json
+{
+  "obfuscation": {
+    "strategy": "random-padding",
+    "params": {
+      "min_pad": 10,
+      "max_pad": 255
+    }
+  }
+}
+```
+
+帧结构：`[2B长度][原始数据][随机填充]`。参数可选，默认 `min_pad: 10, max_pad: 255`。
+
+**TimingPerturb 示例**：
+
+```json
+{
+  "obfuscation": {
+    "strategy": "timing-perturb",
+    "params": {
+      "min_delay_ms": 1,
+      "max_delay_ms": 50
+    }
+  }
+}
+```
+
+在写入前引入随机延迟，数据不修改。参数可选，默认 `min_delay_ms: 1, max_delay_ms: 50`。
+
+**TLSTrafficMimic 示例**：
+
+```json
+{
+  "obfuscation": {
+    "strategy": "tls-mimic"
+  }
+}
+```
+
+无需参数。帧结构：`[1B类型=0x17][2B版本=0x0303][2B长度][数据]`，模拟 TLS 1.2 应用数据记录。
+
+混淆配置留空或策略设为 `"none"` 时禁用混淆。出口服务需同步配置混淆参数（通过 `-obfuscation-strategy` 与 `-obfuscation-params`）。链式隧道每一跳可独立配置混淆策略。
+
 ## 最多三个出口的链式隧道
 
 支持入口 Agent → 出口 A → 出口 B → 出口 C → 最终目标，出口总数为 1–3。首出口仍使用 `tunnel.endpoint/server_name/token`；`tunnel.chain` 依次列出后续 1–2 个出口，每项增加自己的 `transport`。各跳可以混用四种承载，均执行 TLS 1.3 证书及 token 验证，TCP 半关闭和 UDP 报文边界贯穿整条链。链中的出口均需运行支持 v2 的版本。

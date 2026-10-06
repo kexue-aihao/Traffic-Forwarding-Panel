@@ -4,6 +4,18 @@
 
 面板两类工作空间的侧栏均提供“API 列表”，读取同一份版本化 OpenAPI 3.1 文档，支持按关键词、方法、分类和调用身份筛选，并展开请求参数、请求体、响应结构与认证要求；同时可下载原始 JSON。页面入口不代替接口本身的鉴权。
 
+## 2026-10-06 流量混淆层
+
+在 TLS 层与 Session 层之间插入可选混淆层，降低流量特征置信度。保持隧道性能优化的零拷贝读取、帧合并写入与缓冲复用机制。实现三种混淆策略：
+
+- **RandomPadding**：随机填充 1-255 字节，混淆 4.8 μs/op、解混淆零拷贝（1.27 ns/op，0 allocs/op）
+- **TimingPerturb**：1-50ms 随机延迟，数据透传，扰动时序特征
+- **TLSTrafficMimic**：TLS 记录格式封装（固定 5 字节开销），模拟 TLS 1.2 应用数据记录
+
+能力协商机制：`obfuscation-v1` 基础支持，`obfuscation:random-padding`、`obfuscation:timing-perturb`、`obfuscation:tls-mimic` 策略声明。配置通过 `Tunnel.Obfuscation` 字段传递，包含策略名称与可选参数；控制面在规则分发前检查节点能力。混淆层使用独立 sync.Pool，Client/Server 在 TLS 握手后插入 `obfsConn` 包装器，对上层 Session 协议完全透明。
+
+验证：所有现有隧道测试（64 种三跳承载组合、链式验证、Mux、帧协议）无回归通过；三种策略的正确性、错误处理与工厂函数测试通过；race 检测通过。RandomPadding 吞吐影响远低于 3% 目标阈值。混淆配置示例与 API 文档待补充。
+
 ## 2026-09-23 隧道性能优化
 
 帧合并写入、TCP 直接读入调用方缓冲、中继缓冲复用、Mux 建连/开流移出全局锁、TLS 会话恢复，以及 WAL 去除固定批次收集等待已实现。协议、证书校验和先落盘后发送的计量约束保留。修改前后本机基准、取舍与复现命令见 [隧道性能测量](tunnel-performance.md)；尚未做 Linux 双机公网容量验收。
