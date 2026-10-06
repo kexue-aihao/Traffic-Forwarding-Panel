@@ -29,7 +29,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: test -z "$(gofmt -l cmd internal)"
+      - name: Check Go formatting
+        run: |
+          unformatted=$(gofmt -l cmd internal)
+          if [ -n "$unformatted" ]; then
+            echo "Go files need formatting:"
+            printf '%s\n' "$unformatted"
+            gofmt -d cmd internal
+            exit 1
+          fi
       - run: bash -n install.sh
       - run: bash -n internal/agentdist/agent-install.sh
       - run: bash -n internal/agentdist/agent-uninstall.sh

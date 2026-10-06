@@ -2118,6 +2118,22 @@
       "Null": {
         "type": "null"
       },
+      "ObfuscationConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "params": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "strategy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy"
+        ],
+        "type": "object"
+      },
       "OpenAPIDocument": {
         "additionalProperties": true,
         "type": "object"
@@ -4689,6 +4705,16 @@
           },
           "mux": {
             "type": "boolean"
+          },
+          "obfuscation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ObfuscationConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reverse": {
             "type": "string"
