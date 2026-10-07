@@ -29,7 +29,11 @@ func (s *Service) SetChannels(next map[string]Channel) {
 func (s *Service) Channels() map[string]Channel {
 	s.channelSet.mu.RLock()
 	defer s.channelSet.mu.RUnlock()
-	return s.channelSet.m
+	copied := make(map[string]Channel, len(s.channelSet.m))
+	for name, channel := range s.channelSet.m {
+		copied[name] = channel
+	}
+	return copied
 }
 
 func (s *Service) channel(name string) (Channel, bool) {

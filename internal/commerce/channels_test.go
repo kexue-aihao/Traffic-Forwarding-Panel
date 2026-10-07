@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/payment"
 )
@@ -62,5 +63,38 @@ func TestGatewayCreationAmbiguityAndReconciliation(t *testing.T) {
 	bad.Currency = "USD"
 	if e = s.ConfirmStatus(ctx, "tokenpay", bad); e == nil {
 		t.Fatal("currency mismatch accepted")
+	}
+}
+
+func TestHasActivePaymentOrdersKeepsChannelCredentialsStable(t *testing.T) {
+	s := fixture(t)
+	ctx := context.Background()
+	_, err := s.DB.ExecContext(ctx, s.q(`INSERT INTO commerce_orders(id,user_id,channel,amount,payable_cents,status,payment_url,created_at,idempotency_key) VALUES(?,?,?,?,?,'pending','',?,?)`), "order-pending", "alice", "epay", 1000, 1000, stamp(time.Now()), "key-pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.ExecContext(ctx, s.q(`INSERT INTO commerce_attempts(order_id,state,provider_id,updated_at) VALUES(?,'ready','',?)`), "order-pending", stamp(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	active, err := s.HasActivePaymentOrders(ctx, "epay")
+	if err != nil || !active {
+		t.Fatalf("pending order was not detected: active=%v err=%v", active, err)
+	}
+	if _, err := s.DB.ExecContext(ctx, s.q(`UPDATE commerce_orders SET status='paid' WHERE id=?`), "order-pending"); err != nil {
+		t.Fatal(err)
+	}
+	active, err = s.HasActivePaymentOrders(ctx, "epay")
+	if err != nil || active {
+		t.Fatalf("terminal order still blocks channel: active=%v err=%v", active, err)
+	}
+	if _, err := s.DB.ExecContext(ctx, s.q(`UPDATE commerce_orders SET status='pending' WHERE id=?`), "order-pending"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.ExecContext(ctx, s.q(`UPDATE commerce_attempts SET state='uncertain' WHERE order_id=?`), "order-pending"); err != nil {
+		t.Fatal(err)
+	}
+	active, err = s.HasActivePaymentOrders(ctx, "epay")
+	if err != nil || !active {
+		t.Fatalf("uncertain attempt was not detected: active=%v err=%v", active, err)
 	}
 }

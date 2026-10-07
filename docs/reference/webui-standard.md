@@ -4,6 +4,8 @@
 > 基线：v1.12.0（`master`，提交 `72fdc0c`）
 > 整理日期：2026-09-20
 
+> **维护提示**：本文档保留了早期前端架构的设计背景，部分路径和组件名已随 Vue 迁移失效。当前实现以 `web/src/App.vue`、`web/src/core/`、`web/src/pages/`、`web/static/`、`web/vite.config.ts` 及 `.github/workflows/ci.yml` 为准；涉及旧路径的章节需要同步更新后再作为开发指南使用。
+
 ---
 
 ## 目录
@@ -357,34 +359,33 @@ Cache-Control: no-store
 npm run typecheck   # vue-tsc --noEmit && tsc --noEmit -p tsconfig.node.json
 ```
 
-### 10.2 CI（`.github/workflows/docker-publish.yml`）
+### 10.2 CI（`.github/workflows/ci.yml`）
 
-在 Go 的 `test -race` / `vet` / `gofmt` 之后追加一个 Node 作业：
+CI 会运行 Go 的格式检查、`go vet`、竞态测试、OpenAPI 生成一致性检查、PostgreSQL/MySQL 测试和多架构构建；Go 依赖还会执行 `govulncheck`。前端作业执行：
 
 ```bash
 cd web
 npm ci
+npm audit --omit=dev
 npm run typecheck
 npm run build
 cd ..
-git diff --exit-code -- internal/webui/assets                  # 产物与源码必须一致
-test -z "$(git status --porcelain -- internal/webui/assets)"   # git diff 看不到新文件，这里补上
-test -z "$(ls internal/webui/assets | grep -E '^[_.]')"        # go:embed 会丢掉这类文件
-test "$(grep -cE 'new Function|[^.]eval\(' internal/webui/assets/app.js)" = "0"
+git diff --exit-code -- internal/webui/assets
+test -z "$(git status --porcelain -- internal/webui/assets)"
 ```
 
-随后 Trivy 扫源码依赖与文件系统（`skip-dirs: web/node_modules`，前端工具链不进镜像也不进二进制）。
+前端构建产物必须与 `web/src` 一致，且 CI 会检查产物中没有 `v-html`、`eval` 或 `new Function`。Docker 发布与安装验证位于手动触发的 `.github/workflows/docker-release.yml`。
 
-Go 侧的 `internal/webui/handlers_test.go` 还钉住了 `/assets/app.css` 与 `/assets/app.js` 的 200 状态码与 `text/javascript` 类型。
+Go 侧的 `internal/webui/handler_test.go` 固定了静态资源的状态码和类型。
 
-### 10.3 浏览器回归（Python Playwright 1.63.0）
+### 10.3 浏览器回归（Playwright 1.63.0）
 
 | 套件 | 文件 | 浏览器 | 覆盖 |
 | --- | --- | --- | --- |
-| 业务回归 | `scripts/test_webui.py` | Chromium | 趋势周期与键盘选日、图表/表格切换、轴缩放、零命中；规则搜索/筛选/URL 持久化/分页/开关回滚/正则校验/增删改/导出；未保存确认与模态框焦点循环；内置库分类、版本、组合条件、总开关与逐项开关、保存失败回滚、文本测试（含禁用检测项、Unicode 上限、失败与编辑后的过期响应）；审计筛选、分页、长文本按文本渲染、剪贴板反馈；失败请求与重试、导航后的迟到响应；1440/768/390/320 布局、明暗主题、移动端对话框；账号校验、改密、会话过期、登出；运行设置开关与校验；设置页配色选择器（切换后重绘、刷新后保留、与明暗轴互不干扰、每个色板用自己推荐的配色自绘） |
-| 动效与视觉 | `scripts/test_webui_motion.py` | Chromium + Firefox + WebKit | 1920/1440/768/390/320 视口、动画打断与清理、`will-change` 回收、reduced-motion、forced-colors、主题与配色持久化、200% CSS 缩放、模态框焦点还原、会话过期；**不放宽生产 CSP** |
+| 业务回归 | `scripts/test_webui.mjs` | Chromium + Firefox + WebKit | 登录、CSP、响应式布局、时间与金额格式化、规则和探针交互、主题、重试及权限边界 |
+| 真实服务回归 | `scripts/test_webui_live.mjs` | Chromium + Firefox + WebKit | 编译真实 Go 面板并使用 SQLite 验证嵌入前端、登录、站点设置、API 页面、节点和支付流程 |
 
-两个套件都只接受 localhost，并在改数据前检查 `X-WebUI-Preview` 响应头；截图、`<browser>-motion.webm` 录像与 `report.json` 写入 `.gocache/`。
+两套测试都只接受 localhost；截图和测试产物写入 `.gocache/`。
 
 可选无障碍检查：安装 `axe-core@4.13.0` 到被忽略的目录，用 `--axe` 参数启用 WCAG A/AA 扫描（官方文档明确它只是人工检查的补充，不构成完整合规证明）。
 

@@ -103,7 +103,7 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
 
 ## 构建与运行
 
-要求 Go 1.26；命令从仓库根目录执行。下面环境变量命令使用 PowerShell，Linux 用对应的 `export`。凭据使用实际新建值，不把真实密钥提交到仓库。
+要求 Go 1.26.6 或更高版本；命令从仓库根目录执行。下面环境变量命令使用 PowerShell，Linux 用对应的 `export`。凭据使用实际新建值，不把真实密钥提交到仓库。
 
 ```powershell
 go build -o ./agent.exe ./cmd/agent

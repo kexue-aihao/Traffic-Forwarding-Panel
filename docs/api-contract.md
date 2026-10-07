@@ -260,6 +260,6 @@ Agent 诊断需 `diagnostics-v1`，只探测该节点当前有授权、已启用
 - 手动地址模式没有链上扫描或自动确认；需要管理员维护汇率并核实实际到账。私钥不存储在站点。
 # Telegram 忘记密码
 
-`POST /api/v1/auth/password-reset/request` 接收 `{"username":"..."}`，对不存在、未绑定、已停用及发送受限的账号统一返回 200 与相同提示。账号须通过现有 Telegram 机器人 `/login` 绑定；启用机器人后，验证码仅发送至绑定的私聊。每个账号 60 秒内最多发送一次、每小时最多五次，验证码 10 分钟有效，最多可尝试五次。
+`POST /api/v1/auth/password-reset/request` 接收 `{"username":"..."}`，对不存在、未绑定、已停用及发送受限的账号统一返回 200 与相同提示。账号须通过现有 Telegram 机器人 `/login` 绑定；启用机器人后，验证码仅发送至绑定的私聊。每个账号 60 秒内最多发送一次、每小时最多五次；请求和确认接口还分别按客户端 IP 限制为每分钟五次，超限返回 429 和 `Retry-After: 60`。验证码 10 分钟有效，最多可尝试五次。
 
 `POST /api/v1/auth/password-reset/confirm` 接收 `{"username":"...","code":"8 位数字","password":"12 至 72 字节"}`。成功返回 204，单次消费验证码，并撤销该账号全部会话、API Token 与未使用的 Telegram 登录链接。需要 `X-Requested-With: fetch` 和同源 Origin。本人凭旧密码修改及管理员重置流程保持原样。

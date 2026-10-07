@@ -8,14 +8,57 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/httporigin"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 	"golang.org/x/crypto/bcrypt"
 )
 
 const resetMessage = "如果账号已绑定 Telegram 且机器人可用，验证码将发送到绑定的私聊。"
+
+const (
+	passwordResetIPLimit  = 5
+	passwordResetIPPeriod = time.Minute
+)
+
+type passwordResetIPWindow struct {
+	started time.Time
+	count   int
+}
+
+// allowPasswordResetIP limits reset-code operations before account lookup.
+// Keeping this state in App, rather than in the database, makes the limiter
+// cheap and prevents concurrent requests from racing the allowance check. The
+// account-level database limits remain the durable backstop across instances.
+func (a *App) allowPasswordResetIP(r *http.Request, operation string) bool {
+	ip := operation + ":" + httporigin.ClientIP(r, a.trustProxy)
+	now := time.Now()
+	a.passwordResetIPMu.Lock()
+	defer a.passwordResetIPMu.Unlock()
+	if a.passwordResetIPs == nil {
+		a.passwordResetIPs = make(map[string]passwordResetIPWindow)
+	}
+	if len(a.passwordResetIPs) >= 10000 {
+		for key, window := range a.passwordResetIPs {
+			if now.Sub(window.started) >= passwordResetIPPeriod {
+				delete(a.passwordResetIPs, key)
+			}
+		}
+		if len(a.passwordResetIPs) >= 10000 {
+			return false
+		}
+	}
+	window := a.passwordResetIPs[ip]
+	if window.started.IsZero() || now.Sub(window.started) >= passwordResetIPPeriod {
+		window = passwordResetIPWindow{started: now}
+	}
+	window.count++
+	a.passwordResetIPs[ip] = window
+	return window.count <= passwordResetIPLimit
+}
 
 func (a *App) resetClient() *http.Client {
 	if a.telegramClient != nil {
@@ -35,6 +78,11 @@ func (a *App) resetRequestAllowed(w http.ResponseWriter, r *http.Request) bool {
 
 func (a *App) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 	if !a.resetRequestAllowed(w, r) {
+		return
+	}
+	if !a.allowPasswordResetIP(r, "request") {
+		w.Header().Set("Retry-After", strconv.Itoa(int(passwordResetIPPeriod.Seconds())))
+		replyError(w, http.StatusTooManyRequests, "请求过于频繁，请稍后重试")
 		return
 	}
 	var in struct {
@@ -134,6 +182,11 @@ func (a *App) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 	if !a.resetRequestAllowed(w, r) {
+		return
+	}
+	if !a.allowPasswordResetIP(r, "confirm") {
+		w.Header().Set("Retry-After", strconv.Itoa(int(passwordResetIPPeriod.Seconds())))
+		replyError(w, http.StatusTooManyRequests, "请求过于频繁，请稍后重试")
 		return
 	}
 	var in struct {

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.6@sha256:0d1d3a794be25f809dd2cb3160d8c73276c4056a9f8242a138e908ddeee7b6b6 AS build
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
@@ -10,7 +10,7 @@ RUN version="$(cat VERSION)" && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.Version=$version" -o /panel ./cmd/panel && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/agent.Version=$version" -o /agent ./cmd/agent && \
     mkdir /empty-data
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 ARG VERSION
 ARG REVISION
 # 内置构建参数必须逐阶段重新声明，否则下面的平台后缀名会解析成空串。

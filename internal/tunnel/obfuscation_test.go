@@ -105,6 +105,13 @@ func TestRandomPaddingObfsErrors(t *testing.T) {
 			t.Error("expected error for invalid padding range")
 		}
 	})
+
+	t.Run("payload too large", func(t *testing.T) {
+		_, err := obfs.ObfuscateWrite(make([]byte, maxUint16Payload+1))
+		if err == nil {
+			t.Error("expected error for payload larger than uint16 length field")
+		}
+	})
 }
 
 func TestNewObfuscator(t *testing.T) {
@@ -401,6 +408,13 @@ func TestTLSTrafficMimicObfsErrors(t *testing.T) {
 		_, err := obfs.DeobfuscateRead(invalidRecord)
 		if err == nil {
 			t.Error("expected error for invalid length")
+		}
+	})
+
+	t.Run("payload too large", func(t *testing.T) {
+		_, err := obfs.ObfuscateWrite(make([]byte, maxTLSRecordPayload+1))
+		if err == nil {
+			t.Error("expected error for payload larger than TLS record limit")
 		}
 	})
 }

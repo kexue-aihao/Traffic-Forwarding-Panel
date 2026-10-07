@@ -260,6 +260,11 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 			}
 			authorized[id] = true
 		}
+		if e := rows.Err(); e != nil {
+			rows.Close()
+			fail(w, 500, "query failed")
+			return
+		}
 		rows.Close()
 	}
 	n, o := pages(r)
@@ -285,7 +290,10 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var node contract.Node
-		json.Unmarshal([]byte(p), &node)
+		if e := json.Unmarshal([]byte(p), &node); e != nil {
+			fail(w, 500, "query failed")
+			return
+		}
 		node.DesiredVersion = d
 		node.AppliedVersion = a
 		node.ApplyError = msg
@@ -303,6 +311,10 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 			node.GroupIDs = visible
 		}
 		items = append(items, node)
+	}
+	if e := rows.Err(); e != nil {
+		fail(w, 500, "query failed")
+		return
 	}
 	reply(w, 200, map[string]any{"items": items, "total": total})
 }
@@ -536,7 +548,10 @@ func (s *Server) visibleNodes(ctx context.Context, u contract.User, group string
 			return nil, e
 		}
 		var node contract.Node
-		json.Unmarshal([]byte(payload), &node)
+		if e = json.Unmarshal([]byte(payload), &node); e != nil {
+			rows.Close()
+			return nil, e
+		}
 		nodes[nodeID] = probeNode{name: node.Name, lastSeen: time.Unix(lastSeen, 0)}
 	}
 	e = rows.Err()

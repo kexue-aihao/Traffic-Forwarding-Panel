@@ -371,7 +371,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		// 同一理由：面板必须能把它再次展示给运营方，存哈希就取不回来了。
 		// 它不是节点身份 —— 只是一张「允许接入本组」的共享口令，轮换一次
 		// 已分发出去的命令全部失效。
-		if _, err = conn.ExecContext(ctx, "ALTER TABLE cp_groups ADD COLUMN join_key VARCHAR(64) NOT NULL DEFAULT ''"); err != nil {
+		if err = EnsureColumn(ctx, conn, s.Dialect, "cp_groups", "join_key", "VARCHAR(64) NOT NULL DEFAULT ''"); err != nil {
 			return err
 		}
 		if err = s.backfillGroupJoinKeys(ctx, conn); err != nil {

@@ -531,6 +531,10 @@ func (s *Server) accessTokens(ctx context.Context, user string, n, o int) ([]con
 			}
 			t.GroupIDs = append(t.GroupIDs, group)
 		}
+		if e = groupRows.Err(); e != nil {
+			groupRows.Close()
+			return nil, 0, e
+		}
 		groupRows.Close()
 		items = append(items, t)
 	}

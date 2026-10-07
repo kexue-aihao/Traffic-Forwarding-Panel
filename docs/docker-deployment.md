@@ -9,19 +9,26 @@
 Debian 服务器已安装 curl、Docker 和 Docker Compose v2 时，复制下面完整的一行执行。root 用户可直接运行，普通用户使用 sudo 提权。命令自动获取最新正式版，首次安装和后续升级均适用：
 
 ```sh
-curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/raw/master/install.sh | bash
+curl --proto '=https' --proto-redir '=https' -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/raw/a9e9ea3d34f64271c0172e9bb71392ad35e5a9d7/install.sh | bash
 ```
+
+在线引导脚本会从固定的源码提交获取管理器，管理器在执行发布安装器前会用同一发布包的
+`docker-SHA256SUMS` 校验安装器。发布包中的镜像、Compose 文件和两个脚本都应与清单一起
+保存；离线安装时不要只复制镜像。校验清单提供文件完整性校验，不能替代对发布来源的信任。
+项目发布新版本时会同步更新引导脚本中的提交固定值；若从源码分支复制脚本，请先检查该
+固定值是否指向你要使用的已审核提交。
 
 入口先将管理脚本完整下载到临时文件，再执行，结束后清理临时文件。运行后会打开管理菜单，可选择首次安装、升级到最新正式版或重置密码；密码重置默认使用 `admin` 账号，也可在菜单中输入其他账号。复制时不要手动换行；若终端出现 `>` 等待后续输入，先按 `Ctrl+C`，再重新复制整行。
 
 在菜单选择首次安装后，无需域名或密码输入。脚本自动选择架构、下载镜像包及 SHA256 清单、校验并 `docker load`、配置容器、初始化管理员，等待健康检查通过。管理员用户名默认 `admin`，使用系统随机源生成 48 位密码，安装完成时显示；请保存并可在登录后修改。密码只通过标准输入传给初始化进程，不写入 `.env` 或镜像。若终端输出丢失，可使用下文的本机改密命令。
 
-如需指定端口、目录、用户名或使用 `--password-stdin`，先将安装脚本保存到本地：
+如需指定端口、目录、用户名或使用 `--password-stdin`，先将管理脚本保存到本地：
 
 ```sh
-curl -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/latest/download/install-docker.sh -o install-docker.sh
-sudo bash install-docker.sh --port 18080 \
+curl --proto '=https' --proto-redir '=https' -fsSL https://raw.githubusercontent.com/kexue-aihao/Traffic-Forwarding-Panel/a9e9ea3d34f64271c0172e9bb71392ad35e5a9d7/scripts/panel-manager.sh -o /tmp/panel-manager.sh
+sudo bash /tmp/panel-manager.sh install --port 18080 \
   --dir /opt/traffic-forwarding-panel --admin admin
+rm -f /tmp/panel-manager.sh
 ```
 
 首次安装生成：
@@ -108,7 +115,7 @@ docker compose exec panel /panel -reset-password admin
 该脚本面向 Docker Compose 部署；Caddy + systemd 原生部署请继续使用对应的二进制和 service 配置。
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kexue-aihao/Traffic-Forwarding-Panel/master/scripts/panel-manager.sh -o /tmp/panel-manager.sh && sudo bash /tmp/panel-manager.sh
+curl --proto '=https' --proto-redir '=https' -fsSL https://raw.githubusercontent.com/kexue-aihao/Traffic-Forwarding-Panel/a9e9ea3d34f64271c0172e9bb71392ad35e5a9d7/scripts/panel-manager.sh -o /tmp/panel-manager.sh && sudo bash /tmp/panel-manager.sh; rm -f /tmp/panel-manager.sh
 ```
 
 脚本默认使用 `/opt/traffic-forwarding-panel`，不带参数时打开菜单，也可以直接指定操作：
@@ -144,7 +151,7 @@ chmod 600 config/payments.json
 
 ## 离线安装和升级
 
-从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.32_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
+从同一 Release 下载对应架构的 `traffic-forwarding-panel_0.1.33_docker_amd64.tar.gz`（ARM64 为 `docker_arm64`）、`compose.yaml`、`install-docker.sh` 和 `docker-SHA256SUMS`，放到一个目录。服务器已有 Docker/Compose 时不需要访问镜像仓库：
 
 ```sh
 sudo bash install-docker.sh --bundle /path/to/downloads

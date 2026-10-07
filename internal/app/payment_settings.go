@@ -58,6 +58,8 @@ type TelegramSettingsView struct {
 	WalletAddresses map[string]string `json:"wallet_addresses"`
 }
 
+var errPaymentSettingsConflict = errors.New("payment settings changed")
+
 func migratePaymentSettings(ctx context.Context, store *storage.Store) error {
 	return storage.MigrateNamespace(ctx, store.DB, store.Dialect, "payment_settings", 4, func(conn *sql.Conn) error {
 		if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS cp_payment_settings(id BIGINT PRIMARY KEY,payload TEXT NOT NULL,version BIGINT NOT NULL)`); err != nil {
@@ -153,7 +155,7 @@ func savePaymentSettings(ctx context.Context, store *storage.Store, expected int
 				return err
 			}
 			if n, _ := res.RowsAffected(); n != 1 {
-				return errors.New("payment settings changed")
+				return errPaymentSettingsConflict
 			}
 		}
 		if audit == nil {
@@ -210,6 +212,10 @@ func (a *App) getPaymentSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) putPaymentSettings(w http.ResponseWriter, r *http.Request) {
+	a.paymentSettingsMu.Lock()
+	defer a.paymentSettingsMu.Unlock()
+	previous := a.Commerce.Channels()
+
 	var in PaymentSettingsView
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	decoder := json.NewDecoder(r.Body)
@@ -303,6 +309,24 @@ func (a *App) putPaymentSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// 先建一遍再存：校验不过就什么都不写，生效的还是原来那一份。
+	// 正在等待回调或对账的订单仍依赖原通道的认证配置。删除通道或轮换
+	// 网关/密钥等适配器字段会让这类订单永久无法核实，所以先拒绝这类修改；
+	// 手续费、汇率和回调展示地址等只影响新订单的字段仍可调整。
+	for name, previous := range stored.Channels {
+		candidate, exists := next[name]
+		if exists && !paymentAdapterConfigChanged(previous, candidate) {
+			continue
+		}
+		active, checkErr := a.Commerce.HasActivePaymentOrders(r.Context(), name)
+		if checkErr != nil {
+			replyError(w, 503, "payment settings unavailable")
+			return
+		}
+		if active {
+			replyError(w, 409, "payment channel "+name+" has active orders")
+			return
+		}
+	}
 	if err := a.applyPaymentChannels(next); err != nil {
 		replyError(w, 400, err.Error())
 		return
@@ -311,8 +335,21 @@ func (a *App) putPaymentSettings(w http.ResponseWriter, r *http.Request) {
 		return a.Platform.AuditTx(ctx, tx, actor, "payment.update", "payments")
 	})
 	if err != nil {
-		// 版本冲突时把刚生效的那份收回去，内存与库里不能各说各话。
-		_ = a.applyPaymentChannels(stored.Channels)
+		if errors.Is(err, errPaymentSettingsConflict) {
+			// 版本冲突时以内存中的旧快照回滚会覆盖另一个管理员刚提交的配置。
+			// 重新读取数据库，确保运行时状态跟持久化状态一致。
+			current, loadErr := loadPaymentSettings(r.Context(), a.store)
+			if loadErr != nil {
+				// 数据库暂时不可读时，至少撤销这次未落盘的配置；保留
+				// 旧快照，等待下一次设置读取时再同步。
+				a.Commerce.SetChannels(previous)
+				replyError(w, 503, "payment settings unavailable")
+				return
+			}
+			_ = a.applyPaymentChannels(current.Channels)
+		} else {
+			a.Commerce.SetChannels(previous)
+		}
 		replyError(w, 409, "settings changed; reload before saving")
 		return
 	}
@@ -342,6 +379,19 @@ func validChannelName(name string) bool {
 		}
 	}
 	return false
+}
+
+// paymentAdapterConfigChanged identifies fields required to authenticate or
+// query an already-created provider order. Other settings are safe to change:
+// their values are stored on each order at creation time or only affect new
+// quotes.
+func paymentAdapterConfigChanged(previous, next PaymentConfiguration) bool {
+	return previous.Gateway != next.Gateway ||
+		previous.MerchantID != next.MerchantID ||
+		previous.Key != next.Key ||
+		previous.CryptoCurrency != next.CryptoCurrency ||
+		previous.SignatureAlgorithm != next.SignatureAlgorithm ||
+		previous.EPayMode != next.EPayMode
 }
 
 func replyJSON(w http.ResponseWriter, status int, v any) {

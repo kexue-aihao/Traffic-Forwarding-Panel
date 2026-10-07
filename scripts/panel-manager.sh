@@ -5,6 +5,10 @@ umask 077
 readonly REPOSITORY="https://github.com/kexue-aihao/Traffic-Forwarding-Panel"
 readonly DEFAULT_INSTALL_DIR="/opt/traffic-forwarding-panel"
 
+# This script is bootstrapped by install.sh at an immutable source commit.
+# Release assets are still checked against the release manifest before any
+# downloaded installer is executed.
+
 install_dir="${TFP_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 admin="${TFP_ADMIN:-admin}"
 port=""
@@ -96,6 +100,21 @@ validate_install_dir() {
     esac
 }
 
+verify_manifest_file() {
+    local manifest=$1 file=$2 name checksum
+    name=$(basename -- "$file")
+    if [[ ! -f $manifest || ! -f $file ]]; then
+        printf '错误：发布包缺少 %s 或 docker-SHA256SUMS\n' "$name" >&2
+        return 1
+    fi
+    checksum=$(awk -v file="$name" '$2 == file {print $1}' "$manifest")
+    if [[ ! $checksum =~ ^[a-fA-F0-9]{64}$ ]]; then
+        printf '错误：校验清单缺少或重复记录：%s\n' "$name" >&2
+        return 1
+    fi
+    (cd "$(dirname -- "$file")" && printf '%s  %s\n' "$checksum" "$name" | sha256sum -c -)
+}
+
 require_docker() {
     command -v docker >/dev/null 2>&1 || die '未找到 Docker'
     docker info >/dev/null 2>&1 || die 'Docker 未运行'
@@ -134,19 +153,28 @@ find_installer() {
     # installs and upgrades, always fetch the latest release so an old copy
     # next to this manager cannot pin the deployment to an old version.
     if ! $prefer_latest && [[ -n $candidate ]]; then
+        if [[ -n $bundle ]] && ! verify_manifest_file "$bundle/docker-SHA256SUMS" "$candidate"; then
+            die '发布安装器校验失败'
+        fi
         installer_path=$candidate
         return
     fi
 
     command -v curl >/dev/null 2>&1 || die '未找到 curl，无法下载安装器'
-    temp=$(mktemp)
-    if ! curl --fail --show-error --silent --location --retry 3 --connect-timeout 20 \
-        "$REPOSITORY/releases/latest/download/install-docker.sh" -o "$temp"; then
-        rm -f -- "$temp"
+    temp=$(mktemp -d)
+    if ! curl --proto '=https' --proto-redir '=https' --fail --show-error --silent --location --retry 3 --connect-timeout 20 \
+        "$REPOSITORY/releases/latest/download/install-docker.sh" -o "$temp/install-docker.sh" || \
+        ! curl --proto '=https' --proto-redir '=https' --fail --show-error --silent --location --retry 3 --connect-timeout 20 \
+        "$REPOSITORY/releases/latest/download/docker-SHA256SUMS" -o "$temp/docker-SHA256SUMS"; then
+        rm -rf -- "$temp"
         return 1
     fi
-    chmod 700 "$temp"
-    installer_path=$temp
+    if ! verify_manifest_file "$temp/docker-SHA256SUMS" "$temp/install-docker.sh"; then
+        rm -rf -- "$temp"
+        return 1
+    fi
+    chmod 700 "$temp/install-docker.sh"
+    installer_path="$temp/install-docker.sh"
     installer_temp_path=$temp
 }
 
@@ -171,10 +199,10 @@ run_installer() {
         :
     else
         result=$?
-        [[ -z $installer_temp ]] || rm -f -- "$installer_temp"
+        [[ -z $installer_temp ]] || rm -rf -- "$installer_temp"
         return "$result"
     fi
-    [[ -z $installer_temp ]] || rm -f -- "$installer_temp"
+    [[ -z $installer_temp ]] || rm -rf -- "$installer_temp"
 }
 
 reset_password() {

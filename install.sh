@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Unified entry point for first installation, latest-version upgrades and
-# password resets. The manager is downloaded from master, then fetches the
-# latest release installer for online installs and upgrades.
+# password resets. The manager is downloaded from a fixed source commit, then
+# fetches the latest release installer for online installs and upgrades.
 set -euo pipefail
 
-readonly MANAGER_URL="https://raw.githubusercontent.com/kexue-aihao/Traffic-Forwarding-Panel/master/scripts/panel-manager.sh"
+# Keep the bootstrap executable source immutable.  Update this commit together
+# with a release when the manager changes; never fetch executable root code from
+# a moving branch name.
+readonly MANAGER_COMMIT="a9e9ea3d34f64271c0172e9bb71392ad35e5a9d7"
+readonly MANAGER_URL="https://raw.githubusercontent.com/kexue-aihao/Traffic-Forwarding-Panel/${MANAGER_COMMIT}/scripts/panel-manager.sh"
 
 run_manager() (
     umask 077
@@ -14,7 +18,7 @@ run_manager() (
         printf '错误：需要 curl 下载最新管理脚本\n' >&2
         exit 1
     }
-    curl --fail --show-error --silent --location --retry 3 --connect-timeout 20 \
+    curl --proto '=https' --proto-redir '=https' --fail --show-error --silent --location --retry 3 --connect-timeout 20 \
         "$MANAGER_URL" -o "$manager"
     chmod 700 "$manager"
 

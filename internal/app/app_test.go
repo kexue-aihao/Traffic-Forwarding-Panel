@@ -133,3 +133,199 @@ func TestPaymentSettingsRoundTripAndRedaction(t *testing.T) {
 		t.Fatalf("清空之后仍然有通道生效: %v", a.Commerce.Channels())
 	}
 }
+
+func TestPaymentSettingsConflictRestoresPersistedChannels(t *testing.T) {
+	a, err := New(context.Background(), testdb.Open(t), Options{Origin: "https://panel.example", PaymentConfigs: paymentFixtures(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := a.paymentSettingsView(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate another panel instance committing after this editor loaded its version.
+	winning := PaymentSettings{Channels: map[string]PaymentConfiguration{
+		"epay": {Gateway: "https://winner.example", MerchantID: "winner", Key: "winner-key", FeePercent: "1"},
+	}, Telegram: TelegramSettings{WalletAddresses: map[string]string{}}}
+	if _, err := savePaymentSettings(context.Background(), a.store, view.Version, winning, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := PaymentSettingsView{Version: view.Version, Channels: map[string]PaymentChannelView{
+		"epay": {PaymentConfiguration: PaymentConfiguration{Gateway: "https://stale.example", MerchantID: "stale", Key: "stale-key", FeePercent: "2"}},
+	}}
+	body, _ := json.Marshal(stale)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest("PUT", "https://panel.example/api/v1/payment-settings", strings.NewReader(string(body)))
+	a.putPaymentSettings(recorder, request)
+	if recorder.Code != 409 {
+		t.Fatalf("stale save status: %d %s", recorder.Code, recorder.Body.String())
+	}
+	if got := a.Commerce.Channels()["epay"].FeeBPS; got != 100 {
+		t.Fatalf("live channels reverted to stale config: fee=%d", got)
+	}
+}
+
+func TestPaymentSettingsProtectActiveOrderChannel(t *testing.T) {
+	ctx := context.Background()
+	a, err := New(ctx, testdb.Open(t), Options{Origin: "https://panel.example", PaymentConfigs: paymentFixtures(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.store.DB.ExecContext(ctx, a.store.Rebind(`INSERT INTO commerce_orders(id,user_id,channel,amount,payable_cents,status,payment_url,created_at,idempotency_key) VALUES(?,?,?,?,?,'pending','',?,?)`), "active-order", "alice", "epay", 1000, 1000, stamp, "active-key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.DB.ExecContext(ctx, a.store.Rebind(`INSERT INTO commerce_attempts(order_id,state,provider_id,updated_at) VALUES(?,'ready','',?)`), "active-order", stamp); err != nil {
+		t.Fatal(err)
+	}
+	view, err := a.paymentSettingsView(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(in PaymentSettingsView) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(in)
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest("PUT", "https://panel.example/api/v1/payment-settings", strings.NewReader(string(body)))
+		a.putPaymentSettings(recorder, req)
+		return recorder
+	}
+	rotated := view
+	ep := view.Channels["epay"]
+	ep.Key = "rotated-key"
+	rotated.Channels = map[string]PaymentChannelView{"epay": ep}
+	if response := put(rotated); response.Code != 409 {
+		t.Fatalf("key rotation with active order status: %d %s", response.Code, response.Body.String())
+	}
+	changedGateway := view
+	ep = view.Channels["epay"]
+	ep.Gateway = "https://new-pay.example"
+	changedGateway.Channels = map[string]PaymentChannelView{"epay": ep}
+	if response := put(changedGateway); response.Code != 409 {
+		t.Fatalf("gateway rotation with active order status: %d %s", response.Code, response.Body.String())
+	}
+	if response := put(PaymentSettingsView{Version: view.Version, Channels: map[string]PaymentChannelView{}}); response.Code != 409 {
+		t.Fatalf("channel deletion with active order status: %d %s", response.Code, response.Body.String())
+	}
+	if _, err := a.store.DB.ExecContext(ctx, a.store.Rebind(`UPDATE commerce_orders SET status='paid' WHERE id=?`), "active-order"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.store.DB.ExecContext(ctx, a.store.Rebind(`UPDATE commerce_attempts SET state='ready' WHERE order_id=?`), "active-order"); err != nil {
+		t.Fatal(err)
+	}
+	if response := put(PaymentSettingsView{Version: view.Version, Channels: map[string]PaymentChannelView{}}); response.Code != 200 {
+		t.Fatalf("channel deletion after terminal order status: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestPersistedPaymentSettingsDisableLegacyEPayFallback(t *testing.T) {
+	ctx := context.Background()
+	store := testdb.Open(t)
+	legacy := payment.EPay{Gateway: "https://legacy.example", PID: "legacy", Key: "legacy-key"}
+	a, err := New(ctx, store, Options{Origin: "https://panel.example", EPay: legacy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Platform.Bootstrap(ctx, "admin", "test-password-long"); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := loadPaymentSettings(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := savePaymentSettings(ctx, store, settings.Version, PaymentSettings{Channels: map[string]PaymentConfiguration{}, Telegram: settings.Telegram}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// A restart must honor the persisted empty channel set even when the old
+	// environment-backed EPay settings are still present.
+	a, err = New(ctx, store, Options{Origin: "https://panel.example", EPay: legacy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginBody, _ := json.Marshal(map[string]string{"username": "admin", "password": "test-password-long"})
+	login := httptest.NewRecorder()
+	loginRequest := httptest.NewRequest("POST", "https://panel.example/api/v1/auth/login", strings.NewReader(string(loginBody)))
+	loginRequest.Header.Set("Origin", "https://panel.example")
+	loginRequest.Header.Set("X-Requested-With", "fetch")
+	a.Handler.ServeHTTP(login, loginRequest)
+	if login.Code != 200 || len(login.Result().Cookies()) != 1 {
+		t.Fatalf("login failed: %d %s", login.Code, login.Body.String())
+	}
+	request := httptest.NewRequest("GET", "https://panel.example/api/v1/payment-channels", nil)
+	request.AddCookie(login.Result().Cookies()[0])
+	response := httptest.NewRecorder()
+	a.Handler.ServeHTTP(response, request)
+	if response.Code != 200 {
+		t.Fatalf("payment channels status: %d %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Items []struct {
+			ID      string `json:"id"`
+			Enabled bool   `json:"enabled"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, channel := range body.Items {
+		if channel.ID == "epay" && channel.Enabled {
+			t.Fatal("legacy EPay fallback remained enabled after persisted channel deletion")
+		}
+	}
+}
+
+func TestDynamicPaymentSettingsDeleteDisablesLegacyEPayFallback(t *testing.T) {
+	ctx := context.Background()
+	legacy := payment.EPay{Gateway: "https://legacy.example", PID: "legacy", Key: "legacy-key"}
+	store := testdb.Open(t)
+	a, err := New(ctx, store, Options{Origin: "https://panel.example", EPay: legacy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Platform.Bootstrap(ctx, "admin", "test-password-long"); err != nil {
+		t.Fatal(err)
+	}
+	view, err := a.paymentSettingsView(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(PaymentSettingsView{Version: view.Version, Channels: map[string]PaymentChannelView{}})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest("PUT", "https://panel.example/api/v1/payment-settings", strings.NewReader(string(body)))
+	a.putPaymentSettings(recorder, request)
+	if recorder.Code != 200 || len(a.Commerce.Channels()) != 0 {
+		t.Fatalf("dynamic channel deletion failed: %d %s", recorder.Code, recorder.Body.String())
+	}
+	loginBody, _ := json.Marshal(map[string]string{"username": "admin", "password": "test-password-long"})
+	login := httptest.NewRecorder()
+	loginRequest := httptest.NewRequest("POST", "https://panel.example/api/v1/auth/login", strings.NewReader(string(loginBody)))
+	loginRequest.Header.Set("Origin", "https://panel.example")
+	loginRequest.Header.Set("X-Requested-With", "fetch")
+	a.Handler.ServeHTTP(login, loginRequest)
+	if login.Code != 200 || len(login.Result().Cookies()) != 1 {
+		t.Fatalf("login failed: %d %s", login.Code, login.Body.String())
+	}
+	channelsRequest := httptest.NewRequest("GET", "https://panel.example/api/v1/payment-channels", nil)
+	channelsRequest.AddCookie(login.Result().Cookies()[0])
+	channels := httptest.NewRecorder()
+	a.Handler.ServeHTTP(channels, channelsRequest)
+	if channels.Code != 200 {
+		t.Fatalf("payment channels status: %d %s", channels.Code, channels.Body.String())
+	}
+	var response struct {
+		Items []struct {
+			ID      string `json:"id"`
+			Enabled bool   `json:"enabled"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(channels.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	for _, channel := range response.Items {
+		if channel.ID == "epay" && channel.Enabled {
+			t.Fatal("legacy EPay fallback remained enabled after dynamic channel deletion")
+		}
+	}
+}

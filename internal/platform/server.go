@@ -456,6 +456,9 @@ func pages(r *http.Request) (int, int) {
 	if p < 1 {
 		p = 1
 	}
+	if p > 1000000 {
+		p = 1000000
+	}
 	if n < 1 {
 		n = 20
 	}
@@ -483,8 +486,15 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 		u.Disabled = d != 0
 		items = append(items, u)
 	}
+	if e := rows.Err(); e != nil {
+		fail(w, 500, "query failed")
+		return
+	}
 	var total int
-	s.Store.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM cp_users").Scan(&total)
+	if e := s.Store.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM cp_users").Scan(&total); e != nil {
+		fail(w, 500, "query failed")
+		return
+	}
 	reply(w, 200, map[string]any{"items": items, "total": total})
 }
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
@@ -567,8 +577,15 @@ func (s *Server) audit(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, map[string]any{"id": i, "user_id": u, "action": a, "target": t, "created_at": time.Unix(at, 0).UTC()})
 	}
+	if e := rows.Err(); e != nil {
+		fail(w, 500, "query failed")
+		return
+	}
 	var total int
-	s.Store.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM cp_audit").Scan(&total)
+	if e := s.Store.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM cp_audit").Scan(&total); e != nil {
+		fail(w, 500, "query failed")
+		return
+	}
 	reply(w, 200, map[string]any{"items": items, "total": total})
 }
 func strJSON(v any) string { b, _ := json.Marshal(v); return string(b) }

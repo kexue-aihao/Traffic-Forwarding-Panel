@@ -111,7 +111,9 @@ func (s *Server) ownerDeviceIPs(ctx context.Context, u contract.User, group stri
 		seen[nodeID+"\x00"+groupID] = true
 		// 对外只给设备组名：客户脚本按组认机器，机器名是它自己报上来的主机名。
 		var group contract.Group
-		json.Unmarshal([]byte(groupPayload), &group)
+		if e = json.Unmarshal([]byte(groupPayload), &group); e != nil {
+			return nil, e
+		}
 		row := deviceRow{item: contract.DeviceIP{GroupName: group.Name}, groupID: groupID, nodeID: nodeID}
 		// 地址取各家族最近一次的观测：两个都取，不做「优先 IPv4」的取舍 ——
 		// 取舍留给调用方，接口把机器实际有的地址照实给出。

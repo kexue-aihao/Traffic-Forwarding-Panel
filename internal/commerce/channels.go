@@ -30,6 +30,25 @@ type Channel struct {
 	CryptoCurrency string
 }
 
+// HasActivePaymentOrders reports whether a channel still has an order whose
+// provider credentials may be needed for a callback or reconciliation. The
+// channel configuration is intentionally kept stable while these rows exist;
+// otherwise rotating a key or deleting a gateway would strand the order.
+func (s *Service) HasActivePaymentOrders(ctx context.Context, channel string) (bool, error) {
+	if channel == "" {
+		return false, errors.New("payment channel required")
+	}
+	var count int
+	err := s.DB.QueryRowContext(ctx, s.q(`
+		SELECT COUNT(*)
+		FROM commerce_orders o
+		LEFT JOIN commerce_attempts a ON a.order_id=o.id
+		WHERE o.channel=?
+		  AND (o.status IN ('pending','closed','expired') OR
+		       (a.state IN ('creating','uncertain') AND o.status NOT IN ('paid','paid_late','refunded','partially_refunded')))`), channel).Scan(&count)
+	return count > 0, err
+}
+
 var ErrPaymentUncertain = errors.New("payment creation uncertain; reconcile this order before retrying")
 
 // Quote 算出一笔充值实际要付多少。比例部分按万分之一整数计算并向下取整到分 ——

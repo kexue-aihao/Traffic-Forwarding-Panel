@@ -46,9 +46,13 @@ type App struct {
 	Commerce *commerce.Service
 	// store 与 origin 留给支付通道的设置接口：它要读写自己的配置表，并按 origin
 	// 补出回调地址。
-	store          *storage.Store
-	origin         string
-	telegramClient *http.Client
+	store             *storage.Store
+	origin            string
+	telegramClient    *http.Client
+	paymentSettingsMu sync.Mutex
+	passwordResetIPMu sync.Mutex
+	passwordResetIPs  map[string]passwordResetIPWindow
+	trustProxy        bool
 }
 
 func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) {
@@ -66,11 +70,19 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 			slog.WarnContext(ctx, "启动参数里的支付通道配置被数据库里的设置覆盖：改配置请到面板的站点设置")
 		}
 		configs = stored.Channels
+		// Once payment settings have been persisted, the environment-backed
+		// legacy EPay path must stay disabled. Otherwise deleting the epay
+		// channel in the panel would silently reactivate it through the fallback.
+		opts.EPay = payment.EPay{}
 	} else if len(configs) > 0 {
 		// 第一次启动：把配置文件/环境变量里的通道落库，面板上就能直接看到并接着改。
 		if _, err := savePaymentSettings(ctx, store, 0, PaymentSettings{Channels: configs, Telegram: stored.Telegram}, nil); err != nil {
 			return nil, err
 		}
+		// The legacy EPay value is only an input for the first migration. Once it
+		// has been persisted, keep the old fallback disabled even before a restart;
+		// otherwise deleting the epay channel in the panel would reactivate it.
+		opts.EPay = payment.EPay{}
 	}
 	channels, err := BuildPaymentChannels(configs, opts.Origin)
 	if err != nil {
@@ -78,8 +90,10 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 	}
 	// 旧路径（下单时找不到对应通道适配器）读的还是 opts.EPay：把回调地址补成
 	// 配置里的那一份，两条路给出的地址不会不一致。
-	if cfg, ok := configs["epay"]; ok {
-		opts.EPay.NotifyURL, opts.EPay.ReturnURL = cfg.NotifyURL, cfg.ReturnURL
+	if stored.Version == 0 {
+		if cfg, ok := configs["epay"]; ok {
+			opts.EPay.NotifyURL, opts.EPay.ReturnURL = cfg.NotifyURL, cfg.ReturnURL
+		}
 	}
 	billing := commerce.New(store.DB, store.Dialect, func(ctx context.Context, fn func(*sql.Tx) error) error { return store.Write(ctx, storage.Critical, fn) })
 	billing.CheckAccount = func(ctx context.Context, tx *sql.Tx, user string) error {
@@ -142,7 +156,7 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 		return nil, err
 	}
 	agentdist.Register(mux, opts.AgentDir)
-	application := &App{Alerts: monitor, Handler: webui.Security(control.RequestLimits(mux)), Platform: control, Commerce: billing, store: store, origin: opts.Origin}
+	application := &App{Alerts: monitor, Handler: webui.Security(control.RequestLimits(mux)), Platform: control, Commerce: billing, store: store, origin: opts.Origin, passwordResetIPs: make(map[string]passwordResetIPWindow), trustProxy: opts.TrustProxy}
 	// 支付通道配置：面板上保存之后立刻生效，不必重启进程。
 	mux.HandleFunc("GET /api/v1/payment-settings", control.Admin(application.getPaymentSettings))
 	mux.HandleFunc("PUT /api/v1/payment-settings", control.Admin(application.putPaymentSettings))

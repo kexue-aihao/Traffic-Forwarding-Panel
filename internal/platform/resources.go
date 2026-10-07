@@ -522,6 +522,10 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 		redact(&rule)
 		items = append(items, rule)
 	}
+	if e = rows.Err(); e != nil {
+		fail(w, 500, "query failed")
+		return
+	}
 	page := map[string]any{"items": items, "total": total}
 	// 分类清单随列表一起回：界面上的筛选器要用它，为这个单开一个接口不值当。
 	if categories, e := s.ruleCategories(r.Context(), u); e == nil {

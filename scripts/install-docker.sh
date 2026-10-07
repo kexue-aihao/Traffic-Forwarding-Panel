@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-VERSION="0.1.32"
+VERSION="0.1.33"
 RELEASE_URL="https://github.com/kexue-aihao/Traffic-Forwarding-Panel/releases/download/v${VERSION}"
 install_dir=/opt/traffic-forwarding-panel
 port=18080
@@ -171,7 +171,7 @@ if [[ -n $bundle ]]; then
 else
     command -v curl >/dev/null || die '需要 curl 下载发布包'
     for file in "$archive" compose.yaml docker-SHA256SUMS; do
-        curl --fail --show-error --location --retry 3 --connect-timeout 20 \
+        curl --proto '=https' --proto-redir '=https' --fail --show-error --location --retry 3 --connect-timeout 20 \
             "$RELEASE_URL/$file" -o "$download_dir/$file"
     done
 fi

@@ -31,6 +31,7 @@ type obfsConn struct {
 }
 
 const maxObfuscatedFrame = 1 << 20
+const maxUint16Payload = int(^uint16(0))
 
 func (c *obfsConn) Read(p []byte) (int, error) {
 	c.readMu.Lock()
@@ -98,6 +99,9 @@ type RandomPaddingObfs struct {
 }
 
 func (o *RandomPaddingObfs) ObfuscateWrite(p []byte) ([]byte, error) {
+	if len(p) > maxUint16Payload {
+		return nil, errors.New("padding payload too large")
+	}
 	padRange := o.maxPad - o.minPad + 1
 	if padRange <= 0 {
 		return nil, errors.New("invalid padding range")
@@ -189,6 +193,9 @@ const (
 func (o *TLSTrafficMimicObfs) ObfuscateWrite(p []byte) ([]byte, error) {
 	if len(p) == 0 {
 		return nil, errors.New("empty payload")
+	}
+	if len(p) > maxTLSRecordPayload {
+		return nil, errors.New("TLS mimic payload too large")
 	}
 
 	totalLen := 5 + len(p)
