@@ -28,7 +28,7 @@ func entryPolicyDenied(g contract.Group, rule contract.Rule) bool {
 	if !g.CanEnter() || policyDenied(g, rule) {
 		return true
 	}
-	direct := rule.Transport == "direct" || rule.Transport == "direct-tls"
+	direct := rule.Transport == "direct" || rule.Transport == "direct-tls" || rule.Transport == "secure-direct"
 	return g.DirectPolicy == "forbid" && direct || g.DirectPolicy == "force" && !direct
 }
 

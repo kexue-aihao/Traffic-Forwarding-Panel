@@ -89,6 +89,7 @@ const resetPasswordCopied = ref(false);
 const groupTransports = [
   { value: "direct", label: "直接转发" },
   { value: "direct-tls", label: "TLS 直连目标" },
+  { value: "secure-direct", label: "TLS 混淆安全直连 Agent" },
   { value: "tls", label: "TLS 隧道" },
   { value: "ws", label: "WebSocket 隧道" },
   { value: "wss", label: "WSS 隧道" },
@@ -99,6 +100,7 @@ const groupTransports = [
 const transports = [
   { value: "direct", label: "direct（明文到目标）" },
   { value: "direct-tls", label: "direct-tls（TLS 到目标）" },
+  { value: "secure-direct", label: "secure-direct（TLS 1.3 到目标 Agent）" },
   { value: "tls", label: "tls" },
   { value: "ws", label: "ws" },
   { value: "wss", label: "wss" },
@@ -558,6 +560,7 @@ const form = ref({
   chain: [] as Hop[],
   mux: false,
   reverse: "",
+  obfuscation: "random-padding",
   backends: [] as { target: string; weight: number; disabled: boolean }[],
   shared: false,
   shared_parent: "",
@@ -767,6 +770,10 @@ async function open(row: Row | null = null) {
     token: "",
     mux: !!(row?.tunnel as Row | undefined)?.mux,
     reverse: String((row?.tunnel as Row | undefined)?.reverse || ""),
+    obfuscation: String(
+      ((row?.tunnel as Row | undefined)?.obfuscation as Row | undefined)
+        ?.strategy || "random-padding",
+    ),
     backends: (
       (row?.backends as {
         target: string;
@@ -890,6 +897,15 @@ function payload(): Row {
         ? f.server_name
           ? { tunnel: { server_name: f.server_name } }
           : {}
+        : f.transport === "secure-direct"
+          ? {
+              tunnel: {
+                endpoint: f.endpoint,
+                server_name: f.server_name,
+                obfuscation: { strategy: f.obfuscation },
+                ...(f.token ? { token: f.token } : {}),
+              },
+            }
         : {
             tunnel: {
               endpoint: f.endpoint,
@@ -1808,7 +1824,7 @@ const labels: Record<string, string> = {
           : (selected ? '编辑' : '新增') + titles[resource]
       "
       :busy="busy"
-      :dirty="dirty"
+      :dirty="dirty && (resource !== 'rules' || selected !== null)"
       @close="closeEditing"
       ><form @submit.prevent="save">
         <p v-if="formError" class="error" role="alert">{{ formError }}</p>
@@ -2007,20 +2023,20 @@ const labels: Record<string, string> = {
                   :required="!selected"
                   :placeholder="selected ? '留空保留既有凭据' : ''"
               /></label>
-              <label class="check"
+              <label v-if="form.transport !== 'secure-direct'" class="check"
                 ><input v-model="form.mux" type="checkbox" />启用 Mux
                 连接复用</label
               >
-              <label
+              <label v-if="form.transport !== 'secure-direct'"
                 >反向出口标识<input
                   v-model="form.reverse"
                   maxlength="128"
                   placeholder="留空使用普通出口"
               /></label>
-              <p v-if="form.reverse" class="muted small">
+              <p v-if="form.reverse && form.transport !== 'secure-direct'" class="muted small">
                 出口主动连接隧道端点。反向路由不能添加后续出口。
               </p>
-              <fieldset>
+              <fieldset v-if="form.transport !== 'secure-direct'">
                 <legend>后续出口（最多两跳）</legend>
                 <p class="muted small">
                   入口 → 首出口<span
@@ -2240,6 +2256,13 @@ const labels: Record<string, string> = {
                   </option>
                 </Select>
               </label>
+              <label v-if="form.transport === 'secure-direct'"
+                >混淆策略<Select v-model="form.obfuscation" aria-label="混淆策略">
+                  <option value="random-padding">random-padding</option>
+                  <option value="timing-perturb">timing-perturb</option>
+                  <option value="tls-mimic">tls-mimic</option>
+                </Select></label
+              >
               <div class="toolbar">
                 <button
                   v-if="form.chain_group_ids.length < 3"

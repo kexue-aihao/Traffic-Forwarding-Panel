@@ -26,6 +26,23 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/tunnel"
 )
 
+func parseObfuscation(strategy, paramsJSON string) (*contract.ObfuscationConfig, error) {
+	if strings.TrimSpace(strategy) == "" || strategy == "none" {
+		return nil, nil
+	}
+	params := map[string]any{}
+	if strings.TrimSpace(paramsJSON) != "" {
+		if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+			return nil, fmt.Errorf("invalid obfuscation parameters: %w", err)
+		}
+	}
+	cfg := &contract.ObfuscationConfig{Strategy: strategy, Params: params}
+	if err := tunnel.ValidateObfuscation(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
 func main() {
 	if e := run(); e != nil {
 		if errors.Is(e, agent.ErrRestart) {
@@ -35,7 +52,7 @@ func main() {
 	}
 }
 func run() error {
-	mode := flag.String("mode", "agent", "agent, exit or reverse-exit")
+	mode := flag.String("mode", "agent", "agent, exit, secure-direct or reverse-exit")
 	showVersion := flag.Bool("version", false, "print Agent release version")
 	enableUninstall := flag.Bool("enable-uninstall", false, "enable remote uninstall of an official systemd installation")
 	enableTerminal := flag.Bool("enable-terminal", false, "enable audited Linux remote commands as the Agent service account")
@@ -45,11 +62,13 @@ func run() error {
 	state := flag.String("state", "agent-state.json", "durable private state path")
 	ca := flag.String("ca", "", "PEM root CA for panel and tunnel certificate validation")
 	listen := flag.String("listen", "127.0.0.1:9443", "exit listening address")
-	transport := flag.String("transport", "tls", "exit transport: tls/ws/wss/http")
+	transport := flag.String("transport", "tls", "exit transport: tls/ws/wss/http/secure-direct")
 	cert := flag.String("cert", "", "exit PEM certificate")
 	key := flag.String("key", "", "exit PEM private key")
 	allow := flag.String("allow", "", "comma-separated exact exit destinations e.g. tcp|127.0.0.1:8080,udp|127.0.0.1:5353")
 	nextHops := flag.String("next-hops", "", "private JSON file with operator-authorized next-hop entries")
+	obfuscation := flag.String("obfuscation-strategy", "", "tunnel obfuscation strategy: random-padding/timing-perturb/tls-mimic")
+	obfuscationParams := flag.String("obfuscation-params", "", "JSON object with obfuscation strategy parameters")
 	nodeID := flag.String("exit-id", "", "stable unique exit identity for chain cycle detection")
 	reverseEndpoint := flag.String("reverse-endpoint", "", "outbound reverse carrier endpoint")
 	serverName := flag.String("server-name", "", "reverse carrier certificate DNS name")
@@ -69,7 +88,7 @@ func run() error {
 	if e != nil {
 		return e
 	}
-	if *mode == "exit" || *mode == "reverse-exit" {
+	if *mode == "exit" || *mode == "secure-direct" || *mode == "reverse-exit" {
 		allowed := map[string]bool{}
 		for _, v := range strings.Split(*allow, ",") {
 			if v != "" {
@@ -87,7 +106,14 @@ func run() error {
 		if e != nil {
 			return e
 		}
-		s := &tunnel.Server{Token: os.Getenv("TFP_EXIT_TOKEN"), Allowed: allowed, NextHops: hops, NodeID: *nodeID, Client: tunnel.Client{TLS: tc}}
+		obfs, e := parseObfuscation(*obfuscation, *obfuscationParams)
+		if e != nil {
+			return e
+		}
+		if *mode == "secure-direct" && obfs == nil {
+			return errors.New("secure-direct requires -obfuscation-strategy")
+		}
+		s := &tunnel.Server{Token: os.Getenv("TFP_EXIT_TOKEN"), Allowed: allowed, NextHops: hops, NodeID: *nodeID, Obfuscation: obfs, Client: tunnel.Client{TLS: tc}}
 		if *mode == "reverse-exit" {
 			return s.RunReverse(ctx, tunnel.Client{TLS: tc}, *transport, *reverseEndpoint, *serverName, *nodeID)
 		}
@@ -102,8 +128,12 @@ func run() error {
 		}
 		defer l.Close()
 		go func() { <-ctx.Done(); s.Close() }()
-		log.Printf("exit %s listening on %s", *transport, l.Addr())
-		e = s.Serve(l, *transport)
+		serveTransport := *transport
+		if *mode == "secure-direct" {
+			serveTransport = "secure-direct"
+		}
+		log.Printf("%s %s listening on %s", *mode, serveTransport, l.Addr())
+		e = s.Serve(l, serveTransport)
 		if ctx.Err() != nil {
 			return nil
 		}

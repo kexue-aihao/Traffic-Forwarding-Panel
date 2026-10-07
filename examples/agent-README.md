@@ -150,12 +150,18 @@ $env:TFP_EXIT_TOKEN = '<至少16字符的随机出口凭据>'
 | `ws` | `ws://exit.example.com:9443/tunnel` | WebSocket 二进制流内 TLS 1.3；外层 Upgrade 元信息可见 |
 | `wss` | `wss://exit.example.com:9443/tunnel` | WebSocket 外层 TLS 1.3 |
 | `http` | `exit.example.com:9443` | HTTP/1.1 CONNECT `/tunnel` 后内层 TLS 1.3；CONNECT 元信息可见 |
+| `secure-direct` | `target-agent.example.com:9443` | 目标 Agent 直接终止 TLS 1.3，并在 TLS 后使用显式混淆层；仅 TCP |
 
 `direct-tls` 是唯一不使用出口的加密承载：入口先连到 target，再在同一条连接上做
 TLS 握手，证书由入口按 `-ca` 装进来的信任库（系统根 + 私有 CA）校验。校验名默认取
 target 的主机部分；目标是纯 IP、证书签的却是域名时，在规则的 `tunnel.server_name`
 里显式给出。它只支持 TCP —— UDP 要走 TLS 得用 DTLS，那是另一套协议，本版不提供。
 没有跳过证书校验的开关，与其它承载一致。
+
+`secure-direct` 用于目标设备本身作为 TLS 隧道端点的场景。它必须配置 `obfuscation`
+（`random-padding`、`timing-perturb` 或 `tls-mimic`），不支持 UDP、Mux、反向路由和链式
+出口；目标 Agent 与入口规则必须使用相同策略。安装脚本可用 `-q public-ip` 或 `-q auto`
+调用目标机预装的 `certbot`/`acme.sh` 申请公网证书，申请失败会终止安装，不会回退为明文。
 
 节点能力里对应 `direct-tls-v1`：未声明该能力的老 Agent 上，控制面会拒绝创建
 `direct-tls` 规则，而不是把规则下发过去再让它静默失败。

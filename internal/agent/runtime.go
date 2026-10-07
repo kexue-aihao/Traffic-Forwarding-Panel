@@ -91,9 +91,23 @@ func validate(v contract.Rule) error {
 		if v.Network != "tcp" {
 			return errors.New("direct-tls supports tcp only")
 		}
-	case "tls", "ws", "wss", "http":
+	case "tls", "ws", "wss", "http", "secure-direct":
 		if v.Tunnel == nil || v.Tunnel.Endpoint == "" || v.Tunnel.Token == "" {
 			return errors.New("tunnel credentials missing")
+		}
+		if v.Transport == "secure-direct" && v.Network != "tcp" {
+			return errors.New("secure-direct supports tcp only")
+		}
+		if v.Transport == "secure-direct" && (v.Tunnel.Mux || v.Tunnel.Reverse != "") {
+			return errors.New("secure-direct does not support mux or reverse routing")
+		}
+		if v.Transport == "secure-direct" && v.Tunnel.Obfuscation == nil {
+			return errors.New("secure-direct requires obfuscation")
+		}
+		if v.Transport == "secure-direct" {
+			if e := tunnel.ValidateObfuscation(v.Tunnel.Obfuscation); e != nil {
+				return fmt.Errorf("invalid secure-direct obfuscation: %w", e)
+			}
 		}
 		if e := tunnel.ValidateChain(contract.TunnelHop{Transport: v.Transport, Endpoint: v.Tunnel.Endpoint, ServerName: v.Tunnel.ServerName, Token: v.Tunnel.Token}, v.Tunnel.Chain); e != nil {
 			return e

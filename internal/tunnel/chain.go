@@ -17,7 +17,7 @@ import (
 func hopAddress(h contract.TunnelHop) (string, error) {
 	address := h.Endpoint
 	switch h.Transport {
-	case "tls", "http":
+	case "tls", "http", "secure-direct":
 	case "ws", "wss":
 		u, e := url.Parse(address)
 		if e != nil || u.Scheme != h.Transport || u.User != nil || u.Host == "" || u.Fragment != "" {

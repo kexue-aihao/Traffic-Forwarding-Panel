@@ -12,6 +12,32 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
 
+func TestObfsConnHandlesFragmentedFrames(t *testing.T) {
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	c := &obfsConn{Conn: left, strategy: &TimingPerturbObfs{}}
+	done := make(chan error, 1)
+	go func() {
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], 5)
+		for _, p := range [][]byte{b[:2], b[2:], []byte("hello")} {
+			if _, err := right.Write(p); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	buf := make([]byte, 5)
+	if n, err := c.Read(buf); err != nil || n != 5 || string(buf) != "hello" {
+		t.Fatalf("fragmented frame read: n=%d err=%v data=%q", n, err, buf)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRandomPaddingObfsRoundTrip(t *testing.T) {
 	obfs := &RandomPaddingObfs{minPad: 10, maxPad: 255}
 

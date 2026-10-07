@@ -1028,7 +1028,7 @@
                 "type": "null"
               }
             ],
-            "description": "Disabled forwarding methods: direct, direct-tls, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
+            "description": "Disabled forwarding methods: direct, direct-tls, secure-direct, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
           },
           "id": {
             "type": "string"
@@ -1308,7 +1308,7 @@
                 "type": "null"
               }
             ],
-            "description": "Disabled forwarding methods: direct, direct-tls, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
+            "description": "Disabled forwarding methods: direct, direct-tls, secure-direct, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
           },
           "identity_group_ids": {
             "anyOf": [
@@ -1468,7 +1468,7 @@
                 "type": "null"
               }
             ],
-            "description": "Disabled forwarding methods: direct, direct-tls, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
+            "description": "Disabled forwarding methods: direct, direct-tls, secure-direct, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
           },
           "identity_group_ids": {
             "anyOf": [

@@ -214,12 +214,26 @@ func (c Client) Dial(ctx context.Context, transport, endpoint, serverName, token
 // DialChain keeps the original first-hop API and treats chain as the remaining
 // one or two exits. Each receiving exit applies its own local next-hop policy.
 func (c Client) DialChain(ctx context.Context, transport, endpoint, serverName, token, network, target string, chain []contract.TunnelHop) (*Session, error) {
+	if transport == "secure-direct" {
+		if network != "tcp" {
+			return nil, errors.New("secure-direct supports tcp only")
+		}
+		if c.useMux || c.reverse != "" || len(chain) > 0 {
+			return nil, errors.New("secure-direct does not support mux, reverse or chaining")
+		}
+		if c.obfuscation == nil || c.obfuscation.Strategy == "" || c.obfuscation.Strategy == "none" {
+			return nil, errors.New("secure-direct requires an obfuscation strategy")
+		}
+	}
 	if e := ValidateChain(contract.TunnelHop{Transport: transport, Endpoint: endpoint, ServerName: serverName, Token: token}, chain); e != nil {
 		return nil, e
 	}
 	return c.dial(ctx, transport, endpoint, serverName, token, network, target, chain, nil)
 }
 func (c Client) dial(ctx context.Context, transport, endpoint, serverName, token, network, target string, chain []contract.TunnelHop, visited []string) (*Session, error) {
+	if transport == "secure-direct" && (network != "tcp" || c.useMux || c.reverse != "" || len(chain) > 0 || len(visited) > 0) {
+		return nil, errors.New("secure-direct only supports direct TCP")
+	}
 	if c.useMux {
 		return c.dialMux(ctx, transport, endpoint, serverName, token, network, target, chain, visited)
 	}
@@ -265,7 +279,7 @@ func (c Client) dial(ctx context.Context, transport, endpoint, serverName, token
 		}
 		w.SetReadLimit(maxFrame * 4)
 		conn = &wsConn{Conn: w}
-	} else if transport == "tls" || transport == "http" {
+	} else if transport == "tls" || transport == "http" || transport == "secure-direct" {
 		host, _, e := net.SplitHostPort(endpoint)
 		if e != nil {
 			return nil, e
@@ -396,6 +410,10 @@ type Server struct {
 	// Requested hops must match these entries; an empty list disables chaining.
 	NextHops    []contract.TunnelHop
 	Obfuscation *contract.ObfuscationConfig
+	// SecureDirect disables all exit-only routing features. It is set by Serve
+	// for the secure-direct listener and kept on the server so multiplexed
+	// requests cannot bypass the transport's restrictions.
+	SecureDirect bool
 	// NodeID must be stable and unique across logical exits used in a chain.
 	NodeID      string
 	Client      Client
@@ -415,8 +433,22 @@ func (s *Server) Serve(l net.Listener, transport string) error {
 	if s.TLS == nil || len(s.TLS.Certificates) == 0 || len(s.Token) < 16 || len(s.Allowed) == 0 {
 		return errors.New("certificate, token (16+ chars) and explicit target allowlist required")
 	}
-	if transport != "tls" && transport != "ws" && transport != "wss" && transport != "http" {
+	if transport != "tls" && transport != "ws" && transport != "wss" && transport != "http" && transport != "secure-direct" {
 		return errors.New("unsupported transport")
+	}
+	if transport == "secure-direct" {
+		if len(s.NextHops) > 0 {
+			return errors.New("secure-direct does not support chaining")
+		}
+		if s.Obfuscation == nil || s.Obfuscation.Strategy == "" || s.Obfuscation.Strategy == "none" {
+			return errors.New("secure-direct requires an obfuscation strategy")
+		}
+		if err := ValidateObfuscation(s.Obfuscation); err != nil {
+			return fmt.Errorf("invalid secure-direct obfuscation: %w", err)
+		}
+		s.SecureDirect = true
+	} else {
+		s.SecureDirect = false
 	}
 	if (s.NodeID != "" && !validNodeID(s.NodeID)) || (len(s.NextHops) > 0 && !validNodeID(s.NodeID)) {
 		return errors.New("chaining requires a stable unique exit ID (1-128 characters)")
@@ -578,6 +610,9 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 		return
 	}
 	if dec.Decode(new(any)) != io.EOF {
+		return
+	}
+	if s.SecureDirect && (req.Network == "mux" || req.Network == "reverse" || req.Network == "udp" || len(req.Chain) > 0 || len(req.Visited) > 0 || req.Reverse != "") {
 		return
 	}
 	if special && (req.Network == "mux" || req.Network == "reverse") {

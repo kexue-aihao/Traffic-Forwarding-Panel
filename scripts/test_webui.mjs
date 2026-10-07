@@ -628,14 +628,19 @@ try {
           `${name} ${width} overflow`,
         );
         await page.getByRole("button", { name: "新增", exact: true }).click();
+        assert.equal(await page.getByLabel("名称", { exact: true }).inputValue(), "");
         await page.getByLabel("名称", { exact: true }).fill("dirty");
-        await page.getByRole("button", { name: "关闭对话框" }).click();
-        await page.getByText("尚有未保存内容。再次关闭将放弃修改。").waitFor();
+        // 新增规则即使填写了内容，也只需点击一次关闭或按一次 Esc。
+        if (width === 390 || width === 1440) {
+          await page.keyboard.press("Escape");
+        } else {
+          await page.getByRole("button", { name: "关闭对话框" }).click();
+        }
         // 退场是有的：close() 之后还要播一个 --duration-state 的动画，元素
         // 才会从 DOM 上摘掉，所以这里等它卸载而不是立刻数。
-        await page.getByRole("button", { name: "关闭对话框" }).click();
         await page.locator("dialog").waitFor({ state: "detached" });
         assert.equal(await page.locator("dialog").count(), 0);
+        assert.equal(rules.length, 0, "关闭新增规则不应保存草稿");
       }
       await page.getByRole("button", { name: "新增", exact: true }).click();
       await page
@@ -1290,7 +1295,7 @@ try {
         [],
       );
       console.log(
-        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), dirty dialog, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, recharge in yuan with channel fee, purchase, dropdown list clicks (page, dialog, diagnostics), themes, 401 PASS`,
+        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), rule creation closes without confirmation, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, recharge in yuan with channel fee, purchase, dropdown list clicks (page, dialog, diagnostics), themes, 401 PASS`,
       );
     } finally {
       await browser.close();

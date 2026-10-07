@@ -44,7 +44,7 @@ func splitGroupPolicy(g contract.Group) contract.Group {
 		switch {
 		case p == "tcp" || p == "udp" || strings.HasPrefix(p, "network:"):
 			add(&networks, strings.TrimPrefix(p, "network:"))
-		case contains([]string{"direct", "tls", "ws", "wss", "http"}, p) || strings.HasPrefix(p, "transport:"):
+		case contains([]string{"direct", "direct-tls", "secure-direct", "tls", "ws", "wss", "http"}, p) || strings.HasPrefix(p, "transport:"):
 			add(&transports, strings.TrimPrefix(p, "transport:"))
 		case p == "socks":
 			add(&apps, "app:socks")
@@ -387,7 +387,7 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, transport := range g.DisabledTransports {
-		if !contains([]string{"direct", "direct-tls", "tls", "ws", "wss", "http"}, transport) {
+		if !contains([]string{"direct", "direct-tls", "secure-direct", "tls", "ws", "wss", "http"}, transport) {
 			fail(w, 400, "unsupported disabled transport")
 			return
 		}
@@ -641,7 +641,7 @@ func (s *Server) allocateListen(ctx context.Context, tx *sql.Tx, groupPayload, n
 }
 
 func validateRule(rule contract.Rule) (int, error) {
-	if len(rule.Name) > 190 || strings.TrimSpace(rule.Name) == "" || !contains([]string{"tcp", "udp"}, rule.Network) || !contains([]string{"direct", "direct-tls", "tls", "ws", "wss", "http"}, rule.Transport) {
+	if len(rule.Name) > 190 || strings.TrimSpace(rule.Name) == "" || !contains([]string{"tcp", "udp"}, rule.Network) || !contains([]string{"direct", "direct-tls", "secure-direct", "tls", "ws", "wss", "http"}, rule.Transport) {
 		return 0, errors.New("invalid name, network or transport")
 	}
 	host, p, e := net.SplitHostPort(rule.Listen)
@@ -676,6 +676,23 @@ func validateRule(rule contract.Rule) (int, error) {
 	}
 	if rule.Transport == "direct-tls" && rule.Network != "tcp" {
 		return 0, errors.New("direct-tls supports tcp only")
+	}
+	if rule.Transport == "secure-direct" && rule.Network != "tcp" {
+		return 0, errors.New("secure-direct supports tcp only")
+	}
+	if rule.Transport == "secure-direct" && rule.Tunnel != nil && len(rule.Tunnel.Chain) > 0 {
+		return 0, errors.New("secure-direct does not support tunnel chaining")
+	}
+	if rule.Transport == "secure-direct" && rule.Tunnel != nil && (rule.Tunnel.Mux || rule.Tunnel.Reverse != "") {
+		return 0, errors.New("secure-direct does not support mux or reverse routing")
+	}
+	if rule.Transport == "secure-direct" && (rule.Tunnel == nil || rule.Tunnel.Obfuscation == nil) {
+		return 0, errors.New("secure-direct requires obfuscation")
+	}
+	if rule.Transport == "secure-direct" {
+		if err := tunnel.ValidateObfuscation(rule.Tunnel.Obfuscation); err != nil {
+			return 0, fmt.Errorf("invalid secure-direct obfuscation: %w", err)
+		}
 	}
 	if rule.Transport != "direct" && rule.Transport != "direct-tls" && rule.Tunnel != nil {
 		if e := tunnel.ValidateChain(contract.TunnelHop{Transport: rule.Transport, Endpoint: rule.Tunnel.Endpoint, ServerName: rule.Tunnel.ServerName, Token: rule.Tunnel.Token}, rule.Tunnel.Chain); e != nil {

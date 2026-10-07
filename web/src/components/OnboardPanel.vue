@@ -17,7 +17,7 @@ import OnboardCommand from "./OnboardCommand.vue";
 const props = defineProps<{ accessKey: string }>();
 
 const origin = location.origin;
-type Mode = "direct" | "entry" | "exit";
+type Mode = "direct" | "entry" | "secure-direct" | "exit";
 const mode = ref<Mode>("direct");
 const modes: { id: Mode; label: string; summary: string }[] = [
   {
@@ -34,6 +34,11 @@ const modes: { id: Mode; label: string; summary: string }[] = [
     id: "exit",
     label: "隧道",
     summary: "设备作为出口端点，供入口机器连接；出口服务本身不连面板",
+  },
+  {
+    id: "secure-direct",
+    label: "安全直连",
+    summary: "目标设备直接监听 TLS 1.3 混淆隧道，仅支持 TCP",
   },
 ];
 
@@ -54,6 +59,8 @@ const exitToken = ref(randomToken());
 const serverName = ref("");
 const listen = ref("0.0.0.0:9443");
 const transport = ref("tls");
+const obfuscation = ref("random-padding");
+const certMode = ref("provided");
 const certPath = ref("/etc/ssl/exit.crt");
 const keyPath = ref("/etc/ssl/exit.key");
 const allow = ref("");
@@ -72,16 +79,21 @@ const exitReady = computed(
 );
 const exitCommand = computed(
   () =>
-    `bash <(curl -fLsS ${origin}/download/agent-install.sh) -t '${props.accessKey}' -u '${origin}' -m exit` +
+    `bash <(curl -fLsS ${origin}/download/agent-install.sh) -t '${props.accessKey}' -u '${origin}' -m ${mode.value === "secure-direct" ? "secure-direct" : "exit"}` +
     ` -S '${serverName.value.trim()}' -e '${exitToken.value}'` +
-    ` -C '${certPath.value}' -K '${keyPath.value}' -w '${allow.value.trim()}'` +
-    ` -l '${listen.value}' -p '${transport.value}'`,
+    (certMode.value === "provided" ? ` -C '${certPath.value}' -K '${keyPath.value}'` : ` -q '${certMode.value}'`) +
+    ` -w '${allow.value.trim()}'` +
+    ` -l '${listen.value}' -p '${mode.value === "secure-direct" ? "secure-direct" : transport.value}'` +
+    (mode.value === "secure-direct" ? ` -O '${obfuscation.value}'` : ""),
 );
 const exitManual = computed(
   () =>
     `TFP_ENROLLMENT_TOKEN='${props.accessKey}' TFP_EXIT_TOKEN='${exitToken.value}' tfp-agent \\\n` +
-    `  -mode exit -exit-id "$(hostname)" -listen '${listen.value}' -transport '${transport.value}' \\\n` +
-    `  -cert '${certPath.value}' -key '${keyPath.value}' -allow '${allow.value.trim()}'`,
+    `  -mode ${mode.value === "secure-direct" ? "secure-direct" : "exit"} -exit-id "$(hostname)" -listen '${listen.value}' -transport '${mode.value === "secure-direct" ? "secure-direct" : transport.value}' \\\n` +
+    `  -cert '${certPath.value}' -key '${keyPath.value}' -allow '${allow.value.trim()}'` +
+    (mode.value === "secure-direct"
+      ? ` -obfuscation-strategy '${obfuscation.value}'`
+      : ""),
 );
 
 const exitTokenCopied = ref(false);
@@ -118,7 +130,7 @@ async function copyExitToken() {
       </label>
     </fieldset>
 
-    <template v-if="mode !== 'exit'">
+    <template v-if="mode === 'direct' || mode === 'entry'">
       <div class="onboard-field">
         <label
           >出口/面板使用私有 CA 时的根证书地址（留空即用公共 CA）
@@ -159,11 +171,27 @@ async function copyExitToken() {
         </label>
         <label
           >承载
-          <Select v-model="transport" aria-label="出口承载">
+          <Select v-model="transport" aria-label="出口承载" :disabled="mode === 'secure-direct'">
             <option value="tls">tls</option>
             <option value="ws">ws</option>
             <option value="wss">wss</option>
             <option value="http">http</option>
+          </Select>
+        </label>
+        <label v-if="mode === 'secure-direct'"
+          >混淆策略
+          <Select v-model="obfuscation" aria-label="混淆策略">
+            <option value="random-padding">random-padding</option>
+            <option value="timing-perturb">timing-perturb</option>
+            <option value="tls-mimic">tls-mimic</option>
+          </Select>
+        </label>
+        <label
+          >证书模式
+          <Select v-model="certMode" aria-label="证书模式">
+            <option value="provided">provided（已有证书）</option>
+            <option value="public-ip">public-ip（公网 CA）</option>
+            <option value="auto">auto（优先公网 CA）</option>
           </Select>
         </label>
         <label
@@ -225,7 +253,7 @@ async function copyExitToken() {
 
 .onboard-modes {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--space-2);
   border: 0;
   padding: 0;

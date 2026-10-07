@@ -27,34 +27,39 @@ type obfsConn struct {
 	strategy Obfuscator
 	readMu   sync.Mutex
 	writeMu  sync.Mutex
+	readBuf  []byte
 }
 
-var obfsBuffers = sync.Pool{
-	New: func() any {
-		buf := make([]byte, maxFrame+1024)
-		return &buf
-	},
-}
+const maxObfuscatedFrame = 1 << 20
 
 func (c *obfsConn) Read(p []byte) (int, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
-
-	buf := obfsBuffers.Get().(*[]byte)
-	defer obfsBuffers.Put(buf)
-
-	n, err := c.Conn.Read((*buf)[:len(p)+c.strategy.Overhead()])
-	if err != nil {
-		return 0, err
+	for len(c.readBuf) == 0 {
+		var header [4]byte
+		if _, err := io.ReadFull(c.Conn, header[:]); err != nil {
+			return 0, err
+		}
+		n := binary.BigEndian.Uint32(header[:])
+		if n == 0 || n > maxObfuscatedFrame {
+			return 0, errors.New("invalid obfuscation frame length")
+		}
+		frame := make([]byte, n)
+		if _, err := io.ReadFull(c.Conn, frame); err != nil {
+			return 0, err
+		}
+		plain, err := c.strategy.DeobfuscateRead(frame)
+		if err != nil {
+			return 0, err
+		}
+		if len(plain) == 0 {
+			return 0, errors.New("empty obfuscation frame")
+		}
+		c.readBuf = plain
 	}
-
-	plaintext, err := c.strategy.DeobfuscateRead((*buf)[:n])
-	if err != nil {
-		return 0, err
-	}
-
-	copy(p, plaintext)
-	return len(plaintext), nil
+	n := copy(p, c.readBuf)
+	c.readBuf = c.readBuf[n:]
+	return n, nil
 }
 
 func (c *obfsConn) Write(p []byte) (int, error) {
@@ -66,8 +71,15 @@ func (c *obfsConn) Write(p []byte) (int, error) {
 		return 0, err
 	}
 
-	_, err = c.Conn.Write(obfuscated)
-	if err != nil {
+	if len(obfuscated) == 0 || len(obfuscated) > maxObfuscatedFrame {
+		return 0, errors.New("invalid obfuscation frame length")
+	}
+	var header [4]byte
+	binary.BigEndian.PutUint32(header[:], uint32(len(obfuscated)))
+	if err = writeAll(c.Conn, header[:]); err != nil {
+		return 0, err
+	}
+	if err = writeAll(c.Conn, obfuscated); err != nil {
 		return 0, err
 	}
 
@@ -259,4 +271,20 @@ func newObfuscator(cfg *contract.ObfuscationConfig) (Obfuscator, error) {
 	default:
 		return nil, errors.New("unsupported obfuscation strategy: " + cfg.Strategy)
 	}
+}
+
+// ValidateObfuscation checks an operator-supplied configuration without
+// exposing the concrete strategy implementations to command packages.
+func ValidateObfuscation(cfg *contract.ObfuscationConfig) error {
+	if cfg == nil {
+		return nil
+	}
+	o, err := newObfuscator(cfg)
+	if err != nil {
+		return err
+	}
+	if o != nil {
+		return o.Close()
+	}
+	return nil
 }

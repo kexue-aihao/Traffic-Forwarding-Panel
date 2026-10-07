@@ -15,6 +15,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
 
 func testCertificate(t testing.TB) (tls.Certificate, *x509.CertPool) {
@@ -158,5 +160,36 @@ func TestAllCarriersRealTCPUDPAndAuthorization(t *testing.T) {
 func TestOversizedFrameRejected(t *testing.T) {
 	if _, _, e := readFrame(bytes.NewReader([]byte{dataFrame, 0, 1, 0, 0})); e == nil {
 		t.Fatal("oversize accepted")
+	}
+}
+
+func TestSecureDirectRequiresObfuscationAndTCP(t *testing.T) {
+	pair, roots := testCertificate(t)
+	target, _ := echoServers(t)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "secure-direct-token", Allowed: map[string]bool{"tcp|" + target: true}}
+	if err := s.Serve(l, "secure-direct"); err == nil {
+		t.Fatal("secure-direct accepted missing obfuscation")
+	}
+	l.Close()
+	l, err = net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "secure-direct-token", Allowed: map[string]bool{"tcp|" + target: true}, Obfuscation: &contract.ObfuscationConfig{Strategy: "random-padding"}}
+	done := make(chan struct{})
+	go func() { defer close(done); _ = s.Serve(l, "secure-direct") }()
+	t.Cleanup(func() { s.Close(); <-done })
+	c := Client{TLS: &tls.Config{RootCAs: roots}, Timeout: 2 * time.Second, obfuscation: &contract.ObfuscationConfig{Strategy: "random-padding"}}
+	if session, err := c.Dial(context.Background(), "secure-direct", l.Addr().String(), "localhost", s.Token, "tcp", target); err != nil {
+		t.Fatal(err)
+	} else {
+		session.Close()
+	}
+	if _, err := c.Dial(context.Background(), "secure-direct", l.Addr().String(), "localhost", s.Token, "udp", target); err == nil {
+		t.Fatal("secure-direct accepted UDP")
 	}
 }

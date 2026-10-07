@@ -42,8 +42,11 @@ EXIT_LISTEN="0.0.0.0:9443"
 EXIT_TOKEN=""
 EXIT_CERT=""
 EXIT_KEY=""
+EXIT_CERT_MODE="provided"
 EXIT_ALLOW=""
 EXIT_TRANSPORT="tls"
+EXIT_OBFUSCATION=""
+EXIT_OBFUSCATION_PARAMS=""
 EXIT_UNIT="/etc/systemd/system/tfp-exit.service"
 UNINSTALL_SCRIPT=""
 
@@ -62,7 +65,7 @@ print_paths() {
   note "节点身份      $STATE_DIR/agent-state.json"
   note "环境文件      $ENV_DIR/agent.env"
   note "服务单元      $UNIT_PATH"
-  if [ "$MODE" = "exit" ]; then
+  if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
     note "出口单元      $EXIT_UNIT"
   fi
   if [ -n "$CA_ARG" ]; then
@@ -88,13 +91,17 @@ usage() {
 
 出口设备（隧道端点）
   -m exit            以出口身份安装（会同时装注册用的 agent）
+  -m secure-direct   以安全直连目标 Agent 身份安装（仅 TCP）
   -S <服务名>        出口对外域名，证书必须包含它（必填）
   -e <出口令牌>      至少 16 字符；入口建规则时要填同一个值（必填）
   -C <证书路径>      出口 TLS 证书 PEM（必填）
   -K <私钥路径>      出口 TLS 私钥 PEM（必填）
+  -q <证书模式>      provided / public-ip / auto，默认 provided
   -w <允许目标>      host:port 精确匹配，逗号分隔，如 tcp|127.0.0.1:8080,udp|127.0.0.1:5353（必填）
   -l <监听地址>      默认 0.0.0.0:9443
-  -p <承载>          tls / ws / wss / http，默认 tls
+  -p <承载>          tls / ws / wss / http / secure-direct，默认 tls
+  -O <混淆策略>      secure-direct 必填：random-padding / timing-perturb / tls-mimic
+  -P <JSON>          混淆参数 JSON（可选）
 
 其它
   -x              卸载：停止并删除服务，保留状态目录
@@ -102,7 +109,7 @@ usage() {
 USAGE
 }
 
-while getopts ":t:u:n:a:c:s:m:S:e:C:K:w:l:p:xh" opt; do
+while getopts ":t:u:n:a:c:s:m:S:e:C:K:q:w:l:p:O:P:xh" opt; do
   case "$opt" in
     t) TOKEN="$OPTARG" ;;
     u) PANEL_URL="$OPTARG" ;;
@@ -115,9 +122,12 @@ while getopts ":t:u:n:a:c:s:m:S:e:C:K:w:l:p:xh" opt; do
     e) EXIT_TOKEN="$OPTARG" ;;
     C) EXIT_CERT="$OPTARG" ;;
     K) EXIT_KEY="$OPTARG" ;;
+    q) EXIT_CERT_MODE="$OPTARG" ;;
     w) EXIT_ALLOW="$OPTARG" ;;
     l) EXIT_LISTEN="$OPTARG" ;;
     p) EXIT_TRANSPORT="$OPTARG" ;;
+    O) EXIT_OBFUSCATION="$OPTARG" ;;
+    P) EXIT_OBFUSCATION_PARAMS="$OPTARG" ;;
     x) UNINSTALL="yes" ;;
     h) usage; exit 0 ;;
     \?) die "未知参数 -$OPTARG（用 -h 查看用法）" ;;
@@ -129,8 +139,8 @@ done
 # 那个报出来，操作方不必 sudo 一次才发现地址写错了。
 if [ "$UNINSTALL" != "yes" ]; then
   case "$MODE" in
-    agent|exit) ;;
-    *) die "模式只能是 agent 或 exit，收到 $MODE" ;;
+    agent|exit|secure-direct) ;;
+    *) die "模式只能是 agent、exit 或 secure-direct，收到 $MODE" ;;
   esac
   [ -n "$TOKEN" ] || { usage >&2; die "缺少 -t 接入凭据"; }
   [ -n "$PANEL_URL" ] || { usage >&2; die "缺少 -u 面板地址"; }
@@ -140,16 +150,19 @@ if [ "$UNINSTALL" != "yes" ]; then
     *) die "面板地址必须是 https://（仅本机回环允许 http://）" ;;
   esac
   PANEL_URL="${PANEL_URL%/}"
-  if [ "$MODE" = "exit" ]; then
+  if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
     [ -n "$EXIT_SERVER_NAME" ] || { usage >&2; die "出口模式缺少 -S 服务名"; }
     [ -n "$EXIT_TOKEN" ] || { usage >&2; die "出口模式缺少 -e 出口令牌"; }
     [ "${#EXIT_TOKEN}" -ge 16 ] || die "出口令牌至少 16 字符"
-    [ -n "$EXIT_CERT" ] || { usage >&2; die "出口模式缺少 -C 证书路径"; }
-    [ -n "$EXIT_KEY" ] || { usage >&2; die "出口模式缺少 -K 私钥路径"; }
     [ -n "$EXIT_ALLOW" ] || { usage >&2; die "出口模式缺少 -w 允许目标"; }
+    case "$EXIT_CERT_MODE" in provided|public-ip|auto) ;; *) die "证书模式只能是 provided、public-ip 或 auto" ;; esac
+    if [ "$EXIT_CERT_MODE" = "provided" ]; then
+      [ -n "$EXIT_CERT" ] || { usage >&2; die "出口模式缺少 -C 证书路径"; }
+      [ -n "$EXIT_KEY" ] || { usage >&2; die "出口模式缺少 -K 私钥路径"; }
+    fi
     case "$EXIT_TRANSPORT" in
-      tls|ws|wss|http) ;;
-      *) die "出口承载只能是 tls / ws / wss / http，收到 $EXIT_TRANSPORT" ;;
+      tls|ws|wss|http|secure-direct) ;;
+      *) die "出口承载只能是 tls / ws / wss / http / secure-direct，收到 $EXIT_TRANSPORT" ;;
     esac
     # 这一串会被原样写进 systemd 单元的 ExecStart，只允许它需要的字符。
     case "$EXIT_ALLOW" in
@@ -159,8 +172,16 @@ if [ "$UNINSTALL" != "yes" ]; then
       *[!A-Za-z0-9.:\[\]]*) die "监听地址格式不对：$EXIT_LISTEN" ;;
     esac
     [ "${#NODE_NAME}" -le 128 ] || die "设备名超过 128 字符，出口身份取的就是它"
-    [ -r "$EXIT_CERT" ] || die "读不到证书 $EXIT_CERT"
-    [ -r "$EXIT_KEY" ] || die "读不到私钥 $EXIT_KEY"
+    if [ "$EXIT_CERT_MODE" = "provided" ]; then
+      [ -r "$EXIT_CERT" ] || die "读不到证书 $EXIT_CERT"
+      [ -r "$EXIT_KEY" ] || die "读不到私钥 $EXIT_KEY"
+    fi
+    if [ "$MODE" = "secure-direct" ]; then
+      [ "$EXIT_TRANSPORT" = "secure-direct" ] || die "secure-direct 模式必须使用 -p secure-direct"
+      [ -n "$EXIT_OBFUSCATION" ] || die "secure-direct 模式必须指定 -O 混淆策略"
+      case "$EXIT_OBFUSCATION" in random-padding|timing-perturb|tls-mimic) ;; *) die "不支持的混淆策略 $EXIT_OBFUSCATION" ;; esac
+      case "$EXIT_OBFUSCATION_PARAMS" in *[!A-Za-z0-9_.,:{}\"\ \[\]-]*) die "混淆参数 JSON 含有非法字符" ;; esac
+    fi
   fi
 fi
 
@@ -201,8 +222,8 @@ fi
 
 NODE_NAME="${NODE_NAME:-$(hostname)}"
 
-if [ "$MODE" = "exit" ]; then
-  echo "出口设备接入"
+if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
+  echo "$([ "$MODE" = "secure-direct" ] && echo '安全直连目标设备接入' || echo '出口设备接入')"
   note "面板：$PANEL_URL"
   note "服务名：$EXIT_SERVER_NAME"
   note "承载：$EXIT_TRANSPORT   监听：$EXIT_LISTEN"
@@ -210,6 +231,29 @@ else
   echo "入口设备接入"
   note "面板：$PANEL_URL"
   note "设备名：$NODE_NAME"
+fi
+
+if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
+  if [ "$EXIT_CERT_MODE" != "provided" ]; then
+    [ "$EXIT_SERVER_NAME" != "" ] || die "公网证书模式需要 -S 域名"
+    case "$EXIT_SERVER_NAME" in *[!A-Za-z0-9.-]*) die "公网证书模式只接受 DNS 域名" ;; esac
+    if command -v certbot >/dev/null 2>&1; then
+      certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email -d "$EXIT_SERVER_NAME" \
+        || die "certbot 公网证书申请失败；请确保 DNS 指向本机且 TCP/80 可达"
+      EXIT_CERT="/etc/letsencrypt/live/$EXIT_SERVER_NAME/fullchain.pem"
+      EXIT_KEY="/etc/letsencrypt/live/$EXIT_SERVER_NAME/privkey.pem"
+    elif command -v acme.sh >/dev/null 2>&1; then
+      ACME_HOME="${HOME:-/root}/.acme.sh"
+      acme.sh --issue --standalone -d "$EXIT_SERVER_NAME" || die "acme.sh 公网证书申请失败；请确保 TCP/80 可达"
+      mkdir -p "/etc/tfp-agent/certs/$EXIT_SERVER_NAME"
+      acme.sh --install-cert -d "$EXIT_SERVER_NAME" --fullchain-file "/etc/tfp-agent/certs/$EXIT_SERVER_NAME/fullchain.pem" --key-file "/etc/tfp-agent/certs/$EXIT_SERVER_NAME/privkey.pem" || die "安装公网证书失败"
+      EXIT_CERT="/etc/tfp-agent/certs/$EXIT_SERVER_NAME/fullchain.pem"
+      EXIT_KEY="/etc/tfp-agent/certs/$EXIT_SERVER_NAME/privkey.pem"
+    else
+      die "公网证书模式需要预装 certbot 或 acme.sh；未获取证书时不会降级为明文"
+    fi
+    chmod 0600 "$EXIT_KEY"
+  fi
 fi
 note "架构：linux/$ARCH"
 echo
@@ -284,7 +328,7 @@ systemctl enable tfp-agent.service >/dev/null 2>&1
 systemctl restart tfp-agent.service
 
 # ── 出口服务 ────────────────────────────────────────────────────────
-if [ "$MODE" = "exit" ]; then
+if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
   # 证书先验一次。载不进去的话，服务会以「无限重启」的形式失败，而 journalctl
   # 里的错误比现在这一行难读得多；证书没覆盖 -S 那个名字的话，入口侧握手会失败，
   # 而那时候排查要跨越两台机器。openssl 不在就跳过，不把它变成硬依赖。
@@ -315,7 +359,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$ENV_DIR/exit.env
-ExecStart=$BIN_PATH -mode exit -exit-id $NODE_NAME -listen $EXIT_LISTEN -transport $EXIT_TRANSPORT -cert $EXIT_CERT -key $EXIT_KEY -allow '$EXIT_ALLOW'$CA_ARG
+ExecStart=$BIN_PATH -mode $MODE -exit-id $NODE_NAME -listen $EXIT_LISTEN -transport $EXIT_TRANSPORT -cert $EXIT_CERT -key $EXIT_KEY -allow '$EXIT_ALLOW' -obfuscation-strategy '$EXIT_OBFUSCATION' -obfuscation-params '$EXIT_OBFUSCATION_PARAMS'$CA_ARG
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576
@@ -352,7 +396,7 @@ $(journalctl -u tfp-agent.service -n 20 --no-pager 2>/dev/null || true)"
 done
 
 echo
-if [ "$MODE" = "exit" ]; then
+if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
   if ! systemctl is-active --quiet tfp-exit.service; then
     die "出口服务启动失败，最近日志：
 $(journalctl -u tfp-exit.service -n 20 --no-pager 2>/dev/null || true)"
