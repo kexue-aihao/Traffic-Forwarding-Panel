@@ -86,16 +86,6 @@ const exitCommand = computed(
     ` -l '${listen.value}' -p '${mode.value === "secure-direct" ? "secure-direct" : transport.value}'` +
     (mode.value === "secure-direct" ? ` -O '${obfuscation.value}'` : ""),
 );
-const exitManual = computed(
-  () =>
-    `TFP_ENROLLMENT_TOKEN='${props.accessKey}' TFP_EXIT_TOKEN='${exitToken.value}' tfp-agent \\\n` +
-    `  -mode ${mode.value === "secure-direct" ? "secure-direct" : "exit"} -exit-id "$(hostname)" -listen '${listen.value}' -transport '${mode.value === "secure-direct" ? "secure-direct" : transport.value}' \\\n` +
-    `  -cert '${certPath.value}' -key '${keyPath.value}' -allow '${allow.value.trim()}'` +
-    (mode.value === "secure-direct"
-      ? ` -obfuscation-strategy '${obfuscation.value}'`
-      : ""),
-);
-
 const exitTokenCopied = ref(false);
 let timer: ReturnType<typeof setTimeout> | undefined;
 async function copyExitToken() {
@@ -162,11 +152,11 @@ async function copyExitToken() {
       </p>
       <div class="onboard-grid">
         <label
-          >出口域名（证书必须覆盖它）
+          >{{ mode === 'secure-direct' ? '目标设备服务名' : '出口域名' }}（证书必须覆盖它）
           <input
             v-model="serverName"
-            placeholder="exit.example.com"
-            aria-label="出口域名"
+            :placeholder="mode === 'secure-direct' ? 'target.example.com' : 'exit.example.com'"
+            :aria-label="mode === 'secure-direct' ? '目标设备服务名' : '出口域名'"
           />
         </label>
         <label
@@ -212,10 +202,10 @@ async function copyExitToken() {
         </label>
       </div>
       <label
-        >允许转发的目标（精确匹配，逗号分隔）
+        >{{ mode === 'secure-direct' ? '允许目标（仅 TCP，精确匹配，逗号分隔）' : '允许转发的目标（精确匹配，逗号分隔）' }}
         <input
           v-model="allow"
-          placeholder="tcp|10.20.0.11:27015,udp|10.20.0.11:5353"
+          :placeholder="mode === 'secure-direct' ? 'tcp|10.20.0.11:27015' : 'tcp|10.20.0.11:27015,udp|10.20.0.11:5353'"
           aria-label="允许目标"
         />
       </label>
@@ -227,7 +217,7 @@ async function copyExitToken() {
       <OnboardCommand
         v-if="exitReady"
         :command="exitCommand"
-        :manual="exitManual"
+        manual=""
         fixed
       >
         <template #after>
@@ -241,7 +231,13 @@ async function copyExitToken() {
           </div>
         </template>
       </OnboardCommand>
-      <p v-else class="empty">填好出口域名与允许目标后生成命令。</p>
+      <p v-if="mode === 'secure-direct'" class="muted small">
+        安全直连需要在目标设备上同时运行注册 Agent 和直连服务；上面的安装命令会自动完成两者。
+        手动启动单个出口进程不会把设备注册到控制台。
+      </p>
+      <p v-if="!exitReady" class="empty">
+        填好{{ mode === 'secure-direct' ? '目标设备服务名与允许目标' : '出口域名与允许目标' }}后生成命令。
+      </p>
     </template>
   </div>
 </template>

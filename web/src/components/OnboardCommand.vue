@@ -13,14 +13,14 @@ const props = withDefaults(
   defineProps<{
     command: string;
     /** 同一条命令的手工版：不走脚本，自行放好二进制后用凭据启动一次 */
-    manual: string;
+    manual?: string;
     /** 长期有效的接入密钥，而不是 15 分钟的一次性令牌 */
     fixed?: boolean;
     expiresAt?: string;
     /** 命令上方那句话说清楚这条命令装出来的是什么 */
     summary?: string;
   }>(),
-  { fixed: false, expiresAt: "", summary: "" },
+  { fixed: false, expiresAt: "", summary: "", manual: "" },
 );
 
 // 复制反馈只有两种结果，用一个状态表示就够了；定时器在卸载时清掉，
@@ -76,7 +76,7 @@ const expiry = computed(() =>
     <p v-if="expiry" class="muted small">{{ expiry }}</p>
     <slot name="after" />
 
-    <details>
+    <details v-if="manual">
       <summary>手动安装</summary>
       <p class="muted small">
         自行构建或拷贝 Agent 到目标设备后，用凭据启动一次即可。注册成功后节点身份

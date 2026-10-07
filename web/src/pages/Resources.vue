@@ -2023,6 +2023,13 @@ const labels: Record<string, string> = {
                   :required="!selected"
                   :placeholder="selected ? '留空保留既有凭据' : ''"
               /></label>
+              <label v-if="form.transport === 'secure-direct'"
+                >混淆策略<Select v-model="form.obfuscation" aria-label="混淆策略">
+                  <option value="random-padding">random-padding</option>
+                  <option value="timing-perturb">timing-perturb</option>
+                  <option value="tls-mimic">tls-mimic</option>
+                </Select></label
+              >
               <label v-if="form.transport !== 'secure-direct'" class="check"
                 ><input v-model="form.mux" type="checkbox" />启用 Mux
                 连接复用</label
@@ -2256,13 +2263,6 @@ const labels: Record<string, string> = {
                   </option>
                 </Select>
               </label>
-              <label v-if="form.transport === 'secure-direct'"
-                >混淆策略<Select v-model="form.obfuscation" aria-label="混淆策略">
-                  <option value="random-padding">random-padding</option>
-                  <option value="timing-perturb">timing-perturb</option>
-                  <option value="tls-mimic">tls-mimic</option>
-                </Select></label
-              >
               <div class="toolbar">
                 <button
                   v-if="form.chain_group_ids.length < 3"

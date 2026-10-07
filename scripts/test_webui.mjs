@@ -594,6 +594,19 @@ try {
         /长期不变/,
         "固定密钥的命令不该说 15 分钟过期",
       );
+      await page.getByLabel("安全直连", { exact: true }).check();
+      await page.getByLabel("目标设备服务名", { exact: true }).fill("target.example.com");
+      await page.getByLabel("允许目标", { exact: true }).fill("tcp|127.0.0.1:8080");
+      assert.match(
+        await page.getByLabel("设备接入命令").textContent(),
+        /-m secure-direct .* -p 'secure-direct' -O 'random-padding'/,
+        "安全直连应生成目标设备接入命令",
+      );
+      assert.match(
+        await page.locator(".onboard-panel").innerText(),
+        /手动启动单个出口进程不会把设备注册到控制台/,
+        "安全直连不应展示无法完成设备注册的手动出口命令",
+      );
       await page
         .locator("dialog")
         .getByRole("button", { name: "关闭", exact: true })
