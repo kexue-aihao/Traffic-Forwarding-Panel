@@ -223,7 +223,11 @@ fi
 NODE_NAME="${NODE_NAME:-$(hostname)}"
 
 if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
-  echo "$([ "$MODE" = "secure-direct" ] && echo '安全直连目标设备接入' || echo '出口设备接入')"
+  if [ "$MODE" = "secure-direct" ]; then
+    echo '安全直连目标设备接入'
+  else
+    echo '出口设备接入'
+  fi
   note "面板：$PANEL_URL"
   note "服务名：$EXIT_SERVER_NAME"
   note "承载：$EXIT_TRANSPORT   监听：$EXIT_LISTEN"
@@ -243,7 +247,7 @@ if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
       EXIT_CERT="/etc/letsencrypt/live/$EXIT_SERVER_NAME/fullchain.pem"
       EXIT_KEY="/etc/letsencrypt/live/$EXIT_SERVER_NAME/privkey.pem"
     elif command -v acme.sh >/dev/null 2>&1; then
-      ACME_HOME="${HOME:-/root}/.acme.sh"
+      export ACME_HOME="${HOME:-/root}/.acme.sh"
       acme.sh --issue --standalone -d "$EXIT_SERVER_NAME" || die "acme.sh 公网证书申请失败；请确保 TCP/80 可达"
       mkdir -p "/etc/tfp-agent/certs/$EXIT_SERVER_NAME"
       acme.sh --install-cert -d "$EXIT_SERVER_NAME" --fullchain-file "/etc/tfp-agent/certs/$EXIT_SERVER_NAME/fullchain.pem" --key-file "/etc/tfp-agent/certs/$EXIT_SERVER_NAME/privkey.pem" || die "安装公网证书失败"
