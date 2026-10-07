@@ -7,7 +7,7 @@ set -euo pipefail
 # Keep the bootstrap executable source immutable.  Update this commit together
 # with a release when the manager changes; never fetch executable root code from
 # a moving branch name.
-readonly MANAGER_COMMIT="a9e9ea3d34f64271c0172e9bb71392ad35e5a9d7"
+readonly MANAGER_COMMIT="6855b02f1cb16fffa2d2a1eaa88a61613b58a4e8"
 readonly MANAGER_URL="https://raw.githubusercontent.com/kexue-aihao/Traffic-Forwarding-Panel/${MANAGER_COMMIT}/scripts/panel-manager.sh"
 
 run_manager() (

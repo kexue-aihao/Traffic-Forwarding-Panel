@@ -9,7 +9,7 @@
 Debian 服务器已安装 curl、Docker 和 Docker Compose v2 时，复制下面完整的一行执行。root 用户可直接运行，普通用户使用 sudo 提权。命令自动获取最新正式版，首次安装和后续升级均适用：
 
 ```sh
-curl --proto '=https' --proto-redir '=https' -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/raw/a9e9ea3d34f64271c0172e9bb71392ad35e5a9d7/install.sh | bash
+curl --proto '=https' --proto-redir '=https' -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/raw/6855b02f1cb16fffa2d2a1eaa88a61613b58a4e8/install.sh | bash
 ```
 
 在线引导脚本会从固定的源码提交获取管理器，管理器在执行发布安装器前会用同一发布包的
@@ -25,7 +25,7 @@ curl --proto '=https' --proto-redir '=https' -fsSL https://github.com/kexue-aiha
 如需指定端口、目录、用户名或使用 `--password-stdin`，先将管理脚本保存到本地：
 
 ```sh
-curl --proto '=https' --proto-redir '=https' -fsSL https://raw.githubusercontent.com/kexue-aihao/Traffic-Forwarding-Panel/a9e9ea3d34f64271c0172e9bb71392ad35e5a9d7/scripts/panel-manager.sh -o /tmp/panel-manager.sh
+curl --proto '=https' --proto-redir '=https' -fsSL https://raw.githubusercontent.com/kexue-aihao/Traffic-Forwarding-Panel/6855b02f1cb16fffa2d2a1eaa88a61613b58a4e8/scripts/panel-manager.sh -o /tmp/panel-manager.sh
 sudo bash /tmp/panel-manager.sh install --port 18080 \
   --dir /opt/traffic-forwarding-panel --admin admin
 rm -f /tmp/panel-manager.sh
@@ -115,7 +115,7 @@ docker compose exec panel /panel -reset-password admin
 该脚本面向 Docker Compose 部署；Caddy + systemd 原生部署请继续使用对应的二进制和 service 配置。
 
 ```sh
-curl --proto '=https' --proto-redir '=https' -fsSL https://raw.githubusercontent.com/kexue-aihao/Traffic-Forwarding-Panel/a9e9ea3d34f64271c0172e9bb71392ad35e5a9d7/scripts/panel-manager.sh -o /tmp/panel-manager.sh && sudo bash /tmp/panel-manager.sh; rm -f /tmp/panel-manager.sh
+curl --proto '=https' --proto-redir '=https' -fsSL https://raw.githubusercontent.com/kexue-aihao/Traffic-Forwarding-Panel/6855b02f1cb16fffa2d2a1eaa88a61613b58a4e8/scripts/panel-manager.sh -o /tmp/panel-manager.sh && sudo bash /tmp/panel-manager.sh; rm -f /tmp/panel-manager.sh
 ```
 
 脚本默认使用 `/opt/traffic-forwarding-panel`，不带参数时打开菜单，也可以直接指定操作：
