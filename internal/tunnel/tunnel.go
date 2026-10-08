@@ -430,7 +430,7 @@ type Server struct {
 }
 
 func (s *Server) Serve(l net.Listener, transport string) error {
-	if s.TLS == nil || len(s.TLS.Certificates) == 0 || len(s.Token) < 16 || len(s.Allowed) == 0 {
+	if s.TLS == nil || (len(s.TLS.Certificates) == 0 && s.TLS.GetCertificate == nil) || len(s.Token) < 16 || len(s.Allowed) == 0 {
 		return errors.New("certificate, token (16+ chars) and explicit target allowlist required")
 	}
 	if transport != "tls" && transport != "ws" && transport != "wss" && transport != "http" && transport != "secure-direct" {

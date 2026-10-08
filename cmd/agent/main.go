@@ -117,11 +117,10 @@ func run() error {
 		if *mode == "reverse-exit" {
 			return s.RunReverse(ctx, tunnel.Client{TLS: tc}, *transport, *reverseEndpoint, *serverName, *nodeID)
 		}
-		pair, e := tls.LoadX509KeyPair(*cert, *key)
+		s.TLS, e = certificateConfig(*cert, *key)
 		if e != nil {
 			return e
 		}
-		s.TLS = &tls.Config{Certificates: []tls.Certificate{pair}}
 		l, e := net.Listen("tcp", *listen)
 		if e != nil {
 			return e

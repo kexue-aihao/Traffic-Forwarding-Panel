@@ -64,6 +64,7 @@ const certMode = ref("provided");
 const certPath = ref("/etc/ssl/exit.crt");
 const keyPath = ref("/etc/ssl/exit.key");
 const allow = ref("");
+const publicIP = computed(() => certMode.value === "public-ip");
 
 const entryCommand = computed(
   () =>
@@ -75,12 +76,13 @@ const entryManual = computed(
 );
 
 const exitReady = computed(
-  () => serverName.value.trim() !== "" && allow.value.trim() !== "",
+  () => (publicIP.value || serverName.value.trim() !== "") && allow.value.trim() !== "",
 );
 const exitCommand = computed(
   () =>
     `bash <(curl -fLsS ${origin}/download/agent-install.sh) -t '${props.accessKey}' -u '${origin}' -m ${mode.value === "secure-direct" ? "secure-direct" : "exit"}` +
-    ` -S '${serverName.value.trim()}' -e '${exitToken.value}'` +
+    (publicIP.value ? "" : ` -S '${serverName.value.trim()}'`) +
+    ` -e '${exitToken.value}'` +
     (certMode.value === "provided" ? ` -C '${certPath.value}' -K '${keyPath.value}'` : ` -q '${certMode.value}'`) +
     ` -w '${allow.value.trim()}'` +
     ` -l '${listen.value}' -p '${mode.value === "secure-direct" ? "secure-direct" : transport.value}'` +
@@ -151,7 +153,7 @@ async function copyExitToken() {
         出口列表的「在线」列永远是离线。
       </p>
       <div class="onboard-grid">
-        <label
+        <label v-if="!publicIP"
           >{{ mode === 'secure-direct' ? '目标设备服务名' : '出口域名' }}（证书必须覆盖它）
           <input
             v-model="serverName"
@@ -180,15 +182,15 @@ async function copyExitToken() {
           >证书模式
           <Select v-model="certMode" aria-label="证书模式">
             <option value="provided">provided（已有证书）</option>
-            <option value="public-ip">public-ip（公网 CA）</option>
+            <option value="public-ip">public-ip（公网 IP 证书）</option>
             <option value="auto">auto（优先公网 CA）</option>
           </Select>
         </label>
-        <label
+        <label v-if="certMode === 'provided'"
           >证书路径（设备上的绝对路径）
           <input v-model="certPath" aria-label="证书路径" />
         </label>
-        <label
+        <label v-if="certMode === 'provided'"
           >私钥路径
           <input v-model="keyPath" aria-label="私钥路径" />
         </label>
@@ -210,8 +212,7 @@ async function copyExitToken() {
         />
       </label>
       <p class="muted small">
-        出口只转发这里列出的目标，没有通配符。证书与私钥由你自己的 CA 签发，
-        面板不代为签发也不保存私钥。
+        出口只转发这里列出的目标，没有通配符。私钥保存在目标设备上，面板不保存私钥。
       </p>
 
       <OnboardCommand
@@ -236,7 +237,7 @@ async function copyExitToken() {
         手动启动单个出口进程不会把设备注册到控制台。
       </p>
       <p v-if="!exitReady" class="empty">
-        填好{{ mode === 'secure-direct' ? '目标设备服务名与允许目标' : '出口域名与允许目标' }}后生成命令。
+        填好{{ publicIP ? '允许目标' : mode === 'secure-direct' ? '目标设备服务名与允许目标' : '出口域名与允许目标' }}后生成命令。
       </p>
     </template>
   </div>

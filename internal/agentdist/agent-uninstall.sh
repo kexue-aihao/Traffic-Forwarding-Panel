@@ -22,6 +22,8 @@ STATE_DIR="/var/lib/tfp-agent"
 ENV_DIR="/etc/tfp-agent"
 UNIT_PATH="/etc/systemd/system/tfp-agent.service"
 EXIT_UNIT="/etc/systemd/system/tfp-exit.service"
+RENEW_UNIT="/etc/systemd/system/tfp-cert-renew.service"
+RENEW_TIMER="/etc/systemd/system/tfp-cert-renew.timer"
 UNINSTALL_WORKER="/var/lib/tfp-agent-uninstall"
 PURGE="no"
 
@@ -64,7 +66,8 @@ done
 echo "正在卸载…"
 systemctl disable --now tfp-agent.service 2>/dev/null || true
 systemctl disable --now tfp-exit.service 2>/dev/null || true
-rm -f "$UNIT_PATH" "$EXIT_UNIT" "$BIN_PATH"
+systemctl disable --now tfp-cert-renew.timer tfp-cert-renew.service 2>/dev/null || true
+rm -f "$UNIT_PATH" "$EXIT_UNIT" "$RENEW_UNIT" "$RENEW_TIMER" "$BIN_PATH"
 rm -f "$ENV_DIR/agent.env" "$ENV_DIR/exit.env" "$ENV_DIR/managed-install" "$ENV_DIR/agent-uninstall.sh"
 systemctl daemon-reload
 

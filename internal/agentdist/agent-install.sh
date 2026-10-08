@@ -48,6 +48,13 @@ EXIT_TRANSPORT="tls"
 EXIT_OBFUSCATION=""
 EXIT_OBFUSCATION_PARAMS=""
 EXIT_UNIT="/etc/systemd/system/tfp-exit.service"
+RENEW_UNIT="/etc/systemd/system/tfp-cert-renew.service"
+RENEW_TIMER="/etc/systemd/system/tfp-cert-renew.timer"
+IP_CERT_NAME="tfp-exit-public-ip"
+CERTBOT_BIN=""
+ACME_CONFIG="$ENV_DIR/acme"
+ACME_WORK="$STATE_DIR/acme"
+ACME_LOG="/var/log/tfp-agent-acme"
 UNINSTALL_SCRIPT=""
 
 die() {
@@ -55,6 +62,88 @@ die() {
   exit 1
 }
 note() { printf '  %s\n' "$1"; }
+
+install_python() {
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update && apt-get install -y python3 python3-venv openssl
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y python3 python3-pip openssl
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y python3 python3-pip openssl
+  elif command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install python3 python3-pip openssl
+  else
+    die "请先安装 Python 3.10 或更高版本（含 venv、pip）和 openssl，再运行公网 IP 证书安装"
+  fi
+}
+
+ensure_ip_certbot() {
+  command -v python3 >/dev/null 2>&1 || install_python
+  command -v openssl >/dev/null 2>&1 || install_python
+  local candidate help
+  for candidate in "$(command -v certbot || true)" "$ENV_DIR/certbot/bin/certbot"; do
+    [ -x "$candidate" ] || continue
+    help="$("$candidate" --help all 2>/dev/null)" || continue
+    if [[ "$help" == *--ip-address* && "$help" == *--required-profile* ]]; then
+      CERTBOT_BIN="$candidate"
+      return
+    fi
+  done
+  note "正在安装支持 IP 证书的 Certbot（独立 Python 环境）"
+  if ! python3 -m venv "$ENV_DIR/certbot"; then
+    install_python
+    python3 -m venv "$ENV_DIR/certbot" || die "无法创建 Certbot Python 环境"
+  fi
+  "$ENV_DIR/certbot/bin/python" -m pip install --upgrade 'certbot>=5.4,<6' \
+    || die "安装 Certbot 失败，请确保 Python 3.10 或更高版本，并检查 PyPI 网络连接"
+  CERTBOT_BIN="$ENV_DIR/certbot/bin/certbot"
+}
+
+detect_public_ip() {
+  local family url raw address
+  for family in 4 6; do
+    if [ "$family" = 4 ]; then url="https://api.ipify.org"; else url="https://api6.ipify.org"; fi
+    raw="$(curl -"$family" -fsS --noproxy '*' --connect-timeout 5 --max-time 15 "$url" 2>/dev/null)" || continue
+    address="$(python3 -c 'import ipaddress, sys; ip = ipaddress.ip_address(sys.argv[1].strip()); sys.exit(1) if not ip.is_global or ip.is_multicast or ip.version != int(sys.argv[2]) else print(ip)' "$raw" "$family" 2>/dev/null)" || continue
+    EXIT_SERVER_NAME="$address"
+    if [ "$family" = 6 ] && [[ "$EXIT_LISTEN" == 0.0.0.0:* ]]; then
+      EXIT_LISTEN="[::]:${EXIT_LISTEN##*:}"
+    fi
+    return
+  done
+  die "无法探测本机公网 IPv4/IPv6；请检查外网连接。公网 IP 证书不支持私网地址"
+}
+
+configure_ip_renewal() {
+  cat > "$RENEW_UNIT" <<UNIT
+[Unit]
+Description=Traffic Forwarding Panel public IP certificate renewal
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=$EXIT_CERT
+
+[Service]
+Type=oneshot
+ExecStart=$CERTBOT_BIN renew --non-interactive --cert-name $IP_CERT_NAME --config-dir $ACME_CONFIG --work-dir $ACME_WORK --logs-dir $ACME_LOG --no-random-sleep-on-renew
+TimeoutStartSec=15min
+UNIT
+  cat > "$RENEW_TIMER" <<UNIT
+[Unit]
+Description=Traffic Forwarding Panel public IP certificate renewal schedule
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:00:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+  chmod 0644 "$RENEW_UNIT" "$RENEW_TIMER"
+  systemctl daemon-reload
+  systemctl enable --now tfp-cert-renew.timer >/dev/null 2>&1
+  systemctl is-active --quiet tfp-cert-renew.timer || die "证书自动续签定时器启动失败"
+}
 
 # 装完把文件落在哪写清楚：机器出问题时运营方要能直接找到它们，而不是回头翻
 # 安装脚本。
@@ -67,6 +156,11 @@ print_paths() {
   note "服务单元      $UNIT_PATH"
   if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
     note "出口单元      $EXIT_UNIT"
+    if [ "$EXIT_CERT_MODE" = "public-ip" ]; then
+      note "IP 证书       $EXIT_CERT"
+      note "自动续签      $RENEW_TIMER"
+      note "续签日志      journalctl -u tfp-cert-renew.service"
+    fi
   fi
   if [ -n "$CA_ARG" ]; then
     note "根证书        $ENV_DIR/ca.pem"
@@ -92,11 +186,12 @@ usage() {
 出口设备（隧道端点）
   -m exit            以出口身份安装（会同时装注册用的 agent）
   -m secure-direct   以安全直连目标 Agent 身份安装（仅 TCP）
-  -S <服务名>        出口对外域名，证书必须包含它（必填）
+  -S <服务名>        证书覆盖的域名/IP（provided / auto 必填；public-ip 自动探测）
   -e <出口令牌>      至少 16 字符；入口建规则时要填同一个值（必填）
-  -C <证书路径>      出口 TLS 证书 PEM（必填）
-  -K <私钥路径>      出口 TLS 私钥 PEM（必填）
+  -C <证书路径>      出口 TLS 证书 PEM（provided 必填）
+  -K <私钥路径>      出口 TLS 私钥 PEM（provided 必填）
   -q <证书模式>      provided / public-ip / auto，默认 provided
+                    public-ip 自动申请 Let's Encrypt IP 证书并续签，需要公网 TCP/80 可达
   -w <允许目标>      host:port 精确匹配，逗号分隔，如 tcp|127.0.0.1:8080,udp|127.0.0.1:5353（必填）
   -l <监听地址>      默认 0.0.0.0:9443
   -p <承载>          tls / ws / wss / http / secure-direct，默认 tls
@@ -151,11 +246,13 @@ if [ "$UNINSTALL" != "yes" ]; then
   esac
   PANEL_URL="${PANEL_URL%/}"
   if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
-    [ -n "$EXIT_SERVER_NAME" ] || { usage >&2; die "出口模式缺少 -S 服务名"; }
     [ -n "$EXIT_TOKEN" ] || { usage >&2; die "出口模式缺少 -e 出口令牌"; }
     [ "${#EXIT_TOKEN}" -ge 16 ] || die "出口令牌至少 16 字符"
     [ -n "$EXIT_ALLOW" ] || { usage >&2; die "出口模式缺少 -w 允许目标"; }
     case "$EXIT_CERT_MODE" in provided|public-ip|auto) ;; *) die "证书模式只能是 provided、public-ip 或 auto" ;; esac
+    if [ "$EXIT_CERT_MODE" != "public-ip" ]; then
+      [ -n "$EXIT_SERVER_NAME" ] || { usage >&2; die "出口模式缺少 -S 服务名"; }
+    fi
     if [ "$EXIT_CERT_MODE" = "provided" ]; then
       [ -n "$EXIT_CERT" ] || { usage >&2; die "出口模式缺少 -C 证书路径"; }
       [ -n "$EXIT_KEY" ] || { usage >&2; die "出口模式缺少 -K 私钥路径"; }
@@ -194,7 +291,8 @@ if [ "$UNINSTALL" = "yes" ]; then
   echo "正在卸载…"
   systemctl disable --now tfp-agent.service 2>/dev/null || true
   systemctl disable --now tfp-exit.service 2>/dev/null || true
-  rm -f "$UNIT_PATH" "$EXIT_UNIT" "$BIN_PATH"
+  systemctl disable --now tfp-cert-renew.timer tfp-cert-renew.service 2>/dev/null || true
+  rm -f "$UNIT_PATH" "$EXIT_UNIT" "$RENEW_UNIT" "$RENEW_TIMER" "$BIN_PATH"
   rm -f "$ENV_DIR/agent.env" "$ENV_DIR/exit.env" "$ENV_DIR/managed-install"
   systemctl daemon-reload
   echo "已卸载。状态目录 $STATE_DIR 保留 —— 里面是节点身份，删除它等于让本机重新注册。"
@@ -229,7 +327,7 @@ if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
     echo '出口设备接入'
   fi
   note "面板：$PANEL_URL"
-  note "服务名：$EXIT_SERVER_NAME"
+  if [ "$EXIT_CERT_MODE" != "public-ip" ]; then note "服务名：$EXIT_SERVER_NAME"; fi
   note "承载：$EXIT_TRANSPORT   监听：$EXIT_LISTEN"
 else
   echo "入口设备接入"
@@ -238,7 +336,20 @@ else
 fi
 
 if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
-  if [ "$EXIT_CERT_MODE" != "provided" ]; then
+  if [ "$EXIT_CERT_MODE" = "public-ip" ]; then
+    ensure_ip_certbot
+    detect_public_ip
+    note "证书公网 IP：$EXIT_SERVER_NAME"
+    install -d -m 0700 "$ACME_CONFIG" "$ACME_WORK" "$ACME_LOG"
+    "$CERTBOT_BIN" certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email \
+      --server https://acme-v02.api.letsencrypt.org/directory --required-profile shortlived \
+      --ip-address "$EXIT_SERVER_NAME" --cert-name "$IP_CERT_NAME" --renew-with-new-domains \
+      --config-dir "$ACME_CONFIG" --work-dir "$ACME_WORK" --logs-dir "$ACME_LOG" \
+      || die "公网 IP 证书申请失败；请确保本机公网 IP 的 TCP/80 可达且端口未被占用（包括云安全组、系统防火墙和 NAT 转发）"
+    EXIT_CERT="$ACME_CONFIG/live/$IP_CERT_NAME/fullchain.pem"
+    EXIT_KEY="$ACME_CONFIG/live/$IP_CERT_NAME/privkey.pem"
+    chmod 0600 "$EXIT_KEY"
+  elif [ "$EXIT_CERT_MODE" = "auto" ]; then
     [ "$EXIT_SERVER_NAME" != "" ] || die "公网证书模式需要 -S 域名"
     case "$EXIT_SERVER_NAME" in *[!A-Za-z0-9.-]*) die "公网证书模式只接受 DNS 域名" ;; esac
     if command -v certbot >/dev/null 2>&1; then
@@ -339,8 +450,12 @@ if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
   if command -v openssl >/dev/null 2>&1; then
     openssl x509 -in "$EXIT_CERT" -noout -checkend 0 >/dev/null 2>&1 \
       || die "证书已过期或无法解析：$EXIT_CERT"
-    openssl x509 -in "$EXIT_CERT" -noout -checkhost "$EXIT_SERVER_NAME" >/dev/null 2>&1 \
-      || die "证书不覆盖 $EXIT_SERVER_NAME —— 入口会拒绝这个出口。换一张含该域名的证书，或用 -S 指定证书里已有的名字"
+    CHECK_NAME="-checkhost"
+    if [[ "$EXIT_SERVER_NAME" == *:* || "$EXIT_SERVER_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      CHECK_NAME="-checkip"
+    fi
+    openssl x509 -in "$EXIT_CERT" -noout "$CHECK_NAME" "$EXIT_SERVER_NAME" >/dev/null 2>&1 \
+      || die "证书不覆盖 $EXIT_SERVER_NAME —— 入口会拒绝这个出口。换一张含该域名/IP 的证书，或用 -S 指定证书里已有的身份"
     note "证书校验通过（覆盖 $EXIT_SERVER_NAME）"
   else
     echo "提示：未安装 openssl，跳过证书有效期与域名校验。" >&2
@@ -375,6 +490,13 @@ UNIT
   systemctl daemon-reload
   systemctl enable tfp-exit.service >/dev/null 2>&1
   systemctl restart tfp-exit.service
+  if [ "$EXIT_CERT_MODE" = "public-ip" ]; then
+    configure_ip_renewal
+  elif [ -f "$RENEW_TIMER" ]; then
+    systemctl disable --now tfp-cert-renew.timer tfp-cert-renew.service
+    rm -f "$RENEW_UNIT" "$RENEW_TIMER"
+    systemctl daemon-reload
+  fi
 fi
 
 # ── 确认 ────────────────────────────────────────────────────────────
@@ -413,8 +535,15 @@ $(journalctl -u tfp-exit.service -n 20 --no-pager 2>/dev/null || true)"
   echo "还差一步：到控制台「出口管理 → 新增」建一条记录，填上"
   note "出口服务器 = 本机（节点「$NODE_NAME」）"
   note "承载 = $EXIT_TRANSPORT"
-  note "端点 = $EXIT_SERVER_NAME:${EXIT_LISTEN##*:}"
-  note "服务名 = $EXIT_SERVER_NAME"
+  EXIT_ENDPOINT="$EXIT_SERVER_NAME:${EXIT_LISTEN##*:}"
+  if [[ "$EXIT_SERVER_NAME" == *:* ]]; then EXIT_ENDPOINT="[$EXIT_SERVER_NAME]:${EXIT_LISTEN##*:}"; fi
+  note "端点 = $EXIT_ENDPOINT"
+  if [ "$EXIT_CERT_MODE" = "public-ip" ]; then
+    note "TLS 服务名 = 留空（直接校验端点 IP）"
+    note "证书有效期约 6 天半；每 6 小时自动检查续签，新连接自动加载新证书"
+  else
+    note "服务名 = $EXIT_SERVER_NAME"
+  fi
   note "令牌 = 与 -e 传入的同一个值"
   echo "入口规则选这条出口后，流量才会真正走隧道。"
 elif [ "$REGISTERED" = "yes" ]; then

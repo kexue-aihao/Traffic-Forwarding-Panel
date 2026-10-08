@@ -607,6 +607,38 @@ try {
         /手动启动单个出口进程不会把设备注册到控制台/,
         "安全直连不应展示无法完成设备注册的手动出口命令",
       );
+      await page.getByLabel("证书模式", { exact: true }).selectOption("public-ip");
+      assert.equal(await page.getByLabel("目标设备服务名", { exact: true }).count(), 0);
+      assert.equal(await page.getByLabel("证书路径", { exact: true }).count(), 0);
+      assert.equal(await page.getByLabel("私钥路径", { exact: true }).count(), 0);
+      const ipCommand = await page.getByLabel("设备接入命令").textContent();
+      assert.match(ipCommand, /-q 'public-ip'/);
+      assert.doesNotMatch(ipCommand, / -[SCK] /, "自动 IP 证书命令不能带入先前填写的域名或证书路径");
+      await page.getByLabel("允许目标", { exact: true }).fill("");
+      assert.equal(await page.getByLabel("设备接入命令").count(), 0);
+      await page.getByLabel("允许目标", { exact: true }).fill("tcp|127.0.0.1:8080");
+      await page.getByLabel("设备接入命令").waitFor();
+      if (name === "chromium") {
+        await mkdir(resolve(import.meta.dirname, "../.gocache/screens"), { recursive: true });
+        for (const width of [320, 390, 1440]) {
+          await page.setViewportSize({ width, height: 900 });
+          const dialog = page.locator("dialog");
+          assert.ok(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1), `IP onboarding overflow at ${width}px`);
+          await dialog.screenshot({ path: resolve(import.meta.dirname, `../.gocache/screens/onboard-public-ip-${width}.png`) });
+        }
+        await page.setViewportSize({ width: 1440, height: 900 });
+      }
+      await page.getByLabel("证书模式", { exact: true }).selectOption("provided");
+      await page.getByLabel("目标设备服务名", { exact: true }).fill("");
+      assert.equal(await page.getByLabel("设备接入命令").count(), 0);
+      await page.getByLabel("证书模式", { exact: true }).selectOption("public-ip");
+      await page.getByLabel("设备接入命令").waitFor();
+      await page.getByLabel("隧道", { exact: true }).check();
+      assert.equal(await page.getByLabel("出口域名", { exact: true }).count(), 0);
+      assert.match(await page.getByLabel("设备接入命令").textContent(), /-m exit .* -q 'public-ip'/);
+      await page.getByLabel("证书模式", { exact: true }).selectOption("auto");
+      await page.getByLabel("出口域名", { exact: true }).waitFor();
+      assert.equal(await page.getByLabel("设备接入命令").count(), 0);
       await page
         .locator("dialog")
         .getByRole("button", { name: "关闭", exact: true })

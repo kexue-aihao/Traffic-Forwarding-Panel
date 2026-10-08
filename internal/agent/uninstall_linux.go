@@ -165,7 +165,7 @@ func RunUninstallWorker(ctx context.Context) error {
 		return e
 	}
 	if _, e = os.Stat(uninstallDir + "/completed"); errors.Is(e, os.ErrNotExist) {
-		for _, unit := range []string{"tfp-agent.service", "tfp-exit.service"} {
+		for _, unit := range []string{"tfp-cert-renew.timer", "tfp-cert-renew.service", "tfp-agent.service", "tfp-exit.service"} {
 			if _, e = os.Lstat("/etc/systemd/system/" + unit); e == nil {
 				if e = systemctl(ctx, "disable", "--now", unit); e != nil {
 					return e
@@ -174,7 +174,7 @@ func RunUninstallWorker(ctx context.Context) error {
 		}
 		// Remove only known managed files; user certificates and other files in
 		// these directories are deliberately preserved.
-		paths := []string{"/etc/systemd/system/tfp-agent.service", "/etc/systemd/system/tfp-exit.service", "/usr/local/bin/tfp-agent", "/etc/tfp-agent/agent.env", "/etc/tfp-agent/exit.env", "/etc/tfp-agent/managed-install", managedState, managedState + ".wal", managedState + ".lock"}
+		paths := []string{"/etc/systemd/system/tfp-agent.service", "/etc/systemd/system/tfp-exit.service", "/etc/systemd/system/tfp-cert-renew.service", "/etc/systemd/system/tfp-cert-renew.timer", "/usr/local/bin/tfp-agent", "/etc/tfp-agent/agent.env", "/etc/tfp-agent/exit.env", "/etc/tfp-agent/managed-install", managedState, managedState + ".wal", managedState + ".lock"}
 		for _, p := range paths {
 			if e = os.Remove(p); e != nil && !errors.Is(e, os.ErrNotExist) {
 				return e

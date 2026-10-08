@@ -47,6 +47,44 @@ Agent）。出口服务不跟面板通信，没有第二个服务，设备不会
 「出口管理 → 新增」登记一条记录，承载、端点、服务名与令牌都要和命令里的一致；
 入口规则选这条出口后流量才会真正走隧道。
 
+### 公网 IP 证书（无需域名）
+
+安全直连和隧道接入均可选择 `public-ip`。此模式隐藏服务名、证书路径和私钥路径，
+安装脚本自动探测本机公网 IPv4；IPv4 不可用时尝试公网 IPv6，不需要 `-S`：
+
+```bash
+bash <(curl -fLsS https://panel.example.com/download/agent-install.sh) \
+     -t '<设备组接入密钥>' -u 'https://panel.example.com' \
+     -m secure-direct -q public-ip -e '<至少16字符的出口令牌>' \
+     -w 'tcp|127.0.0.1:8080' -l '0.0.0.0:9443' -p secure-direct -O random-padding
+```
+
+证书由 Let's Encrypt 签发，使用 `shortlived` 配置，有效期 160 小时。脚本优先使用
+支持 IP 证书的现有 Certbot，否则在 `/etc/tfp-agent/certbot` 创建独立 Python 环境，
+安装 Certbot 5.4 或更高的 5.x 版本，需要 Python 3.10 或更高版本。缺少 Python/venv 或 OpenSSL 时尝试通过 apt、
+dnf、yum 或 zypper 安装；其他系统需自行准备这些依赖。安装需要访问 PyPI、ACME
+服务和 ipify 的 HTTPS 接口。
+
+本机公网 IP 的 TCP/80 必须从互联网可达，且申请和续签时端口未被占用；云安全组、
+系统防火墙及 NAT 转发都需要允许验证流量。只探测出 NAT 出口 IP 不代表 CA 可以
+连接回来；没有入站验证条件时申请会失败。证书申请失败会终止安装。
+
+`tfp-cert-renew.timer` 每 6 小时检查续签，附加最多 15 分钟随机延迟，错过的检查在
+开机后补跑。使用隔离的 `/etc/tfp-agent/acme` 配置目录，不修改系统其他证书。
+出口服务在新连接握手时自动加载轮换后的证书，不中断已有连接；证书和私钥尚未
+同时更新时继续使用上一对。查看续签状态：
+
+```bash
+systemctl status tfp-cert-renew.timer
+journalctl -u tfp-cert-renew.service
+```
+
+控制台端点填脚本输出的 `公网IP:端口`（IPv6 为 `[公网IPv6]:端口`），TLS 服务名
+留空，客户端会严格校验证书中的端点 IP。公网 IP 改变后需要重新运行接入脚本并
+更新控制台端点。卸载及切换回已有证书模式时会停止并移除这组续签任务。
+
+`provided` 继续使用自备证书；`auto` 保留按指定域名申请公网证书的行为。
+
 ### 两种接入凭据
 
 | | 设备组接入密钥（推荐） | 一次性接入令牌 |

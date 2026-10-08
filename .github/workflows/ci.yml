@@ -48,6 +48,7 @@ jobs:
       - run: bash -n internal/agentdist/agent-install.sh
       - run: bash -n internal/agentdist/agent-uninstall.sh
       - run: shellcheck install.sh internal/agentdist/agent-install.sh internal/agentdist/agent-uninstall.sh
+      - run: python3 scripts/test_agent_certificates.py
       - run: go generate ./internal/openapi
       - run: git diff --exit-code -- internal/openapi/openapi.json
       - run: go vet ./...

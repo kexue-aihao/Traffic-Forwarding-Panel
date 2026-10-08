@@ -76,6 +76,40 @@ func echoServers(t testing.TB) (string, string) {
 	}()
 	return tcp.Addr().String(), udp.LocalAddr().String()
 }
+
+func TestSecureDirectWithIPCertificateCallback(t *testing.T) {
+	pair, roots := testCertificate(t)
+	target, _ := echoServers(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	obfs := &contract.ObfuscationConfig{Strategy: "random-padding"}
+	server := &Server{
+		TLS:   &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &pair, nil }},
+		Token: "test-ip-certificate-token", Allowed: map[string]bool{"tcp|" + target: true}, Obfuscation: obfs,
+	}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener, "secure-direct") }()
+	t.Cleanup(func() { _ = server.Close(); <-done })
+	client := Client{TLS: &tls.Config{RootCAs: roots}, Timeout: 2 * time.Second}
+	conn, err := client.DialRoute(context.Background(), "secure-direct", "tcp", target, contract.Tunnel{Endpoint: listener.Addr().String(), Token: server.Token, Obfuscation: obfs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte("IP tunnel")); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, len("IP tunnel"))
+	if _, err := io.ReadFull(conn, response); err != nil || string(response) != "IP tunnel" {
+		t.Fatalf("IP certificate tunnel: %q, %v", response, err)
+	}
+}
+
 func TestAllCarriersRealTCPUDPAndAuthorization(t *testing.T) {
 	pair, roots := testCertificate(t)
 	tcpTarget, udpTarget := echoServers(t)
