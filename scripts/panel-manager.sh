@@ -33,7 +33,7 @@ usage() {
   menu                         打开交互式管理菜单（默认）
   install                      安装服务（首次安装）
   upgrade                      升级到最新正式版（自动校验并备份）
-  reset-password               重置管理员或用户密码
+  reset-password               自动生成并重置密码，成功后显示新密码
   uninstall                    卸载服务，默认保留数据
 
 选项：
@@ -205,15 +205,39 @@ run_installer() {
     [[ -z $installer_temp ]] || rm -rf -- "$installer_temp"
 }
 
+generate_user_password() {
+    # Match platform.generateUserPassword: four groups of eight alphanumerics.
+    # Reject bytes outside a multiple of 62 to avoid biased character selection.
+    local alphabet=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+    local password="" random byte
+    while ((${#password} < 32)); do
+        random=$(od -An -v -N64 -tu1 /dev/urandom) || return 1
+        [[ -n $random ]] || return 1
+        for byte in $random; do
+            if ((byte < 248)); then
+                password+=${alphabet:byte%62:1}
+                ((${#password} < 32)) || break
+            fi
+        done
+    done
+    printf '%s-%s-%s-%s\n' "${password:0:8}" "${password:8:8}" "${password:16:8}" "${password:24:8}"
+}
+
 reset_password() {
+    local password
     require_docker
     require_install
-    printf '请输入账号 %s 的新密码（12–72 个字符，输入内容不会写入命令历史）：\n' "$admin"
+    password=$(generate_user_password) || {
+        printf '错误：无法生成随机密码，未重置账号密码。\n' >&2
+        return 1
+    }
     if panel_running; then
-        compose exec -T panel /panel -reset-password "$admin"
+        printf '%s\n' "$password" | compose exec -T panel /panel -reset-password "$admin" || return $?
     else
-        compose run --rm -T --no-deps panel -reset-password "$admin"
+        printf '%s\n' "$password" | compose run --rm -T --no-deps panel -reset-password "$admin" || return $?
     fi
+    printf '\n密码重置成功。\n账号：%s\n新密码：%s\n请保存新密码，旧会话和 API Token 已失效。\n' "$admin" "$password"
+    unset password
 }
 
 confirm() {
@@ -268,9 +292,9 @@ menu() {
                     printf '安装或升级未完成（退出码 %s），服务保持原状。\n' "$?" >&2
                 ;;
             3)
-                read -r -p "账号 [$admin]：" username
+                read -r -p "管理员后台用户名 [$admin]：" username || return 0
                 [[ -z $username ]] || admin=$username
-                reset_password
+                reset_password || printf '密码重置未完成（退出码 %s），请检查账号和数据库状态后重试。\n' "$?" >&2
                 ;;
             4) delete_data=false; uninstall ;;
             5) delete_data=true; uninstall ;;
