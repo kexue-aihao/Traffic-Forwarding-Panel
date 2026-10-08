@@ -45,10 +45,12 @@ HTTPS 反向代理应保留 Host，并覆盖 `X-Forwarded-Proto` 为实际协议
 Debian 服务器已安装 curl、Docker 和 Docker Compose v2 时，复制下面完整的一行执行。root 用户可直接运行，普通用户会通过 sudo 提权：
 
 ```sh
-curl --proto '=https' --proto-redir '=https' -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/raw/6855b02f1cb16fffa2d2a1eaa88a61613b58a4e8/install.sh | bash
+curl --proto '=https' --proto-redir '=https' -fsSL https://github.com/kexue-aihao/Traffic-Forwarding-Panel/raw/88f69c66781333c4bc30c04f2d8df3a76b688d65/install.sh | bash
 ```
 
 执行后会打开管理菜单，可直接选择首次安装、升级到最新正式版或重置密码。升级会在线获取最新正式版安装器，自动备份并保留已有账号、数据和配置。
+
+选择重置密码后，输入管理员后台用户名（默认 `admin`），脚本会按创建用户的规则自动生成新密码：4 组各 8 位随机大小写字母和数字，以 `-` 连接。重置成功后在终端显示账号和新密码，旧会话和 API Token 同时失效。
 
 如果终端显示 `>` 等待继续输入，先按 `Ctrl+C` 取消，再使用代码块的复制按钮复制整行，不要手动在命令中间换行。
 
