@@ -41,7 +41,7 @@ func setupChain(t *testing.T, transports []string, pair tls.Certificate, roots *
 		f.hops = append(f.hops, contract.TunnelHop{Transport: transport, Endpoint: endpoint, ServerName: "localhost", Token: "test-chain-token-" + strings.Repeat("x", i+1)})
 	}
 	for i, h := range f.hops {
-		s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: h.Token, Allowed: map[string]bool{"tcp|" + tcp: true, "udp|" + udp: true}, NodeID: h.Endpoint, Client: f.client}
+		s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: h.Token, NodeID: h.Endpoint, Client: f.client}
 		if i+1 < len(f.hops) {
 			s.NextHops = []contract.TunnelHop{f.hops[i+1]}
 		}
@@ -133,12 +133,34 @@ func TestChainRejectsCyclesLengthsAndUnauthorizedHops(t *testing.T) {
 			t.Fatal("unauthorized next-hop credential accepted")
 		}
 	})
-	t.Run("final target checked on every hop", func(t *testing.T) {
+	t.Run("new rule targets without exit reconfiguration", func(t *testing.T) {
 		f := setupChain(t, []string{"tls", "http"}, pair, roots)
-		h := f.hops[0]
-		if c, e := f.client.DialChain(context.Background(), h.Transport, h.Endpoint, h.ServerName, h.Token, "tcp", "127.0.0.1:1", f.hops[1:]); e == nil {
+		tcp, udp := echoServers(t)
+		for network, target := range map[string]string{"tcp": tcp, "udp": udp} {
+			c, err := f.dial(context.Background(), network, target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.SetDeadline(time.Now().Add(5 * time.Second))
+			if network == "udp" {
+				err = c.WritePacket([]byte("new-target"))
+			} else {
+				_, err = io.WriteString(c, "new-target")
+			}
+			if err != nil {
+				c.Close()
+				t.Fatal(err)
+			}
+			got := make([]byte, len("new-target"))
+			if network == "udp" {
+				got, err = c.ReadPacket()
+			} else {
+				_, err = io.ReadFull(c, got)
+			}
 			c.Close()
-			t.Fatal("nonallowlisted final target accepted")
+			if err != nil || string(got) != "new-target" {
+				t.Fatalf("%s new target: %q, %v", network, got, err)
+			}
 		}
 	})
 	t.Run("visited identity rejects alias loop", func(t *testing.T) {
@@ -172,7 +194,7 @@ func TestChainRejectsCyclesLengthsAndUnauthorizedHops(t *testing.T) {
 func TestChainChecksEveryExit(t *testing.T) {
 	pair, roots := testCertificate(t)
 	for hop := 0; hop < 3; hop++ {
-		for _, rejection := range []string{"certificate name", "certificate trust", "token", "target"} {
+		for _, rejection := range []string{"certificate name", "certificate trust", "token"} {
 			for _, transport := range []string{"tls", "ws", "wss", "http"} {
 				t.Run(fmt.Sprintf("hop%d/%s/%s", hop, rejection, transport), func(t *testing.T) {
 					transports := []string{"tls", "tls", "tls"}
@@ -190,8 +212,6 @@ func TestChainChecksEveryExit(t *testing.T) {
 							}
 						case "token":
 							f.hops[hop].Token = "wrong-token-with-enough-characters"
-						case "target":
-							f.servers[hop].Allowed = map[string]bool{"tcp|127.0.0.1:1": true}
 						}
 						if hop > 0 {
 							// The local policy accepts the supplied identity; the receiving
@@ -347,11 +367,7 @@ func TestChainTargetFailureReclaimsAllHops(t *testing.T) {
 	}
 	target := unreachable.Addr().String()
 	unreachable.Close()
-	f := setupChain(t, []string{"tls", "ws", "wss"}, pair, roots, func(f *chainFixture) {
-		for _, server := range f.servers {
-			server.Allowed = map[string]bool{"tcp|" + target: true}
-		}
-	})
+	f := setupChain(t, []string{"tls", "ws", "wss"}, pair, roots)
 	if c, err := f.dial(context.Background(), "tcp", target); err == nil {
 		c.Close()
 		t.Fatal("unreachable target reported ready")

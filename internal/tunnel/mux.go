@@ -257,7 +257,7 @@ func (s *Server) serveMultiplex(conn net.Conn, req openRequest) {
 	if len(req.Chain) > 0 || len(req.Visited) > 0 || req.Reverse != "" {
 		return
 	}
-	if req.Network == "reverse" && (!validNodeID(req.Target) || !s.Allowed["reverse|"+req.Target]) {
+	if req.Network == "reverse" && (!validNodeID(req.Target) || !s.ReverseAllowed[req.Target]) {
 		return
 	}
 	if req.Network == "mux" && req.Target != "" {
@@ -342,10 +342,10 @@ func (s *Server) openReverse(req openRequest) (*Session, error) {
 }
 
 // RunReverse keeps an outbound authenticated carrier open and reconnects after
-// disconnect. The local exit still checks each stream's token and target.
+// disconnect. The local exit still checks each stream's token and request.
 func (s *Server) RunReverse(ctx context.Context, c Client, transport, endpoint, serverName, identity string) error {
-	if !validNodeID(identity) || len(s.Token) < 16 || len(s.Allowed) == 0 {
-		return errors.New("reverse identity, token and allowlist required")
+	if !validNodeID(identity) || len(s.Token) < 16 {
+		return errors.New("reverse identity and token required")
 	}
 	s.mu.Lock()
 	s.ctx = ctx

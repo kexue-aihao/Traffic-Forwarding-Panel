@@ -109,12 +109,26 @@ fi
             script = script.replace(prefix, shell_path(self.root) + prefix)
         staged = self.root / name
         staged.write_text(script, encoding="utf-8", newline="\n")
-        args = [] if name == "agent-uninstall.sh" else ["-t", "fixture-key", "-u", "https://panel.example.com", "-m", "secure-direct", "-q", "public-ip", "-e", "fixture-exit-token", "-w", "tcp|127.0.0.1:8080", "-p", "secure-direct", "-O", "random-padding"]
+        args = [] if name == "agent-uninstall.sh" else ["-t", "fixture-key", "-u", "https://panel.example.com", "-m", "secure-direct", "-q", "public-ip", "-e", "fixture-exit-token", "-p", "secure-direct", "-O", "random-padding"]
         command = 'export PATH=' + shlex.quote(shell_path(self.bin)) + ':"$PATH"; exec bash ' + shlex.quote(shell_path(staged)) + " " + shlex.join(args + list(extra))
         return subprocess.run([BASH, "-c", command], capture_output=True, text=True, encoding="utf-8", errors="replace", env=dict(self.env, **(env or {})), timeout=30)
 
     def success(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_exit_modes_install_without_target_allowlist(self):
+        for mode, transport in (("exit", "tls"), ("secure-direct", "secure-direct")):
+            with self.subTest(mode=mode):
+                self.success(self.run_script(extra=("-m", mode, "-p", transport)))
+                service = (self.root / "etc/systemd/system/tfp-exit.service").read_text(encoding="utf-8")
+                self.assertIn("-mode " + mode, service)
+                self.assertNotIn("-allow", service)
+
+    def test_legacy_target_option_is_ignored(self):
+        self.success(self.run_script(extra=("-w", "tcp|127.0.0.1:8080,udp|127.0.0.1:5353")))
+        service = (self.root / "etc/systemd/system/tfp-exit.service").read_text(encoding="utf-8")
+        self.assertNotIn("-allow", service)
+        self.assertNotIn("127.0.0.1:8080", service)
 
     def test_ip_install_and_renewal_without_server_name(self):
         self.success(self.run_script(extra=("-S", "stale.example.com")))

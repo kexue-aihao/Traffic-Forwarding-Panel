@@ -166,7 +166,7 @@ func TestTLSResumptionStillAuthenticatesEveryCarrier(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "resumption-test-token", Allowed: map[string]bool{"tcp|" + target: true}}
+			s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "resumption-test-token"}
 			done := make(chan struct{})
 			go func() { defer close(done); _ = s.Serve(l, transport) }()
 			defer func() { s.Close(); <-done }()

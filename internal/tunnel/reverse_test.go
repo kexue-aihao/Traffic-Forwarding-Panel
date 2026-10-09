@@ -18,10 +18,10 @@ func TestReverseCarrierRoutesAndReconnects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "reverse-test-token", NodeID: "exit-reverse", Allowed: map[string]bool{"tcp|" + target: true, "reverse|exit-reverse": true}}
+	server := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "reverse-test-token", NodeID: "exit-reverse", ReverseAllowed: map[string]bool{"exit-reverse": true}}
 	// Listener and outbound exit have independent lifecycles, as in separate
 	// Agent processes. Sharing one instance races their context/slot setup.
-	exit := &Server{Token: server.Token, NodeID: "exit-reverse", Allowed: map[string]bool{"tcp|" + target: true}}
+	exit := &Server{Token: server.Token, NodeID: "exit-reverse"}
 	done := make(chan struct{})
 	go func() { defer close(done); _ = server.Serve(listener, "tls") }()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -42,6 +42,10 @@ func TestReverseCarrierRoutesAndReconnects(t *testing.T) {
 		}
 	})
 	client := Client{TLS: &tls.Config{RootCAs: roots}, Timeout: 3 * time.Second}
+	if carrier, err := client.Dial(ctx, "tls", listener.Addr().String(), "localhost", server.Token, "reverse", "unauthorized-exit"); err == nil {
+		carrier.Close()
+		t.Fatal("unauthorized reverse identity accepted")
+	}
 	spec := contract.Tunnel{Endpoint: listener.Addr().String(), ServerName: "localhost", Token: server.Token, Reverse: "exit-reverse"}
 	roundTrip := func(payload string) {
 		t.Helper()
@@ -71,6 +75,8 @@ func TestReverseCarrierRoutesAndReconnects(t *testing.T) {
 		}
 	}
 	roundTrip("reverse")
+	target, _ = echoServers(t)
+	roundTrip("new-target")
 	server.mu.Lock()
 	carrier := server.reverse["exit-reverse"]
 	server.mu.Unlock()

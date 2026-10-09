@@ -19,7 +19,7 @@ func TestMuxCarriesIndependentTCPStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "mux-test-token-1234", Allowed: map[string]bool{"tcp|" + target: true}}
+	server := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "mux-test-token-1234"}
 	done := make(chan struct{})
 	go func() { defer close(done); _ = server.Serve(listener, "tls") }()
 	t.Cleanup(func() { _ = server.Close(); <-done })
@@ -30,7 +30,8 @@ func TestMuxCarriesIndependentTCPStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := client.DialRoute(context.Background(), "tls", "tcp", target, tunnelSpec)
+	newTarget, _ := echoServers(t)
+	second, err := client.DialRoute(context.Background(), "tls", "tcp", newTarget, tunnelSpec)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -426,7 +426,7 @@ func TestRealControlPlaneAllEncryptedCarriers(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			exit := &tunnel.Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "integration-exit-secret", Allowed: map[string]bool{"tcp|" + tcp: true, "udp|" + udp: true}}
+			exit := &tunnel.Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "integration-exit-secret"}
 			done := make(chan struct{})
 			go func() { defer close(done); exit.Serve(l, transport) }()
 			t.Cleanup(func() { exit.Close(); <-done })

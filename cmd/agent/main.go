@@ -65,7 +65,7 @@ func run() error {
 	transport := flag.String("transport", "tls", "exit transport: tls/ws/wss/http/secure-direct")
 	cert := flag.String("cert", "", "exit PEM certificate")
 	key := flag.String("key", "", "exit PEM private key")
-	allow := flag.String("allow", "", "comma-separated exact exit destinations e.g. tcp|127.0.0.1:8080,udp|127.0.0.1:5353")
+	allow := flag.String("allow", "", "authorized reverse carrier identities e.g. reverse|exit-a; legacy tcp/udp destinations are ignored")
 	nextHops := flag.String("next-hops", "", "private JSON file with operator-authorized next-hop entries")
 	obfuscation := flag.String("obfuscation-strategy", "", "tunnel obfuscation strategy: random-padding/timing-perturb/tls-mimic")
 	obfuscationParams := flag.String("obfuscation-params", "", "JSON object with obfuscation strategy parameters")
@@ -89,17 +89,10 @@ func run() error {
 		return e
 	}
 	if *mode == "exit" || *mode == "secure-direct" || *mode == "reverse-exit" {
-		allowed := map[string]bool{}
+		reverseAllowed := map[string]bool{}
 		for _, v := range strings.Split(*allow, ",") {
-			if v != "" {
-				parts := strings.SplitN(v, "|", 2)
-				if len(parts) != 2 || (parts[0] != "tcp" && parts[0] != "udp" && parts[0] != "reverse") {
-					return fmt.Errorf("invalid allowed target")
-				}
-				if _, _, e := net.SplitHostPort(parts[1]); e != nil && parts[0] != "reverse" {
-					return e
-				}
-				allowed[v] = true
+			if identity, ok := strings.CutPrefix(v, "reverse|"); ok {
+				reverseAllowed[identity] = true
 			}
 		}
 		hops, e := loadNextHops(*nextHops)
@@ -113,7 +106,7 @@ func run() error {
 		if *mode == "secure-direct" && obfs == nil {
 			return errors.New("secure-direct requires -obfuscation-strategy")
 		}
-		s := &tunnel.Server{Token: os.Getenv("TFP_EXIT_TOKEN"), Allowed: allowed, NextHops: hops, NodeID: *nodeID, Obfuscation: obfs, Client: tunnel.Client{TLS: tc}}
+		s := &tunnel.Server{Token: os.Getenv("TFP_EXIT_TOKEN"), ReverseAllowed: reverseAllowed, NextHops: hops, NodeID: *nodeID, Obfuscation: obfs, Client: tunnel.Client{TLS: tc}}
 		if *mode == "reverse-exit" {
 			return s.RunReverse(ctx, tunnel.Client{TLS: tc}, *transport, *reverseEndpoint, *serverName, *nodeID)
 		}

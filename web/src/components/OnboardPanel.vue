@@ -11,7 +11,7 @@ import OnboardCommand from "./OnboardCommand.vue";
  *
  *   入口直出  入口设备，规则直接把流量转发到目标。除了可选的 CA，什么都不用填。
  *   入口      入口设备，规则把流量交给出口隧道。出口用私有 CA 签名时需要 -c。
- *   隧道      出口设备（隧道端点），要证书、私钥、出口令牌与允许目标白名单 ——
+ *   隧道      出口设备（隧道端点），要证书、私钥与出口令牌 ——
  *             它不跟面板通信，所以命令里同时带上接入密钥，用来装注册用的 Agent。
  */
 const props = defineProps<{ accessKey: string }>();
@@ -63,7 +63,6 @@ const obfuscation = ref("random-padding");
 const certMode = ref("provided");
 const certPath = ref("/etc/ssl/exit.crt");
 const keyPath = ref("/etc/ssl/exit.key");
-const allow = ref("");
 const publicIP = computed(() => certMode.value === "public-ip");
 
 const entryCommand = computed(
@@ -76,7 +75,7 @@ const entryManual = computed(
 );
 
 const exitReady = computed(
-  () => (publicIP.value || serverName.value.trim() !== "") && allow.value.trim() !== "",
+  () => publicIP.value || serverName.value.trim() !== "",
 );
 const exitCommand = computed(
   () =>
@@ -84,7 +83,6 @@ const exitCommand = computed(
     (publicIP.value ? "" : ` -S '${serverName.value.trim()}'`) +
     ` -e '${exitToken.value}'` +
     (certMode.value === "provided" ? ` -C '${certPath.value}' -K '${keyPath.value}'` : ` -q '${certMode.value}'`) +
-    ` -w '${allow.value.trim()}'` +
     ` -l '${listen.value}' -p '${mode.value === "secure-direct" ? "secure-direct" : transport.value}'` +
     (mode.value === "secure-direct" ? ` -O '${obfuscation.value}'` : ""),
 );
@@ -203,16 +201,8 @@ async function copyExitToken() {
           <input v-model="exitToken" aria-label="出口令牌" />
         </label>
       </div>
-      <label
-        >{{ mode === 'secure-direct' ? '允许目标（仅 TCP，精确匹配，逗号分隔）' : '允许转发的目标（精确匹配，逗号分隔）' }}
-        <input
-          v-model="allow"
-          :placeholder="mode === 'secure-direct' ? 'tcp|10.20.0.11:27015' : 'tcp|10.20.0.11:27015,udp|10.20.0.11:5353'"
-          aria-label="允许目标"
-        />
-      </label>
       <p class="muted small">
-        出口只转发这里列出的目标，没有通配符。私钥保存在目标设备上，面板不保存私钥。
+        转发目标在转发规则中配置，协议嗅探与禁用通过设备组的高级设置配置。私钥保存在目标设备上，面板不保存私钥。
       </p>
 
       <OnboardCommand
@@ -237,7 +227,7 @@ async function copyExitToken() {
         手动启动单个出口进程不会把设备注册到控制台。
       </p>
       <p v-if="!exitReady" class="empty">
-        填好{{ publicIP ? '允许目标' : mode === 'secure-direct' ? '目标设备服务名与允许目标' : '出口域名与允许目标' }}后生成命令。
+        填好{{ mode === 'secure-direct' ? '目标设备服务名' : '出口域名' }}后生成命令。
       </p>
     </template>
   </div>

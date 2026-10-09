@@ -87,7 +87,7 @@ func TestSecureDirectWithIPCertificateCallback(t *testing.T) {
 	obfs := &contract.ObfuscationConfig{Strategy: "random-padding"}
 	server := &Server{
 		TLS:   &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &pair, nil }},
-		Token: "test-ip-certificate-token", Allowed: map[string]bool{"tcp|" + target: true}, Obfuscation: obfs,
+		Token: "test-ip-certificate-token", Obfuscation: obfs,
 	}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener, "secure-direct") }()
@@ -119,7 +119,7 @@ func TestAllCarriersRealTCPUDPAndAuthorization(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "test-secret-token-123", Allowed: map[string]bool{"tcp|" + tcpTarget: true, "udp|" + udpTarget: true}}
+			s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "test-secret-token-123"}
 			done := make(chan struct{})
 			go func() { defer close(done); s.Serve(l, transport) }()
 			t.Cleanup(func() { s.Close(); <-done })
@@ -175,9 +175,18 @@ func TestAllCarriersRealTCPUDPAndAuthorization(t *testing.T) {
 				c.Close()
 				t.Fatal("invalid token accepted")
 			}
+			for _, request := range []struct{ network, target string }{
+				{"unix", tcpTarget},
+				{"tcp", "invalid-target"},
+			} {
+				if c, e := client.Dial(context.Background(), transport, endpoint, "localhost", s.Token, request.network, request.target); e == nil {
+					c.Close()
+					t.Fatalf("invalid request accepted: %+v", request)
+				}
+			}
 			if c, e := client.Dial(context.Background(), transport, endpoint, "localhost", s.Token, "tcp", "127.0.0.1:1"); e == nil {
 				c.Close()
-				t.Fatal("non-allowlisted target accepted")
+				t.Fatal("unreachable target reported ready")
 			}
 			if c, e := client.Dial(context.Background(), transport, endpoint, "wrong.example", s.Token, "tcp", tcpTarget); e == nil {
 				c.Close()
@@ -204,7 +213,7 @@ func TestSecureDirectRequiresObfuscationAndTCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "secure-direct-token", Allowed: map[string]bool{"tcp|" + target: true}}
+	s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "secure-direct-token"}
 	if err := s.Serve(l, "secure-direct"); err == nil {
 		t.Fatal("secure-direct accepted missing obfuscation")
 	}
@@ -213,7 +222,7 @@ func TestSecureDirectRequiresObfuscationAndTCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s = &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "secure-direct-token", Allowed: map[string]bool{"tcp|" + target: true}, Obfuscation: &contract.ObfuscationConfig{Strategy: "random-padding"}}
+	s = &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "secure-direct-token", Obfuscation: &contract.ObfuscationConfig{Strategy: "random-padding"}}
 	done := make(chan struct{})
 	go func() { defer close(done); _ = s.Serve(l, "secure-direct") }()
 	t.Cleanup(func() { s.Close(); <-done })
@@ -225,5 +234,13 @@ func TestSecureDirectRequiresObfuscationAndTCP(t *testing.T) {
 	}
 	if _, err := c.Dial(context.Background(), "secure-direct", l.Addr().String(), "localhost", s.Token, "udp", target); err == nil {
 		t.Fatal("secure-direct accepted UDP")
+	}
+	// Use the TLS client path to bypass its secure-direct network check and
+	// verify that the server independently rejects unsupported requests.
+	for _, network := range []string{"udp", "mux", "reverse"} {
+		if session, err := c.Dial(context.Background(), "tls", l.Addr().String(), "localhost", s.Token, network, target); err == nil {
+			session.Close()
+			t.Fatalf("secure-direct server accepted %s", network)
+		}
 	}
 }

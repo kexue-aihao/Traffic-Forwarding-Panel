@@ -10,7 +10,7 @@
 #   bash <(curl -fLsS https://panel.example.com/download/agent-install.sh) \
 #        -t '<设备组接入密钥>' -u 'https://panel.example.com' \
 #        -m exit -S 'exit.example.com' -e '<出口令牌>' \
-#        -C /etc/ssl/exit.crt -K /etc/ssl/exit.key -w 'tcp|10.20.0.11:27015'
+#        -C /etc/ssl/exit.crt -K /etc/ssl/exit.key
 #
 # 两种模式都装成 systemd 服务（开机自启、崩溃重拉），并在启动后确认结果。
 # 出口模式会**同时**装注册用的 agent：出口服务本身不跟面板通信，没有那个
@@ -43,7 +43,6 @@ EXIT_TOKEN=""
 EXIT_CERT=""
 EXIT_KEY=""
 EXIT_CERT_MODE="provided"
-EXIT_ALLOW=""
 EXIT_TRANSPORT="tls"
 EXIT_OBFUSCATION=""
 EXIT_OBFUSCATION_PARAMS=""
@@ -192,7 +191,6 @@ usage() {
   -K <私钥路径>      出口 TLS 私钥 PEM（provided 必填）
   -q <证书模式>      provided / public-ip / auto，默认 provided
                     public-ip 自动申请 Let's Encrypt IP 证书并续签，需要公网 TCP/80 可达
-  -w <允许目标>      host:port 精确匹配，逗号分隔，如 tcp|127.0.0.1:8080,udp|127.0.0.1:5353（必填）
   -l <监听地址>      默认 0.0.0.0:9443
   -p <承载>          tls / ws / wss / http / secure-direct，默认 tls
   -O <混淆策略>      secure-direct 必填：random-padding / timing-perturb / tls-mimic
@@ -218,7 +216,7 @@ while getopts ":t:u:n:a:c:s:m:S:e:C:K:q:w:l:p:O:P:xh" opt; do
     C) EXIT_CERT="$OPTARG" ;;
     K) EXIT_KEY="$OPTARG" ;;
     q) EXIT_CERT_MODE="$OPTARG" ;;
-    w) EXIT_ALLOW="$OPTARG" ;;
+    w) : ;; # 兼容旧接入命令；目标由转发规则配置，不再使用白名单。
     l) EXIT_LISTEN="$OPTARG" ;;
     p) EXIT_TRANSPORT="$OPTARG" ;;
     O) EXIT_OBFUSCATION="$OPTARG" ;;
@@ -248,7 +246,6 @@ if [ "$UNINSTALL" != "yes" ]; then
   if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
     [ -n "$EXIT_TOKEN" ] || { usage >&2; die "出口模式缺少 -e 出口令牌"; }
     [ "${#EXIT_TOKEN}" -ge 16 ] || die "出口令牌至少 16 字符"
-    [ -n "$EXIT_ALLOW" ] || { usage >&2; die "出口模式缺少 -w 允许目标"; }
     case "$EXIT_CERT_MODE" in provided|public-ip|auto) ;; *) die "证书模式只能是 provided、public-ip 或 auto" ;; esac
     if [ "$EXIT_CERT_MODE" != "public-ip" ]; then
       [ -n "$EXIT_SERVER_NAME" ] || { usage >&2; die "出口模式缺少 -S 服务名"; }
@@ -260,10 +257,6 @@ if [ "$UNINSTALL" != "yes" ]; then
     case "$EXIT_TRANSPORT" in
       tls|ws|wss|http|secure-direct) ;;
       *) die "出口承载只能是 tls / ws / wss / http / secure-direct，收到 $EXIT_TRANSPORT" ;;
-    esac
-    # 这一串会被原样写进 systemd 单元的 ExecStart，只允许它需要的字符。
-    case "$EXIT_ALLOW" in
-      *[!A-Za-z0-9\|.,:\[\]-]*) die "允许目标里含有非法字符：$EXIT_ALLOW" ;;
     esac
     case "$EXIT_LISTEN" in
       *[!A-Za-z0-9.:\[\]]*) die "监听地址格式不对：$EXIT_LISTEN" ;;
@@ -478,7 +471,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$ENV_DIR/exit.env
-ExecStart=$BIN_PATH -mode $MODE -exit-id $NODE_NAME -listen $EXIT_LISTEN -transport $EXIT_TRANSPORT -cert $EXIT_CERT -key $EXIT_KEY -allow '$EXIT_ALLOW' -obfuscation-strategy '$EXIT_OBFUSCATION' -obfuscation-params '$EXIT_OBFUSCATION_PARAMS'$CA_ARG
+ExecStart=$BIN_PATH -mode $MODE -exit-id $NODE_NAME -listen $EXIT_LISTEN -transport $EXIT_TRANSPORT -cert $EXIT_CERT -key $EXIT_KEY -obfuscation-strategy '$EXIT_OBFUSCATION' -obfuscation-params '$EXIT_OBFUSCATION_PARAMS'$CA_ARG
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576

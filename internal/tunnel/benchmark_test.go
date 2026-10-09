@@ -74,7 +74,7 @@ func BenchmarkCarrierRoundTrip(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "benchmark-test-token", Allowed: map[string]bool{"tcp|" + target: true}}
+				s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "benchmark-test-token"}
 				done := make(chan struct{})
 				go func() { defer close(done); _ = s.Serve(l, transport) }()
 				defer func() { s.Close(); <-done }()

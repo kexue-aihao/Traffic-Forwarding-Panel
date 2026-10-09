@@ -93,7 +93,7 @@ func TestChainChargesPayloadOnlyOnceAtEntry(t *testing.T) {
 					hops = append(hops, contract.TunnelHop{Transport: transport, Endpoint: endpoint, ServerName: "localhost", Token: fmt.Sprintf("exit-token-number-%d", i)})
 				}
 				for i, hop := range hops {
-					s := &tunnel.Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: hop.Token, Allowed: map[string]bool{network + "|" + target: true}, NodeID: fmt.Sprintf("exit-%d", i), Client: runtime.Client}
+					s := &tunnel.Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: hop.Token, NodeID: fmt.Sprintf("exit-%d", i), Client: runtime.Client}
 					if i+1 < len(hops) {
 						s.NextHops = []contract.TunnelHop{hops[i+1]}
 					}

@@ -111,7 +111,7 @@ func BenchmarkAESCarrierBulk(b *testing.B) {
 						b.Fatal(err)
 					}
 					target := targetListener.Addr().String()
-					s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "aes-benchmark-test-token", Allowed: map[string]bool{"tcp|" + target: true}}
+					s := &Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "aes-benchmark-test-token"}
 					done := make(chan struct{})
 					go func() { defer close(done); _ = s.Serve(listener, transport) }()
 					defer func() { s.Close(); <-done }()

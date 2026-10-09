@@ -25,7 +25,7 @@ func TestOneTCPConnectionCrossesCommercialLeaseBudgets(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				exit := &tunnel.Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "continuity-exit-secret", Allowed: map[string]bool{"tcp|" + target: true}}
+				exit := &tunnel.Server{TLS: &tls.Config{Certificates: []tls.Certificate{pair}}, Token: "continuity-exit-secret"}
 				done := make(chan struct{})
 				go func() { defer close(done); exit.Serve(l, transport) }()
 				t.Cleanup(func() { exit.Close(); <-done })

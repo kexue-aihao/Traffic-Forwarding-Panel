@@ -404,8 +404,8 @@ func (c *wsConn) SetDeadline(t time.Time) error {
 type Server struct {
 	TLS   *tls.Config
 	Token string
-	// Allowed contains exact "tcp|host:port" or "udp|host:port" destinations.
-	Allowed map[string]bool
+	// ReverseAllowed authorizes reverse carrier identities, not destinations.
+	ReverseAllowed map[string]bool
 	// NextHops is an operator-owned allowlist, including local outbound secrets.
 	// Requested hops must match these entries; an empty list disables chaining.
 	NextHops    []contract.TunnelHop
@@ -430,8 +430,8 @@ type Server struct {
 }
 
 func (s *Server) Serve(l net.Listener, transport string) error {
-	if s.TLS == nil || (len(s.TLS.Certificates) == 0 && s.TLS.GetCertificate == nil) || len(s.Token) < 16 || len(s.Allowed) == 0 {
-		return errors.New("certificate, token (16+ chars) and explicit target allowlist required")
+	if s.TLS == nil || (len(s.TLS.Certificates) == 0 && s.TLS.GetCertificate == nil) || len(s.Token) < 16 {
+		return errors.New("certificate and token (16+ chars) required")
 	}
 	if transport != "tls" && transport != "ws" && transport != "wss" && transport != "http" && transport != "secure-direct" {
 		return errors.New("unsupported transport")
@@ -619,7 +619,10 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 		s.serveMultiplex(conn, req)
 		return
 	}
-	if !s.Allowed[req.Network+"|"+req.Target] || (req.Network != "tcp" && req.Network != "udp") {
+	if req.Network != "tcp" && req.Network != "udp" {
+		return
+	}
+	if _, _, e := net.SplitHostPort(req.Target); e != nil {
 		return
 	}
 	if s.validateRoute(req) != nil {

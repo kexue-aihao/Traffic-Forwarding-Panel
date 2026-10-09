@@ -1,6 +1,6 @@
 # Go Agent 与独立出口
 
-本实现使用项目自己的数据面协议：单出口使用 v1，多出口链使用 v2，不兼容 nyanpass 节点协议。入口 Agent 从控制面注册并拉取配置；出口服务由管理员用本地证书、共享身份凭据和精确目标白名单启动。出口不会成为任意目标公开代理。
+本实现使用项目自己的数据面协议：单出口使用 v1，多出口链使用 v2，不兼容 nyanpass 节点协议。入口 Agent 从控制面注册并拉取配置；出口服务由管理员用本地证书和共享身份凭据启动，鉴权通过后按转发规则的目标地址连接。接入设备无需配置目标白名单，新增或修改目标只需更新转发规则；协议嗅探与禁用通过设备组的高级设置配置。
 
 ## 一键接入设备
 
@@ -25,7 +25,7 @@ bash <(curl -fLsS https://panel.example.com/download/agent-install.sh) \
 | --- | --- | --- | --- |
 | 入口直出 | 入口 | 出口选择留空 | 无 |
 | 入口 | 入口 | 选一条出口 | 出口用私有 CA 时加 `-c <根证书地址>` |
-| 隧道 | 出口（隧道端点） | —— | `-m exit` 与证书、令牌、白名单 |
+| 隧道 | 出口（隧道端点） | —— | `-m exit` 与证书、令牌 |
 
 **入口直出**把流量直接发往目标，这一段不额外加密；要让这一段也加密，把规则的承载
 改成 `direct-tls`（见上面的承载表）。
@@ -35,7 +35,10 @@ bash <(curl -fLsS https://panel.example.com/download/agent-install.sh) \
 **隧道**把设备接成出口端点，命令形如：
 
 ```bash
-bash <(curl -fLsS https://panel.example.com/download/agent-install.sh)      -t '<设备组接入密钥>' -u 'https://panel.example.com'      -m exit -S 'exit.example.com' -e '<出口令牌>'      -C /etc/ssl/exit.crt -K /etc/ssl/exit.key      -w 'tcp|10.20.0.11:27015,udp|10.20.0.11:5353'
+bash <(curl -fLsS https://panel.example.com/download/agent-install.sh) \
+     -t '<设备组接入密钥>' -u 'https://panel.example.com' \
+     -m exit -S 'exit.example.com' -e '<出口令牌>' \
+     -C /etc/ssl/exit.crt -K /etc/ssl/exit.key
 ```
 
 它会装**两个** systemd 服务：`tfp-exit`（隧道端点本身）和 `tfp-agent`（注册用的
@@ -56,7 +59,7 @@ Agent）。出口服务不跟面板通信，没有第二个服务，设备不会
 bash <(curl -fLsS https://panel.example.com/download/agent-install.sh) \
      -t '<设备组接入密钥>' -u 'https://panel.example.com' \
      -m secure-direct -q public-ip -e '<至少16字符的出口令牌>' \
-     -w 'tcp|127.0.0.1:8080' -l '0.0.0.0:9443' -p secure-direct -O random-padding
+     -l '0.0.0.0:9443' -p secure-direct -O random-padding
 ```
 
 证书由 Let's Encrypt 签发，使用 `shortlived` 配置，有效期 160 小时。脚本优先使用
@@ -155,10 +158,10 @@ $env:TFP_ENROLLMENT_TOKEN = '<控制面一次性节点注册 token>'
 
 ```powershell
 $env:TFP_EXIT_TOKEN = '<至少16字符的随机出口凭据>'
-./agent.exe -mode exit -listen 0.0.0.0:9443 -transport tls -cert ./exit.crt -key ./exit.key -allow 'tcp|127.0.0.1:8080,udp|127.0.0.1:5353'
+./agent.exe -mode exit -listen 0.0.0.0:9443 -transport tls -cert ./exit.crt -key ./exit.key
 ```
 
-出口 `-transport` 可取 `tls`、`ws`、`wss`、`http`。每个监听器选择一种承载；多个承载可运行多个出口进程。`-allow` 精确匹配 `network|host:port`，无通配符；DNS 目标由出口解析，应仅填入运营方控制的地址。证书、私钥、出口 token 均由本地运维配置，不经用户列表接口分发。
+出口 `-transport` 可取 `tls`、`ws`、`wss`、`http`。每个监听器选择一种承载；多个承载可运行多个出口进程。目标由转发规则配置，DNS 目标由出口解析。旧安装命令中的 `-w` 和旧服务参数中的 `-allow tcp|…/udp|…` 仍可读取，但不再限制转发目标。证书、私钥、出口 token 均由本地运维配置，不经用户列表接口分发。
 
 控制面 Rule 示例（真实 ID、组和租约由控制面分配）：
 
@@ -319,20 +322,20 @@ Agent 声明 `obfuscation-v1` 表示支持混淆基础能力，具体策略通�
 
 出口还必须在本机显式授权下一跳。A 的 `private/next-hops.json` 是仅含上述 B 对象的 JSON 数组，B 的对应文件仅含 C 对象；`transport`、`endpoint`、`server_name`、`token` 四项必须与请求完全一致。C 无需下一跳文件。文件上限 64 KiB、最多 64 个授权对象；Linux/macOS 要求文件权限 `0600`（`chmod 600 private/next-hops.json`），Windows 需由部署者限制文件 ACL。各出口使用独立随机 token，示例值仅用于说明。
 
-在 A、B、C 三台主机上分别设置自己的 `TFP_EXIT_TOKEN` 并执行对应命令。下面最终目标是 C 本机的 `127.0.0.1:8080` / `127.0.0.1:5353`；所有出口的 `-allow` 都须包含相同最终目标字符串，只有最后一跳实际连接它：
+在 A、B、C 三台主机上分别设置自己的 `TFP_EXIT_TOKEN` 并执行对应命令。下面最终目标是 C 本机的 `127.0.0.1:8080` / `127.0.0.1:5353`，在转发规则中指定，只有最后一跳实际连接它：
 
 ```powershell
 # A：本机 next-hops.json 授权 B
-./agent.exe -mode exit -exit-id exit-a -listen 0.0.0.0:9443 -transport tls -cert ./exit-a.crt -key ./exit-a.key -ca ./ca.pem -next-hops ./private/next-hops.json -allow 'tcp|127.0.0.1:8080,udp|127.0.0.1:5353'
+./agent.exe -mode exit -exit-id exit-a -listen 0.0.0.0:9443 -transport tls -cert ./exit-a.crt -key ./exit-a.key -ca ./ca.pem -next-hops ./private/next-hops.json
 # B：本机 next-hops.json 授权 C
-./agent.exe -mode exit -exit-id exit-b -listen 0.0.0.0:9443 -transport wss -cert ./exit-b.crt -key ./exit-b.key -ca ./ca.pem -next-hops ./private/next-hops.json -allow 'tcp|127.0.0.1:8080,udp|127.0.0.1:5353'
+./agent.exe -mode exit -exit-id exit-b -listen 0.0.0.0:9443 -transport wss -cert ./exit-b.crt -key ./exit-b.key -ca ./ca.pem -next-hops ./private/next-hops.json
 # C：终点出口，无下一跳
-./agent.exe -mode exit -exit-id exit-c -listen 0.0.0.0:9443 -transport http -cert ./exit-c.crt -key ./exit-c.key -allow 'tcp|127.0.0.1:8080,udp|127.0.0.1:5353'
+./agent.exe -mode exit -exit-id exit-c -listen 0.0.0.0:9443 -transport http -cert ./exit-c.crt -key ./exit-c.key
 ```
 
 参与链路的每个出口必须配置稳定的 `-exit-id`（1–128 字符）。不同逻辑出口使用不同 ID；同一出口通过多个域名或监听器暴露时应保持相同 ID。入口拒绝重复规范化地址，出口通过已访问的 ID 拒绝 DNS 别名造成的回环，逐跳限制整条链不超过三个出口。单出口 v1 不要求 ID。运维配置在进程启动时读取，修改后重启生效。
 
-所有出口都是运营方信任的中继，逐跳可见业务明文及剩余链路凭据；这不是对中间出口隐藏载荷的端到端加密。每次连接仅在全链授权并连接最终目标后就绪，默认连接/握手等待上限为 10 秒。证书、token、白名单、目标连接失败或中继断开会关闭该链路，不自动重试或切换出口。上行/下行仅由入口 Agent 对业务有效载荷记账；中间出口及终点出口不创建租约、不重复计费，隧道帧头不进入计费。
+所有出口都是运营方信任的中继，逐跳可见业务明文及剩余链路凭据；这不是对中间出口隐藏载荷的端到端加密。每次连接仅在全链授权并连接最终目标后就绪，默认连接/握手等待上限为 10 秒。证书、token、下一跳授权、目标连接失败或中继断开会关闭该链路，不自动重试或切换出口。上行/下行仅由入口 Agent 对业务有效载荷记账；中间出口及终点出口不创建租约、不重复计费，隧道帧头不进入计费。
 
 ## 网络诊断（LookingGlass）
 
@@ -362,7 +365,7 @@ Agent 声明 `looking-glass-v1` 后即自动参与，**不需要 `-enable-termin
 
 计量使用 append WAL 和有界 group commit，发送前等待该批次 fsync 成功；上线容量仍需以真实机器基准验收。租约历史去重元数据随租约数量增长，checkpoint 达到 64 MiB 上限将停止转发，需要后续保留/压缩策略；待确认流量 spool 有硬上限。反向连接、Mux、SNI 共享端口和受控远程升级已实现，仍需 Linux 跨机、公网和断电演练验收。
 
-反向出口用 `-mode reverse-exit -reverse-endpoint host:port -server-name exit.example.com -exit-id exit-a -allow reverse|exit-a` 启动，入口把规则的 `tunnel.reverse` 设为稳定 ID；主动载波断开后按 1 秒退避重连。`tunnel.mux=true` 复用同一出口凭据的 yamux 载波，每条载波最多 256 条流、连接池最多 64 条。
+反向出口用 `-mode reverse-exit -reverse-endpoint host:port -server-name exit.example.com -exit-id exit-a` 启动；接收反向载波的出口监听器用 `-allow 'reverse|exit-a'` 授权对应身份，入口把规则的 `tunnel.reverse` 设为稳定 ID。这里的授权只校验反向出口身份，不限制业务目标。主动载波断开后按 1 秒退避重连。`tunnel.mux=true` 复用同一出口凭据的 yamux 载波，每条载波最多 256 条流、连接池最多 64 条。
 
 远程终端和节点升级默认关闭。终端需要 Linux 服务账号启动并声明 `terminal-v1`：`./agent -enable-terminal ...`。升级需要公钥文件：`./agent -release-key ./release-key.b64 ...`。发布签名覆盖版本、平台、架构和 SHA-256；替换后新进程必须在 60 秒内完成配置 ACK/探针健康标记，否则恢复旧二进制。
 
@@ -404,8 +407,8 @@ go test -race ./internal/agent ./internal/tunnel ./internal/probe
 go test -race -v ./internal/integration
 ```
 
-四承载均在真实本机 TCP/UDP socket 上测试回显、大于单帧的数据、空 UDP 报文、TCP 半关闭、错误证书名、不受信任证书、错误出口 token 和白名单外目标。Agent 测试覆盖预算重启、防退休复活、满 spool、磁盘失败、配置冲突回滚、计量方向，以及必须确认计量后才退租。
+四承载均在真实本机 TCP/UDP socket 上测试无目标白名单的回显、大于单帧的数据、空 UDP 报文、TCP 半关闭、错误证书名、不受信任证书、错误出口 token 和目标连接失败。Agent 测试覆盖预算重启、防退休复活、满 spool、磁盘失败、配置冲突回滚、计量方向，以及必须确认计量后才退租。
 
-链式测试覆盖全部 64 种三跳承载组合的 TCP/UDP 回显、跨帧数据、空/大 UDP 报文及 TCP 半关闭；在每一跳独立验证错误身份、证书及白名单拒绝；覆盖超长链、重复地址、DNS 别名回环、中继关闭后的会话回收和未完成下游握手取消。真实 Agent 入口测试验证两跳/三跳的 TCP/UDP 业务各方向仅计量一次，以及无效链配置不会替换旧配置。这些测试在同一主机的多个真实监听器上运行，不等同于生产跨机器链路或容量验收。
+链式测试覆盖全部 64 种三跳承载组合的 TCP/UDP 回显、跨帧数据、空/大 UDP 报文及 TCP 半关闭；在每一跳独立验证错误身份、证书及下一跳授权拒绝；覆盖新增目标无需重配出口、超长链、重复地址、DNS 别名回环、中继关闭后的会话回收和未完成下游握手取消。真实 Agent 入口测试验证两跳/三跳的 TCP/UDP 业务各方向仅计量一次，以及无效链配置不会替换旧配置。这些测试在同一主机的多个真实监听器上运行，不等同于生产跨机器链路或容量验收。
 
 `internal/integration` 使用真正的 `app.New`、SQL 数据库、HTTP 接口、Agent 与本地出口，不替换控制面处理器。默认 SQLite，也可经 `TFP_TEST_DRIVER` / `TFP_TEST_DSN` 使用有创建临时数据库权限的测试服务器。覆盖注册、管理员和用户授权、签名支付回调幂等、购买、四承载各 TCP/UDP 原始字节结算、部分租约归还与新租约、即时续费新周期、撤权、删除 ACK 释放端口、断联期间持久计量与重启补传、命名空间组策略实际阻断。支付回调是本地有效签名 fixture，没有连接商户支付平台或发生真实付款。生产双机网络、商户实付与容量目标仍需独立验收。Linux amd64/arm64 已以 `CGO_ENABLED=0` 交叉编译；这不等同于对应机器上的运行验收。

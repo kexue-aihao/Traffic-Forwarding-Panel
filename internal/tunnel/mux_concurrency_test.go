@@ -24,7 +24,7 @@ func muxTestExit(t *testing.T, config *tls.Config, target string) contract.Tunne
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{TLS: config, Token: "concurrent-mux-test-token", Allowed: map[string]bool{"tcp|" + target: true}}
+	s := &Server{TLS: config, Token: "concurrent-mux-test-token"}
 	done := make(chan struct{})
 	go func() { defer close(done); _ = s.Serve(l, "tls") }()
 	t.Cleanup(func() { s.Close(); <-done })

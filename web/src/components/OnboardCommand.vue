@@ -6,7 +6,7 @@ import { displayTimeZoneLabel, formatDateTime } from "../core/format";
  * 一条可复制的接入命令。
  *
  * 只负责渲染与复制 —— 命令文本由调用方拼。三种接入方式的参数差异很大
- * （入口两种只差一个可选的 CA，出口那种要带证书、令牌与白名单），把拼装
+ * （入口两种只差一个可选的 CA，出口那种要带证书与令牌），把拼装
  * 留在各自的场景里，这里就不会长出一堆互斥的开关。
  */
 const props = withDefaults(
