@@ -6,7 +6,7 @@ Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`�
 
 ## 本机启动
 
-需要 Go 1.26.6 或更高版本；仓库已提交前端嵌入产物，构建 Go 程序无需 Node 或外网字体。目标部署平台是 Linux amd64/arm64，Windows 可用于开发验证。
+需要 Go 1.26.9 或更高版本；仓库已提交前端嵌入产物，构建 Go 程序无需 Node 或外网字体。目标部署平台是 Linux amd64/arm64，Windows 可用于开发验证。
 
 ```sh
 go build -trimpath -o bin/panel ./cmd/panel

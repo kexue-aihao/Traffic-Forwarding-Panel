@@ -40,7 +40,7 @@ docker compose logs --tail=100 caddy panel
 
 ## 方式二：同机二进制 + Caddy
 
-构建当前源码（需要 Go 1.26.6 或更高版本；前端产物已包含在仓库）：
+构建当前源码（需要 Go 1.26.9 或更高版本；前端产物已包含在仓库）：
 
 ```sh
 go build -trimpath -o bin/panel ./cmd/panel
