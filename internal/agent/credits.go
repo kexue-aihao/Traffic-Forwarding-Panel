@@ -540,6 +540,34 @@ func (s *Store) rebalanceCreditsLocked(r *stateRequest) error {
 	if !rebalance {
 		return nil
 	}
+	// A missing directional window can be filled from unused lease budget.
+	// Closing the opposite direction in that case can make echo traffic
+	// alternate between upload-only and download-only credit indefinitely.
+	if len(pool) < 2 {
+		var ruleTotal, userTotal int64
+		owner := limitOwner(r.rule)
+		for _, w := range s.state.Windows {
+			left := w.Capacity - w.Confirmed
+			if w.RuleID == r.rule.ID {
+				ruleTotal += left
+			}
+			if w.UserID == owner {
+				userTotal += left
+			}
+		}
+		if int64(r.n) <= maxRuleCredits-ruleTotal && int64(r.n) <= maxAccountCredits-userTotal {
+			for _, l := range ruleLeases(r.rule) {
+				if l == nil {
+					continue
+				}
+				candidate := r.rule
+				candidate.Lease = l
+				if s.availableLocked(candidate, r.until, int64(r.n)) == nil {
+					return nil
+				}
+			}
+		}
+	}
 	// Small leases can have enough total budget for a packet while the two
 	// directional windows strand unused bytes. Freeze and settle the rule's
 	// windows before returning those bytes to the shared budget. This happens

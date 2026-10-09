@@ -76,7 +76,7 @@ func TestUDPDatagramAndDirectCrossFiniteCommercialLeases(t *testing.T) {
 					}
 				}
 				if !success {
-					t.Fatalf("flow stopped at packet %d", i)
+					t.Fatalf("flow stopped at packet %d: context=%v udp=%+v", i, ctx.Err(), f.agent.Runtime.UDPStats())
 				}
 			}
 			f.sync()

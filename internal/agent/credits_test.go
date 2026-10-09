@@ -317,3 +317,42 @@ func TestSmallCreditBudgetsPermitDirectionalAndLargePackets(t *testing.T) {
 		})
 	}
 }
+
+func TestUDPRefillPreservesOppositeDirectionWhenBudgetIsAvailable(t *testing.T) {
+	s, _, cfg := setup(t)
+	r := testRule("127.0.0.1:1")
+	r.Network = "udp"
+	r.UserID = "credit-user"
+	r.UDP = &contract.UDPOptions{CreditWindows: true}
+	r.Lease.Bytes = 4 << 20
+	cfg.Rules = []contract.Rule{r}
+	if e := s.SetConfig(cfg); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.submit(&stateRequest{event: stateEvent{Kind: "credit_reserve"}, rule: r, until: cfg.ValidUntil, upload: true}); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.TryUDPCharge(r, cfg.ValidUntil, true, 1200); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.FlushUDPCredits(); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.TryUDPCharge(r, cfg.ValidUntil, false, 1200); !errors.Is(e, errCreditUnavailable) {
+		t.Fatal("unreserved download admitted", e)
+	}
+	if e := s.FlushUDPCredits(); e != nil {
+		t.Fatal(e)
+	}
+	for _, up := range []bool{true, false} {
+		if e := s.TryUDPCharge(r, cfg.ValidUntil, up, 1200); e != nil {
+			t.Fatal("directional refill revoked usable opposite-direction credit", up, e)
+		}
+	}
+	if e := s.FlushUDPCredits(); e != nil {
+		t.Fatal(e)
+	}
+	if got := used(s, r.Lease.ID); got != 3600 {
+		t.Fatal("refill accounting changed", got)
+	}
+}
