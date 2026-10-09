@@ -1,7 +1,10 @@
 // Package contract defines version 1 wire contracts shared by panel and Agent.
 package contract
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 const Version = 1
 
@@ -135,21 +138,30 @@ type Rule struct {
 	UserID            string         `json:"user_id"`
 	// Category 是运营方自己定的规则分类（「日本线路」「测试」之类）。它存在
 	// cp_rules.category 这一列里，不进发给 Agent 的配置，改动也不需要 Agent 重新应用。
-	Category         string     `json:"category,omitempty"`
-	Name             string     `json:"name"`
-	NodeID           string     `json:"node_id"`
-	GroupID          string     `json:"group_id"`
-	Network          string     `json:"network"`
-	Transport        string     `json:"transport"`
-	Listen           string     `json:"listen"`
-	Target           string     `json:"target"`
-	Enabled          bool       `json:"enabled"`
-	Version          int64      `json:"version"`
-	BlockedProtocols []string   `json:"blocked_protocols"`
-	Tunnel           *Tunnel    `json:"tunnel,omitempty"`
-	Lease            *Lease     `json:"lease,omitempty"`
-	Backends         []Backend  `json:"backends,omitempty"`
-	SharedTLS        *SharedTLS `json:"shared_tls,omitempty"`
+	Category         string      `json:"category,omitempty"`
+	Name             string      `json:"name"`
+	NodeID           string      `json:"node_id"`
+	GroupID          string      `json:"group_id"`
+	Network          string      `json:"network"`
+	Transport        string      `json:"transport"`
+	Listen           string      `json:"listen"`
+	Target           string      `json:"target"`
+	Enabled          bool        `json:"enabled"`
+	Version          int64       `json:"version"`
+	BlockedProtocols []string    `json:"blocked_protocols"`
+	Tunnel           *Tunnel     `json:"tunnel,omitempty"`
+	Lease            *Lease      `json:"lease,omitempty"`
+	Backends         []Backend   `json:"backends,omitempty"`
+	SharedTLS        *SharedTLS  `json:"shared_tls,omitempty"`
+	UDP              *UDPOptions `json:"udp,omitempty"`
+	StandbyLease     *Lease      `json:"standby_lease,omitempty"`
+	LeasePipeline    bool        `json:"lease_pipeline,omitempty"`
+}
+
+// UDPOptions is sent only to nodes advertising udp-credit-v1.
+type UDPOptions struct {
+	CreditWindows bool `json:"credit_windows,omitempty"`
+	MaxSessions   int  `json:"max_sessions,omitempty"`
 }
 
 // Lease is a finite node allocation; expired/unallocated bytes cannot be spent.
@@ -233,19 +245,29 @@ type Probe struct {
 }
 
 type UsageRecord struct {
-	ID            string    `json:"id"`
-	NodeID        string    `json:"node_id"`
-	RuleID        string    `json:"rule_id"`
-	LeaseID       string    `json:"lease_id"`
-	EntitlementID string    `json:"entitlement_id"`
-	StartedAt     time.Time `json:"started_at"`
-	EndedAt       time.Time `json:"ended_at"`
-	UploadBytes   int64     `json:"upload_bytes,string"`
-	DownloadBytes int64     `json:"download_bytes,string"`
+	ID             string    `json:"id"`
+	NodeID         string    `json:"node_id"`
+	RuleID         string    `json:"rule_id"`
+	LeaseID        string    `json:"lease_id"`
+	EntitlementID  string    `json:"entitlement_id"`
+	StartedAt      time.Time `json:"started_at"`
+	EndedAt        time.Time `json:"ended_at"`
+	UploadBytes    int64     `json:"upload_bytes,string"`
+	DownloadBytes  int64     `json:"download_bytes,string"`
+	Kind           string    `json:"kind,omitempty"`
+	WindowID       string    `json:"window_id,omitempty"`
+	WindowSequence uint64    `json:"window_sequence,omitempty"`
 }
 
 type UsageBatch struct {
 	Records []UsageRecord `json:"records"`
+}
+
+func (u UsageRecord) ValidWindowMetadata() bool {
+	if u.Kind == "" {
+		return u.WindowID == "" && u.WindowSequence == 0
+	}
+	return (u.Kind == "normal" || u.Kind == "recovery") && len(u.WindowID) == 32 && u.WindowSequence > 0 && u.ID == fmt.Sprintf("%s:%d", u.WindowID, u.WindowSequence)
 }
 
 type APIError struct {

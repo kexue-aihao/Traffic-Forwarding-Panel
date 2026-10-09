@@ -47,11 +47,12 @@ def main():
         with tempfile.TemporaryDirectory(prefix="tfp-release-") as temp:
             work = Path(temp)
             binaries = {}
-            for app, symbol in (("panel", "main.Version"), ("agent", MODULE + "/internal/agent.Version")):
+            for app, symbol in (("panel", "main.Version"), ("agent", MODULE + "/internal/agent.Version"), ("udpbench", None)):
                 binary = work / app
+                ldflags = "-s -w" + (f" -X {symbol}={version}" if symbol else "")
                 subprocess.run([
                     "go", "build", "-trimpath", "-buildvcs=true",
-                    "-ldflags", f"-s -w -X {symbol}={version}",
+                    "-ldflags", ldflags,
                     "-o", str(binary), "./cmd/" + app,
                 ], cwd=ROOT, env=env, check=True)
                 with binary.open("rb") as f:

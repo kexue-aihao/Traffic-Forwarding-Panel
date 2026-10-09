@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -29,6 +30,7 @@ type diskState struct {
 	Pending  []contract.UsageRecord    `json:"pending"`
 	Retired  map[string]bool           `json:"retired"`
 	Leases   map[string]contract.Lease `json:"leases"`
+	Windows  map[string]creditWindow   `json:"windows,omitempty"`
 }
 type stateEvent struct {
 	Kind     string                `json:"kind"`
@@ -38,34 +40,44 @@ type stateEvent struct {
 	Lease    *contract.Lease       `json:"lease,omitempty"`
 	IDs      []string              `json:"ids,omitempty"`
 	LeaseID  string                `json:"lease_id,omitempty"`
+	RuleID   string                `json:"rule_id,omitempty"`
+	Window   *creditWindow         `json:"window,omitempty"`
 }
 type stateRequest struct {
-	ctx    context.Context
-	event  stateEvent
-	rule   contract.Rule
-	until  time.Time
-	upload bool
-	n      int
-	done   chan error
+	ctx         context.Context
+	event       stateEvent
+	rule        contract.Rule
+	until       time.Time
+	upload      bool
+	n           int
+	creditPrime bool
+	done        chan error
 }
 type Store struct {
-	mu         sync.Mutex
-	path       string
-	state      diskState
-	failed     bool
-	lock       *flock.Flock
-	wal        *os.File
-	seq        uint64
-	walBytes   int64
-	queue      chan *stateRequest
-	done       chan struct{}
-	submitMu   sync.RWMutex
-	closing    bool
-	closeOnce  sync.Once
-	closeErr   error
-	changed    chan struct{}
-	usageWake  chan struct{}
-	configWake chan struct{}
+	mu               sync.Mutex
+	path             string
+	state            diskState
+	failed           bool
+	lock             *flock.Flock
+	wal              *os.File
+	seq              uint64
+	walBytes         int64
+	queue            chan *stateRequest
+	done             chan struct{}
+	submitMu         sync.RWMutex
+	closing          bool
+	closeOnce        sync.Once
+	closeErr         error
+	changed          chan struct{}
+	usageWake        chan struct{}
+	configWake       chan struct{}
+	creditMu         sync.Mutex // Never held across disk I/O.
+	credits          map[string]*liveCredit
+	creditPools      map[creditPoolKey][]*liveCredit
+	refilling        map[creditPoolKey]bool
+	fastFailed       atomic.Bool
+	rates            map[string]leaseRateSample
+	nextHistoryPrune time.Time
 	// Test hooks run under mu, and are nil in production.
 	fault    func(string) error
 	writeWAL func([]byte) (int, error)
@@ -76,7 +88,7 @@ func OpenStore(path string) (*Store, error) {
 	if e != nil {
 		return nil, e
 	}
-	s := &Store{path: absolute, queue: make(chan *stateRequest, maxStoreQueue), done: make(chan struct{}), changed: make(chan struct{}), usageWake: make(chan struct{}, 1), configWake: make(chan struct{}, 1)}
+	s := &Store{path: absolute, queue: make(chan *stateRequest, maxStoreQueue), done: make(chan struct{}), changed: make(chan struct{}), usageWake: make(chan struct{}, 1), configWake: make(chan struct{}, 1), credits: map[string]*liveCredit{}, creditPools: map[creditPoolKey][]*liveCredit{}, refilling: map[creditPoolKey]bool{}}
 	if e = os.MkdirAll(filepath.Dir(s.path), 0700); e != nil {
 		return nil, e
 	}
@@ -100,12 +112,17 @@ func OpenStore(path string) (*Store, error) {
 	if e = s.openDurable(); e != nil {
 		return nil, e
 	}
+	if e = s.recoverCredits(); e != nil {
+		return nil, e
+	}
 	ok = true
 	go s.writer()
 	return s, nil
 }
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
+		s.fastFailed.Store(true)
+		s.closeErr = s.submit(&stateRequest{event: stateEvent{Kind: "credit_close"}})
 		s.submitMu.Lock()
 		s.closing = true
 		close(s.queue)
@@ -115,7 +132,9 @@ func (s *Store) Close() error {
 		s.failed = true
 		s.notifyChangedLocked()
 		if s.wal != nil {
-			s.closeErr = s.wal.Close()
+			if e := s.wal.Close(); s.closeErr == nil {
+				s.closeErr = e
+			}
 		}
 		s.mu.Unlock()
 		if e := s.lock.Unlock(); s.closeErr == nil {
@@ -153,6 +172,8 @@ func (s *Store) submit(r *stateRequest) error {
 }
 func (s *Store) writer() {
 	defer close(s.done)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
 	var carry *stateRequest
 	for {
 		var r *stateRequest
@@ -160,14 +181,18 @@ func (s *Store) writer() {
 			r = carry
 			carry = nil
 		} else {
-			var ok bool
-			r, ok = <-s.queue
-			if !ok {
-				return
+			select {
+			case next, ok := <-s.queue:
+				if !ok {
+					return
+				}
+				r = next
+			case <-tick.C:
+				r = &stateRequest{event: stateEvent{Kind: "credit_flush"}, done: make(chan error, 1)}
 			}
 		}
 		batch := []*stateRequest{r}
-		if r.event.Kind == "charge" {
+		if r.event.Kind == "charge" || r.event.Kind == "credit_reserve" {
 			// Drain requests already queued, including arrivals during the last
 			// fsync. Do not add a fixed timer delay to every single-flow chunk.
 		gather:
@@ -177,7 +202,7 @@ func (s *Store) writer() {
 					if !ok {
 						break gather
 					}
-					if next.event.Kind != "charge" {
+					if next.event.Kind != r.event.Kind {
 						carry = next
 						break gather
 					}
@@ -194,15 +219,34 @@ func (s *Store) process(batch []*stateRequest) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failed {
+		s.fastFailed.Store(true)
 		for _, r := range batch {
 			r.done <- errors.New("durable storage unavailable; repair and restart")
 		}
+		return
+	}
+	if !time.Now().Before(s.nextHistoryPrune) {
+		s.nextHistoryPrune = time.Now().Add(time.Minute)
+		if s.pruneLeaseHistoryLocked() > 0 {
+			if e := s.checkpointLocked(); e != nil {
+				s.failed = true
+				s.fastFailed.Store(true)
+				for _, r := range batch {
+					r.done <- e
+				}
+				return
+			}
+		}
+	}
+	if batch[0].event.Kind == "credit_reserve" || batch[0].event.Kind == "credit_flush" || batch[0].event.Kind == "credit_close" {
+		s.processCreditBatchLocked(batch)
 		return
 	}
 	if batch[0].event.Kind == "checkpoint" {
 		e := s.checkpointLocked()
 		if e != nil {
 			s.failed = true
+			s.fastFailed.Store(true)
 			s.notifyChangedLocked()
 		}
 		batch[0].done <- e
@@ -220,6 +264,18 @@ func (s *Store) process(batch []*stateRequest) {
 			continue
 		}
 		if r.event.Kind != "charge" {
+			if e := s.validateEvent(r.event); e != nil {
+				results[i] = e
+				continue
+			}
+			if r.event.Kind == "config" || r.event.Kind == "retire" {
+				closeEvents, e := s.creditProgressLocked(r.event)
+				if e != nil {
+					results[i] = e
+					continue
+				}
+				events = append(events, closeEvents...)
+			}
 			results[i] = s.validateEvent(r.event)
 			if results[i] == nil {
 				events = append(events, r.event)
@@ -230,6 +286,7 @@ func (s *Store) process(batch []*stateRequest) {
 			results[i] = errors.New("negative charge")
 			continue
 		}
+		r.rule = s.spendingRuleLocked(r.rule, r.until, int64(r.n))
 		e := s.availableLocked(r.rule, r.until, 0)
 		if e == nil && r.rule.Lease != nil {
 			lease := r.rule.Lease
@@ -237,16 +294,22 @@ func (s *Store) process(batch []*stateRequest) {
 				results[i] = errors.New("payload exceeds lease capacity")
 				continue
 			}
-			remaining := lease.Bytes - s.state.Used[lease.ID] - reserved[lease.ID]
+			remaining := lease.Bytes - s.state.Used[lease.ID] - s.creditLiabilityLocked(lease.ID) - reserved[lease.ID]
 			if retiring[lease.ID] || int64(r.n) > remaining {
 				e = errLeaseUnavailable
 				if !retiring[lease.ID] {
+					closed, closeErr := s.creditProgressLocked(stateEvent{Kind: "retire", LeaseID: lease.ID})
+					if closeErr != nil {
+						results[i] = closeErr
+						continue
+					}
+					events = append(events, closed...)
 					events = append(events, stateEvent{Kind: "retire", LeaseID: lease.ID})
 					retiring[lease.ID] = true
 				}
 			}
 		}
-		if e == nil && pending >= MaxPendingRecords {
+		if e == nil && pending+len(s.state.Windows) >= MaxPendingRecords {
 			e = errSpoolFull
 		}
 		if e != nil {
@@ -292,6 +355,7 @@ func (s *Store) process(batch []*stateRequest) {
 		}
 		if e != nil {
 			s.failed = true
+			s.fastFailed.Store(true)
 			s.notifyChangedLocked()
 			for _, r := range batch {
 				r.done <- e
@@ -311,6 +375,8 @@ func (s *Store) process(batch []*stateRequest) {
 }
 func (s *Store) validateEvent(e stateEvent) error {
 	switch e.Kind {
+	case "credit_reserve", "credit_progress":
+		return s.validateCreditEvent(e)
 	case "identity":
 		if e.Identity == nil {
 			return errors.New("identity missing")
@@ -322,17 +388,27 @@ func (s *Store) validateEvent(e stateEvent) error {
 		if e.Config == nil {
 			return errors.New("config missing")
 		}
+		incoming := []*contract.Lease{}
 		for _, r := range e.Config.Rules {
 			if r.Enabled && r.Lease != nil {
-				if old, ok := s.state.Leases[r.Lease.ID]; ok && !sameLease(old, *r.Lease) {
-					return errors.New("lease identity cannot change budget or expiration")
+				incoming = append(incoming, ruleLeases(r)...)
+				for _, l := range ruleLeases(r) {
+					if l != nil {
+						if old, ok := s.state.Leases[l.ID]; ok && !sameLease(old, *l) {
+							return errors.New("lease identity cannot change budget or expiration")
+						}
+					}
 				}
 			}
 		}
+		return s.validateLeaseCapacity(incoming)
 	case "ack":
 	case "retire":
 		if e.LeaseID == "" {
 			return errors.New("lease ID required")
+		}
+		if _, exists := s.state.Leases[e.LeaseID]; !exists {
+			return errors.New("retirement lease missing")
 		}
 	case "retire_ack":
 		if _, ok := s.state.Retired[e.LeaseID]; !ok {
@@ -352,6 +428,9 @@ func sameLease(a, b contract.Lease) bool {
 	return a.ID == b.ID && a.EntitlementID == b.EntitlementID && a.Bytes == b.Bytes && a.ExpiresAt.Equal(b.ExpiresAt)
 }
 func (s *Store) applyEvent(e stateEvent) error {
+	if e.Kind == "credit_reserve" || e.Kind == "credit_progress" {
+		return s.applyCreditEvent(e)
+	}
 	if e.Kind != "usage" {
 		if err := s.validateEvent(e); err != nil {
 			return err
@@ -363,15 +442,21 @@ func (s *Store) applyEvent(e stateEvent) error {
 	case "config":
 		active := map[string]bool{}
 		for _, r := range e.Config.Rules {
-			if r.Enabled && r.Lease != nil {
-				active[r.Lease.ID] = true
-				s.state.Leases[r.Lease.ID] = *r.Lease
+			if r.Enabled {
+				for _, l := range ruleLeases(r) {
+					if l != nil {
+						active[l.ID] = true
+						s.state.Leases[l.ID] = *l
+					}
+				}
 			}
 		}
 		for _, r := range s.state.Config.Rules {
-			if r.Lease != nil && !active[r.Lease.ID] {
-				if _, ok := s.state.Retired[r.Lease.ID]; !ok {
-					s.state.Retired[r.Lease.ID] = false
+			for _, l := range ruleLeases(r) {
+				if l != nil && !active[l.ID] {
+					if _, ok := s.state.Retired[l.ID]; !ok {
+						s.state.Retired[l.ID] = false
+					}
 				}
 			}
 		}
@@ -393,7 +478,7 @@ func (s *Store) applyEvent(e stateEvent) error {
 			s.state.Leases[u.LeaseID] = lease
 		}
 		n := u.UploadBytes + u.DownloadBytes
-		if n > lease.Bytes-s.state.Used[u.LeaseID] || u.NodeID != s.state.Identity.NodeID || u.EntitlementID != lease.EntitlementID || len(s.state.Pending) >= MaxPendingRecords {
+		if n > lease.Bytes-s.state.Used[u.LeaseID]-s.creditLiabilityLocked(u.LeaseID) || u.NodeID != s.state.Identity.NodeID || u.EntitlementID != lease.EntitlementID || len(s.state.Pending)+len(s.state.Windows) >= MaxPendingRecords {
 			return errors.New("WAL quota/spool invariant violated")
 		}
 		s.state.Used[u.LeaseID] += n
@@ -442,7 +527,7 @@ func (s *Store) Confirm(ids []string) error {
 func (s *Store) Available(r contract.Rule, until time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.availableLocked(r, until, 0)
+	return s.availableLocked(s.spendingRuleLocked(r, until, 0), until, 0)
 }
 func (s *Store) availableLocked(r contract.Rule, until time.Time, n int64) error {
 	now := time.Now()
@@ -458,10 +543,13 @@ func (s *Store) availableLocked(r contract.Rule, until time.Time, n int64) error
 	if old, ok := s.state.Leases[r.Lease.ID]; ok && !sameLease(old, *r.Lease) {
 		return errors.New("lease changed")
 	}
-	if r.Lease.Bytes <= 0 || n > r.Lease.Bytes-s.state.Used[r.Lease.ID] || s.state.Used[r.Lease.ID] >= r.Lease.Bytes {
+	if e := s.validateLeaseCapacity([]*contract.Lease{r.Lease}); e != nil {
+		return e
+	}
+	if r.Lease.Bytes <= 0 || n > r.Lease.Bytes-s.state.Used[r.Lease.ID]-s.creditLiabilityLocked(r.Lease.ID) || s.state.Used[r.Lease.ID] >= r.Lease.Bytes {
 		return errLeaseUnavailable
 	}
-	if len(s.state.Pending) >= MaxPendingRecords {
+	if len(s.state.Pending)+len(s.state.Windows) >= MaxPendingRecords {
 		return errSpoolFull
 	}
 	return nil
@@ -513,7 +601,17 @@ func (s *Store) renewals() []string {
 			continue
 		}
 		used := s.state.Used[l.ID]
+		s.creditMu.Lock()
+		for _, c := range s.credits {
+			if c.window.LeaseID == l.ID {
+				used += c.used - c.window.Confirmed
+			}
+		}
+		s.creditMu.Unlock()
 		low := used > 0 && l.Bytes-used <= min(l.Bytes/8, 64<<10)
+		if r.LeasePipeline && r.StandbyLease != nil {
+			low = used >= l.Bytes
+		}
 		if low || !now.Add(15*time.Second).Before(minTime(s.state.Config.ValidUntil, l.ExpiresAt)) {
 			ids = append(ids, l.ID)
 		}

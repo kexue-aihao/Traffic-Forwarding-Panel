@@ -23,6 +23,9 @@ func (s *Service) SettleUsageBatch(ctx context.Context, tx *sql.Tx, records []co
 	unique := []contract.UsageRecord{}
 	args := []any{}
 	for _, u := range records {
+		if !u.ValidWindowMetadata() {
+			return errors.New("invalid window usage metadata")
+		}
 		if u.ID == "" || len(u.ID) > 128 || u.UploadBytes < 0 || u.DownloadBytes < 0 || u.UploadBytes > math.MaxInt64-u.DownloadBytes || u.StartedAt.IsZero() || u.EndedAt.Before(u.StartedAt) {
 			return errors.New("invalid usage")
 		}

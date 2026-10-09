@@ -74,6 +74,7 @@ const menus = computed<
         { path: "/identity-groups", label: "身份用户组", icon: "shield" },
         { path: "/users", label: "用户管理", icon: "users" },
         { path: "/audit", label: "操作审计", icon: "shield" },
+        { path: "/usage-audit", label: "计量审计", icon: "activity" },
       ]
     : []),
 ]);
@@ -356,7 +357,7 @@ onMounted(async () => {
                 :value="value"
               >
                 {{ label }}
-              </option></select
+              </option></Select
             ><button
               :aria-label="theme === 'dark' ? '切换浅色主题' : '切换深色主题'"
               @click="

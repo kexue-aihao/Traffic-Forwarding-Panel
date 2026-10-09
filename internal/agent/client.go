@@ -37,6 +37,15 @@ type Agent struct {
 	configMu        sync.Mutex
 }
 
+type httpStatusError struct {
+	method, path string
+	status       int
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("%s %s: HTTP %d", e.method, e.path, e.status)
+}
+
 func (a *Agent) request(ctx context.Context, method, path string, body, out any) error {
 	var b bytes.Buffer
 	if body != nil {
@@ -58,7 +67,7 @@ func (a *Agent) request(ctx context.Context, method, path string, body, out any)
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("%s %s: HTTP %d", method, path, res.StatusCode)
+		return &httpStatusError{method: method, path: path, status: res.StatusCode}
 	}
 	if out != nil {
 		return json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(out)
@@ -202,6 +211,7 @@ func (a *Agent) syncUsage(ctx context.Context) error {
 	a.usageMu.Lock()
 	defer a.usageMu.Unlock()
 	var errs []error
+	errs = append(errs, a.Store.FlushUDPCredits())
 	for _, id := range a.Store.renewals() {
 		if err := a.Store.Retire(id); err != nil {
 			errs = append(errs, err)
@@ -209,6 +219,24 @@ func (a *Agent) syncUsage(ctx context.Context) error {
 	}
 	errs = append(errs, a.flush(ctx))
 	errs = append(errs, a.retire(ctx))
+	for _, request := range a.Store.prefetches() {
+		var result struct {
+			LeaseID string `json:"lease_id"`
+		}
+		if e := a.request(ctx, "POST", "/agent/leases/prefetch", request, &result); e != nil {
+			var status *httpStatusError
+			if errors.As(e, &status) && status.status == http.StatusConflict {
+				// A purchase, retirement or concurrent config refresh can replace
+				// this allocation. Prefetch is optional; fetch the current policy
+				// without turning a successful usage settlement into a failure.
+				wake(a.Store.configWake)
+			} else {
+				errs = append(errs, e)
+			}
+		} else if result.LeaseID != "" {
+			wake(a.Store.configWake)
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -299,5 +327,5 @@ func (a *Agent) retire(ctx context.Context) error {
 }
 
 func capabilities() []string {
-	return []string{"tcp", "udp", "direct", "direct-tls", "secure-direct", "secure-direct-v1", "tls", "ws", "wss", "http", "chain:3", "resource-limits-v1", "advanced-routing-v1", "proxy-protocol-v1", "diagnostics-v1", "block:http", "block:socks", "looking-glass-v1", "probe", "obfuscation-v1", "obfuscation:random-padding", "obfuscation:timing-perturb", "obfuscation:tls-mimic"}
+	return []string{"tcp", "udp", "direct", "direct-tls", "secure-direct", "secure-direct-v1", "tls", "ws", "wss", "http", "chain:3", "resource-limits-v1", "advanced-routing-v1", "proxy-protocol-v1", "diagnostics-v1", "block:http", "block:socks", "looking-glass-v1", "probe", "obfuscation-v1", "obfuscation:random-padding", "obfuscation:timing-perturb", "obfuscation:tls-mimic", "udp-credit-v1", "udp-datagram-v1", "lease-set-v1"}
 }

@@ -21,11 +21,13 @@ func sameForwardingRule(a, b contract.Rule) bool {
 		return false
 	}
 	a.Lease, b.Lease = nil, nil
+	a.StandbyLease, b.StandbyLease = nil, nil
+	a.LeasePipeline, b.LeasePipeline = false, false
 	return reflect.DeepEqual(a, b)
 }
 
 func transientMeterError(err error) bool {
-	return errors.Is(err, errLeaseUnavailable) || errors.Is(err, errSpoolFull)
+	return errors.Is(err, errLeaseUnavailable) || errors.Is(err, errSpoolFull) || errors.Is(err, errCreditUnavailable)
 }
 
 func (b *binding) liveRule(ctx context.Context, id string) (contract.Rule, time.Time, <-chan struct{}, error) {
@@ -79,6 +81,15 @@ func (b *binding) awaitAvailable(ctx context.Context, id string) error {
 }
 
 func (b *binding) chargeCurrent(ctx context.Context, id, network string, up bool, n int) error {
+	if network == "udp" {
+		rule, until, _, err := b.liveRule(ctx, id)
+		if err != nil {
+			return err
+		}
+		if rule.UDP != nil && rule.UDP.CreditWindows {
+			return b.runtime.Store.TryUDPCharge(rule, until, up, n)
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, renewalWait)
 	defer cancel()
 	for {
@@ -87,14 +98,18 @@ func (b *binding) chargeCurrent(ctx context.Context, id, network string, up bool
 		if err != nil {
 			return err
 		}
-		err = b.runtime.Store.chargeContext(ctx, rule, until, up, n)
+		if network == "udp" && rule.UDP != nil && rule.UDP.CreditWindows {
+			err = b.runtime.Store.TryUDPCharge(rule, until, up, n)
+		} else {
+			err = b.runtime.Store.chargeContext(ctx, rule, until, up, n)
+		}
 		if !transientMeterError(err) {
 			return err
 		}
 		b.runtime.Store.requestUsage()
 		// A shared UDP listener must not wait on one peer's allocation.
 		if network == "udp" {
-			return errRateDrop
+			return err
 		}
 		if err := waitMeter(ctx, changed, progress); err != nil {
 			return err

@@ -39,6 +39,7 @@ WAIT_SECONDS=30
 # 出口模式
 EXIT_SERVER_NAME=""
 EXIT_LISTEN="0.0.0.0:9443"
+EXIT_UDP_LISTEN=""
 EXIT_TOKEN=""
 EXIT_CERT=""
 EXIT_KEY=""
@@ -51,6 +52,9 @@ RENEW_UNIT="/etc/systemd/system/tfp-cert-renew.service"
 RENEW_TIMER="/etc/systemd/system/tfp-cert-renew.timer"
 IP_CERT_NAME="tfp-exit-public-ip"
 CERTBOT_BIN=""
+PYTHON_BIN=""
+PACKAGE_MANAGER=""
+SYSTEM_NAME="Linux"
 ACME_CONFIG="$ENV_DIR/acme"
 ACME_WORK="$STATE_DIR/acme"
 ACME_LOG="/var/log/tfp-agent-acme"
@@ -62,23 +66,114 @@ die() {
 }
 note() { printf '  %s\n' "$1"; }
 
-install_python() {
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get update && apt-get install -y python3 python3-venv openssl
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y python3 python3-pip openssl
-  elif command -v yum >/dev/null 2>&1; then
-    yum install -y python3 python3-pip openssl
-  elif command -v zypper >/dev/null 2>&1; then
-    zypper --non-interactive install python3 python3-pip openssl
-  else
-    die "请先安装 Python 3.10 或更高版本（含 venv、pip）和 openssl，再运行公网 IP 证书安装"
+detect_system() {
+  local ID="" ID_LIKE="" PRETTY_NAME=""
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+  elif [ -r /usr/lib/os-release ]; then
+    # shellcheck disable=SC1091
+    . /usr/lib/os-release
+  fi
+  SYSTEM_NAME="${PRETTY_NAME:-${ID:-Linux}}"
+  case " $ID $ID_LIKE " in
+    *' debian '*|*' ubuntu '*) PACKAGE_MANAGER="apt-get" ;;
+    *' rhel '*|*' fedora '*|*' centos '*)
+      if command -v dnf >/dev/null 2>&1; then PACKAGE_MANAGER="dnf"; else PACKAGE_MANAGER="yum"; fi ;;
+    *' arch '*) PACKAGE_MANAGER="pacman" ;;
+    *' suse '*|*' opensuse '*) PACKAGE_MANAGER="zypper" ;;
+  esac
+  if [ -z "$PACKAGE_MANAGER" ]; then
+    local candidate
+    for candidate in apt-get dnf yum pacman zypper; do
+      if command -v "$candidate" >/dev/null 2>&1; then PACKAGE_MANAGER="$candidate"; break; fi
+    done
   fi
 }
 
+install_packages() {
+  command -v "$PACKAGE_MANAGER" >/dev/null 2>&1 \
+    || die "$SYSTEM_NAME 缺少依赖（$*），请先通过系统包管理器安装"
+  note "正在通过 $PACKAGE_MANAGER 安装依赖：$*"
+  case "$PACKAGE_MANAGER" in
+    apt-get) DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" ;;
+    dnf|yum) "$PACKAGE_MANAGER" install -y "$@" ;;
+    # 不单独刷新 Arch 索引，避免制造部分升级；过期镜像/索引由用户先完整升级。
+    pacman) pacman -S --needed --noconfirm "$@" ;;
+    zypper) zypper --non-interactive install "$@" ;;
+    *) die "无法识别系统包管理器，请先安装：$*" ;;
+  esac || die "依赖安装失败；请检查软件仓库与网络（Arch 请先执行 pacman -Syu），然后重试"
+}
+
+ensure_base_tools() {
+  local tool bundle have_ca="no" packages=()
+  for bundle in "${SSL_CERT_FILE:-}" "${CURL_CA_BUNDLE:-}" /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem; do
+    if [ -n "$bundle" ] && [ -s "$bundle" ]; then have_ca="yes"; break; fi
+  done
+  if ! command -v curl >/dev/null 2>&1; then packages+=(curl); fi
+  if [ "$have_ca" = "no" ]; then packages+=(ca-certificates); fi
+  for tool in install mktemp head od tr chmod mkdir rm touch uname; do
+    if ! command -v "$tool" >/dev/null 2>&1; then packages+=(coreutils); break; fi
+  done
+  if ! command -v grep >/dev/null 2>&1; then packages+=(grep); fi
+  if [ "$MODE" != "agent" ] && ! command -v openssl >/dev/null 2>&1; then packages+=(openssl); fi
+  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" != "Disabled" ] && ! command -v restorecon >/dev/null 2>&1; then
+    packages+=(policycoreutils)
+  fi
+  if [ "${#packages[@]}" -gt 0 ]; then install_packages "${packages[@]}"; fi
+  for tool in curl install mktemp head od tr chmod mkdir rm touch uname grep; do
+    command -v "$tool" >/dev/null 2>&1 || die "依赖安装后仍缺少 $tool"
+  done
+  if [ "$MODE" != "agent" ]; then command -v openssl >/dev/null 2>&1 || die "依赖安装后仍缺少 openssl"; fi
+  if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" != "Disabled" ]; then
+    command -v restorecon >/dev/null 2>&1 || die "SELinux 已启用，但依赖安装后仍缺少 restorecon"
+  fi
+}
+
+restore_contexts() {
+  if command -v restorecon >/dev/null 2>&1; then
+    restorecon -F "$@" || die "无法恢复 SELinux 文件标签，请检查目标路径策略"
+  fi
+}
+
+select_python() {
+  local candidate
+  for candidate in python3 python3.14 python3.13 python3.12 python3.11 python3.10; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if "$candidate" -c 'import ssl, sys, venv; sys.exit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
+      PYTHON_BIN="$(command -v "$candidate")"
+      return 0
+    fi
+  done
+  return 1
+}
+
+install_python() {
+  local package="${PYTHON_BIN##*/}" candidate
+  case "$PACKAGE_MANAGER" in
+    apt-get)
+      package="${package:-python3}"
+      install_packages "$package" "$package-venv" openssl ;;
+    dnf|yum)
+      if [ -z "$package" ]; then
+        for candidate in python3.12 python3.11 python3.10; do
+          if "$PACKAGE_MANAGER" -q list "$candidate" >/dev/null 2>&1; then package="$candidate"; break; fi
+        done
+      fi
+      package="${package:-python3}"
+      install_packages "$package" "$package-pip" openssl ;;
+    pacman) install_packages python python-pip openssl ;;
+    zypper) install_packages python3 python3-pip openssl ;;
+    *) die "请先安装 Python 3.10 或更高版本（含 venv、pip）和 openssl，再运行公网 IP 证书安装" ;;
+  esac
+}
+
 ensure_ip_certbot() {
-  command -v python3 >/dev/null 2>&1 || install_python
-  command -v openssl >/dev/null 2>&1 || install_python
+  if ! select_python; then
+    install_python
+    select_python || die "$SYSTEM_NAME 的 Python 不满足 IP 证书要求；请安装 Python 3.10 或更高版本（含 venv、pip）。普通 Agent 和自备证书出口不需要 Python"
+  fi
+  command -v openssl >/dev/null 2>&1 || install_packages openssl
   local candidate help
   for candidate in "$(command -v certbot || true)" "$ENV_DIR/certbot/bin/certbot"; do
     [ -x "$candidate" ] || continue
@@ -89,9 +184,9 @@ ensure_ip_certbot() {
     fi
   done
   note "正在安装支持 IP 证书的 Certbot（独立 Python 环境）"
-  if ! python3 -m venv "$ENV_DIR/certbot"; then
+  if ! "$PYTHON_BIN" -m venv "$ENV_DIR/certbot"; then
     install_python
-    python3 -m venv "$ENV_DIR/certbot" || die "无法创建 Certbot Python 环境"
+    "$PYTHON_BIN" -m venv "$ENV_DIR/certbot" || die "无法创建 Certbot Python 环境"
   fi
   "$ENV_DIR/certbot/bin/python" -m pip install --upgrade 'certbot>=5.4,<6' \
     || die "安装 Certbot 失败，请确保 Python 3.10 或更高版本，并检查 PyPI 网络连接"
@@ -103,7 +198,7 @@ detect_public_ip() {
   for family in 4 6; do
     if [ "$family" = 4 ]; then url="https://api.ipify.org"; else url="https://api6.ipify.org"; fi
     raw="$(curl -"$family" -fsS --noproxy '*' --connect-timeout 5 --max-time 15 "$url" 2>/dev/null)" || continue
-    address="$(python3 -c 'import ipaddress, sys; ip = ipaddress.ip_address(sys.argv[1].strip()); sys.exit(1) if not ip.is_global or ip.is_multicast or ip.version != int(sys.argv[2]) else print(ip)' "$raw" "$family" 2>/dev/null)" || continue
+    address="$("$PYTHON_BIN" -c 'import ipaddress, sys; ip = ipaddress.ip_address(sys.argv[1].strip()); sys.exit(1) if not ip.is_global or ip.is_multicast or ip.version != int(sys.argv[2]) else print(ip)' "$raw" "$family" 2>/dev/null)" || continue
     EXIT_SERVER_NAME="$address"
     if [ "$family" = 6 ] && [[ "$EXIT_LISTEN" == 0.0.0.0:* ]]; then
       EXIT_LISTEN="[::]:${EXIT_LISTEN##*:}"
@@ -139,6 +234,7 @@ Persistent=true
 WantedBy=timers.target
 UNIT
   chmod 0644 "$RENEW_UNIT" "$RENEW_TIMER"
+  restore_contexts "$RENEW_UNIT" "$RENEW_TIMER"
   systemctl daemon-reload
   systemctl enable --now tfp-cert-renew.timer >/dev/null 2>&1
   systemctl is-active --quiet tfp-cert-renew.timer || die "证书自动续签定时器启动失败"
@@ -192,17 +288,20 @@ usage() {
   -q <证书模式>      provided / public-ip / auto，默认 provided
                     public-ip 自动申请 Let's Encrypt IP 证书并续签，需要公网 TCP/80 可达
   -l <监听地址>      默认 0.0.0.0:9443
+  -D <UDP监听地址>   启用 QUIC DATAGRAM，例如 0.0.0.0:9443；仅普通出口
   -p <承载>          tls / ws / wss / http / secure-direct，默认 tls
   -O <混淆策略>      secure-direct 必填：random-padding / timing-perturb / tls-mimic
   -P <JSON>          混淆参数 JSON（可选）
 
 其它
+  系统            Debian / Ubuntu、RHEL / Rocky / AlmaLinux / Fedora、Arch / Manjaro
+                  需要运行中的 systemd；缺少依赖时使用 apt、dnf、yum 或 pacman 安装
   -x              卸载：停止并删除服务，保留状态目录
   -h              显示本帮助
 USAGE
 }
 
-while getopts ":t:u:n:a:c:s:m:S:e:C:K:q:w:l:p:O:P:xh" opt; do
+while getopts ":t:u:n:a:c:s:m:S:e:C:K:q:w:l:D:p:O:P:xh" opt; do
   case "$opt" in
     t) TOKEN="$OPTARG" ;;
     u) PANEL_URL="$OPTARG" ;;
@@ -218,6 +317,7 @@ while getopts ":t:u:n:a:c:s:m:S:e:C:K:q:w:l:p:O:P:xh" opt; do
     q) EXIT_CERT_MODE="$OPTARG" ;;
     w) : ;; # 兼容旧接入命令；目标由转发规则配置，不再使用白名单。
     l) EXIT_LISTEN="$OPTARG" ;;
+    D) EXIT_UDP_LISTEN="$OPTARG" ;;
     p) EXIT_TRANSPORT="$OPTARG" ;;
     O) EXIT_OBFUSCATION="$OPTARG" ;;
     P) EXIT_OBFUSCATION_PARAMS="$OPTARG" ;;
@@ -261,6 +361,11 @@ if [ "$UNINSTALL" != "yes" ]; then
     case "$EXIT_LISTEN" in
       *[!A-Za-z0-9.:\[\]]*) die "监听地址格式不对：$EXIT_LISTEN" ;;
     esac
+    if [ -n "$EXIT_UDP_LISTEN" ]; then
+      [ "$MODE" = "exit" ] || die "原生 UDP 监听仅适用于普通出口"
+      case "$EXIT_UDP_LISTEN" in *[!A-Za-z0-9.:\[\]]*) die "UDP 监听地址格式不对" ;; esac
+      [ "${#EXIT_TOKEN}" -le 128 ] || die "UDP 出口令牌最多 128 字符"
+    fi
     [ "${#NODE_NAME}" -le 128 ] || die "设备名超过 128 字符，出口身份取的就是它"
     if [ "$EXIT_CERT_MODE" = "provided" ]; then
       [ -r "$EXIT_CERT" ] || die "读不到证书 $EXIT_CERT"
@@ -276,6 +381,9 @@ if [ "$UNINSTALL" != "yes" ]; then
 fi
 
 [ "$(id -u)" -eq 0 ] || die "需要 root 权限：请用 sudo 重新执行"
+[ "$(uname -s)" = "Linux" ] || die "本脚本只支持 Linux 设备"
+command -v systemctl >/dev/null 2>&1 || die "本机没有 systemd，无法安装为服务；请自行部署 Agent"
+systemctl show --property=Version >/dev/null 2>&1 || die "systemd 未运行或无法连接；容器/chroot、WSL 需先启用 systemd"
 
 [ ! -e /var/lib/tfp-agent-uninstall ] || die "设备正在远程卸载并等待面板确认，请稍后重试；可用 journalctl -u tfp-agent-uninstall 查看进度"
 
@@ -292,11 +400,6 @@ if [ "$UNINSTALL" = "yes" ]; then
   exit 0
 fi
 
-command -v systemctl >/dev/null 2>&1 || die "本机没有 systemd，无法安装为服务；请改用 go build 自行部署 Agent"
-command -v curl >/dev/null 2>&1 || die "本机没有 curl，Agent 需要它探测公网 IPv4/IPv6 地址"
-curl -fsSL --max-time 20 -o /dev/null "$PANEL_URL/" 2>/dev/null \
-  || die "无法访问面板 $PANEL_URL，请检查地址、网络与证书"
-
 # ── 架构探测 ────────────────────────────────────────────────────────
 if [ -n "$ARCH_OVERRIDE" ]; then
   ARCH="$ARCH_OVERRIDE"
@@ -309,9 +412,22 @@ else
     *) die "无法识别的架构 $(uname -m)，请用 -a 指定" ;;
   esac
 fi
-[ "$(uname -s)" = "Linux" ] || die "本脚本只支持 Linux 设备"
+case "$ARCH" in amd64|arm64|arm|386) ;; *) die "不支持的架构 $ARCH" ;; esac
 
-NODE_NAME="${NODE_NAME:-$(hostname)}"
+detect_system
+note "系统：$SYSTEM_NAME"
+ensure_base_tools
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+CURL_CA_ARGS=()
+if [ -n "$CA_URL" ]; then
+  curl -fLsS --max-time 30 -o "$TMP/ca.pem" "$CA_URL" || die "下载 CA 证书失败"
+  CURL_CA_ARGS=(--cacert "$TMP/ca.pem")
+fi
+curl "${CURL_CA_ARGS[@]}" -fsSL --max-time 20 -o /dev/null "$PANEL_URL/" 2>/dev/null \
+  || die "无法访问面板 $PANEL_URL，请检查地址、网络与证书"
+
+NODE_NAME="${NODE_NAME:-$(uname -n)}"
 
 if [ "$MODE" = "exit" ] || [ "$MODE" = "secure-direct" ]; then
   if [ "$MODE" = "secure-direct" ]; then
@@ -367,10 +483,8 @@ note "架构：linux/$ARCH"
 echo
 
 # ── 下载 Agent ──────────────────────────────────────────────────────
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
 echo "正在下载 Agent…"
-curl -fLsS --max-time 300 -o "$TMP/agent" "$PANEL_URL/download/agent/linux/$ARCH" \
+curl "${CURL_CA_ARGS[@]}" -fLsS --max-time 300 -o "$TMP/agent" "$PANEL_URL/download/agent/linux/$ARCH" \
   || die "下载失败：面板上可能没有 linux/$ARCH 的 Agent 产物"
 
 # 面板在产物缺失时返回的是 JSON 错误体，直接装上去会得到一个「不是可执行文件」
@@ -378,15 +492,16 @@ curl -fLsS --max-time 300 -o "$TMP/agent" "$PANEL_URL/download/agent/linux/$ARCH
 if [ "$(head -c 4 "$TMP/agent" | od -An -tx1 | tr -d ' \n')" != "7f454c46" ]; then
   die "下载到的不是可执行文件（面板返回的可能是错误信息）：$(head -c 200 "$TMP/agent")"
 fi
+install -d -m 0755 "${BIN_PATH%/*}"
 install -m 0755 "$TMP/agent" "$BIN_PATH"
+restore_contexts "$BIN_PATH"
 note "已安装 $BIN_PATH"
 
 # ── 证书 ────────────────────────────────────────────────────────────
 CA_ARG=""
 if [ -n "$CA_URL" ]; then
   install -d -m 0755 "$ENV_DIR"
-  curl -fLsS --max-time 30 -o "$ENV_DIR/ca.pem" "$CA_URL" || die "下载 CA 证书失败"
-  chmod 0644 "$ENV_DIR/ca.pem"
+  install -m 0644 "$TMP/ca.pem" "$ENV_DIR/ca.pem"
   CA_ARG=" -ca $ENV_DIR/ca.pem"
   note "已安装根证书 $ENV_DIR/ca.pem"
 fi
@@ -407,7 +522,7 @@ chmod 0600 "$ENV_DIR/managed-install"
 # 在控制台里，出口列表的「在线」列也就永远是离线。
 # 顺手把卸载脚本放到本机：面板不可达或 Agent 起不来时，本机这份仍然能用。
 # 拉不到不算失败 —— 它只是方便，不该拦住接入。
-if curl -fLsS --max-time 20 -o "$TMP/agent-uninstall.sh" "$PANEL_URL/download/agent-uninstall.sh" 2>/dev/null; then
+if curl "${CURL_CA_ARGS[@]}" -fLsS --max-time 20 -o "$TMP/agent-uninstall.sh" "$PANEL_URL/download/agent-uninstall.sh" 2>/dev/null; then
   install -m 0700 "$TMP/agent-uninstall.sh" "$ENV_DIR/agent-uninstall.sh"
   UNINSTALL_SCRIPT="$ENV_DIR/agent-uninstall.sh"
 fi
@@ -431,6 +546,7 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 UNIT
 chmod 0644 "$UNIT_PATH"
+restore_contexts "$ENV_DIR" "$STATE_DIR" "$ENV_DIR/agent.env" "$ENV_DIR/managed-install" "$UNIT_PATH"
 systemctl daemon-reload
 systemctl enable tfp-agent.service >/dev/null 2>&1
 systemctl restart tfp-agent.service
@@ -471,7 +587,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$ENV_DIR/exit.env
-ExecStart=$BIN_PATH -mode $MODE -exit-id $NODE_NAME -listen $EXIT_LISTEN -transport $EXIT_TRANSPORT -cert $EXIT_CERT -key $EXIT_KEY -obfuscation-strategy '$EXIT_OBFUSCATION' -obfuscation-params '$EXIT_OBFUSCATION_PARAMS'$CA_ARG
+ExecStart=$BIN_PATH -mode $MODE -exit-id $NODE_NAME -listen $EXIT_LISTEN -transport $EXIT_TRANSPORT -cert $EXIT_CERT -key $EXIT_KEY -obfuscation-strategy '$EXIT_OBFUSCATION' -obfuscation-params '$EXIT_OBFUSCATION_PARAMS'$CA_ARG -udp-listen '$EXIT_UDP_LISTEN'
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576
@@ -480,6 +596,7 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 UNIT
   chmod 0644 "$EXIT_UNIT"
+  restore_contexts "$ENV_DIR/exit.env" "$EXIT_UNIT"
   systemctl daemon-reload
   systemctl enable tfp-exit.service >/dev/null 2>&1
   systemctl restart tfp-exit.service

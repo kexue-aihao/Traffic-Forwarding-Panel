@@ -14,6 +14,15 @@ func (s *Service) Allocate(ctx context.Context, tx *sql.Tx, user, rule, node str
 	return s.AllocateWithMultiplier(ctx, tx, user, rule, node, "1")
 }
 func (s *Service) AllocateWithMultiplier(ctx context.Context, tx *sql.Tx, user, rule, node, multiplier string) (*contract.Lease, error) {
+	return s.AllocateBudgetWithMultiplier(ctx, tx, user, rule, node, multiplier, 16<<20)
+}
+
+// New nodes request finite budgets; the entitlement transaction reserves them
+// before publication. Old callers retain their original 16 MiB allocations.
+func (s *Service) AllocateBudgetWithMultiplier(ctx context.Context, tx *sql.Tx, user, rule, node, multiplier string, requested int64) (*contract.Lease, error) {
+	if requested <= 0 || requested > 256<<20 {
+		return nil, errors.New("lease budget outside 1..256 MiB")
+	}
 	m, ok := new(big.Rat).SetString(multiplier)
 	if !ok || m.Sign() <= 0 {
 		return nil, errors.New("invalid multiplier")
@@ -36,12 +45,19 @@ func (s *Service) AllocateWithMultiplier(ctx context.Context, tx *sql.Tx, user, 
 	remaining := e.Quota - allocated
 	if e.Quota == 0 {
 		// Zero quota is unlimited. Each lease remains bounded and reclaimable.
-		remaining = 16 << 20
+		remaining = requested
 	}
 	if remaining <= 0 {
 		return nil, contract.ErrEntitlementUnavailable
 	}
-	budget := int64(16 << 20)
+	var outstanding int64
+	if err = tx.QueryRowContext(ctx, s.q("SELECT COALESCE(SUM(r.budget),0) FROM commerce_lease_reservations r JOIN commerce_leases l ON l.id=r.lease_id WHERE l.user_id=? AND r.closed=0"), user).Scan(&outstanding); err != nil {
+		return nil, err
+	}
+	budget := min(requested, (512<<20)-outstanding)
+	if budget <= 0 {
+		return nil, contract.ErrEntitlementUnavailable
+	}
 	if budget > remaining {
 		budget = remaining
 	}

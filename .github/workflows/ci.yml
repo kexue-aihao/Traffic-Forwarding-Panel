@@ -51,6 +51,7 @@ jobs:
       - run: shellcheck install.sh scripts/panel-manager.sh internal/agentdist/agent-install.sh internal/agentdist/agent-uninstall.sh
       - run: python3 scripts/test_panel_manager.py
       - run: python3 scripts/test_agent_certificates.py
+      - run: python3 scripts/test_agent_installer.py
       - run: go generate ./internal/openapi
       - run: git diff --exit-code -- internal/openapi/openapi.json
       - run: go vet ./...

@@ -6,6 +6,7 @@ import Commerce from "./pages/Commerce.vue";
 import Operations from "./pages/Operations.vue";
 import Settings from "./pages/Settings.vue";
 import Exits from "./pages/Exits.vue";
+import UsageAudit from "./pages/UsageAudit.vue";
 import Account from "./pages/Account.vue";
 import LookingGlass from "./pages/LookingGlass.vue";
 import ApiDocs from "./pages/ApiDocs.vue";
@@ -17,6 +18,7 @@ export const router = createRouter({
   routes: [
     { path: "/settings", component: Settings },
     { path: "/exits", component: Exits },
+    { path: "/usage-audit", component: UsageAudit },
     { path: "/", redirect: "/overview" },
     { path: "/overview", component: Dashboard },
     // 探针页在新标签页里独立打开：meta.standalone 让外壳跳过侧栏与顶栏，

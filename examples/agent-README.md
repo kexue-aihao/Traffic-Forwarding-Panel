@@ -16,6 +16,8 @@ bash <(curl -fLsS https://panel.example.com/download/agent-install.sh) \
 写一个 systemd 服务（开机自启、崩溃重拉），启动后确认注册成功。要求目标设备
 是 Linux、有 systemd、以 root 执行。
 
+接入脚本兼容 Debian/Ubuntu、Red Hat（RHEL、Rocky、AlmaLinux、CentOS Stream、Fedora）与 Arch/Manjaro 的依赖安装方式；首次下载脚本需已有 Bash、curl 和 CA 信任库。系统要求、IP 证书的 Python 限制与验证边界见 [Linux 兼容性说明](../docs/agent-linux-compatibility.md)。
+
 ### 三种接入方式
 
 控制台的「设备组 → 接入设备」按场景给不同的命令。三者的差别不在于装哪个二进制
@@ -65,7 +67,7 @@ bash <(curl -fLsS https://panel.example.com/download/agent-install.sh) \
 证书由 Let's Encrypt 签发，使用 `shortlived` 配置，有效期 160 小时。脚本优先使用
 支持 IP 证书的现有 Certbot，否则在 `/etc/tfp-agent/certbot` 创建独立 Python 环境，
 安装 Certbot 5.4 或更高的 5.x 版本，需要 Python 3.10 或更高版本。缺少 Python/venv 或 OpenSSL 时尝试通过 apt、
-dnf、yum 或 zypper 安装；其他系统需自行准备这些依赖。安装需要访问 PyPI、ACME
+dnf、yum、pacman 或 zypper 安装；Red Hat 默认 Python 较旧时选择已有软件源中的较新版本。软件源不提供满足要求的 Python 时需自行准备。安装需要访问 PyPI、ACME
 服务和 ipify 的 HTTPS 接口。
 
 本机公网 IP 的 TCP/80 必须从互联网可达，且申请和续签时端口未被占用；云安全组、

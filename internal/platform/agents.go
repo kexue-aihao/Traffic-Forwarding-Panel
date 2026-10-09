@@ -376,8 +376,24 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		rule.BlockedProtocols = applicationBlocks(rule.BlockedProtocols, g.BlockedProtocols)
-		if rule.Lease.ExpiresAt.Before(cfg.ValidUntil) {
-			cfg.ValidUntil = rule.Lease.ExpiresAt
+		if rule.Network == "udp" && contains(nodeInfo.Capabilities, "udp-credit-v1") {
+			rule.UDP = &contract.UDPOptions{CreditWindows: true, MaxSessions: 1024}
+		} else {
+			rule.UDP = nil
+		}
+		if rule.Transport == "quic" && !contains(nodeInfo.Capabilities, "udp-datagram-v1") {
+			continue
+		}
+		if !contains(nodeInfo.Capabilities, "lease-set-v1") {
+			rule.StandbyLease = nil
+		}
+		rule.LeasePipeline = contains(nodeInfo.Capabilities, "lease-set-v1") && rule.Lease.EntitlementID != "admin-test"
+		expiry := rule.Lease.ExpiresAt
+		if rule.LeasePipeline && rule.StandbyLease != nil && rule.StandbyLease.ExpiresAt.After(expiry) {
+			expiry = rule.StandbyLease.ExpiresAt
+		}
+		if expiry.Before(cfg.ValidUntil) {
+			cfg.ValidUntil = expiry
 		}
 		cfg.Rules = append(cfg.Rules, rule)
 	}

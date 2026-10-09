@@ -489,6 +489,26 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err = conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM cp_schema WHERE version=12").Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		if _, err = conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS cp_exit_ports(node_id VARCHAR(64) NOT NULL,network VARCHAR(8) NOT NULL,port INTEGER NOT NULL,exit_id VARCHAR(64) NOT NULL,PRIMARY KEY(node_id,network,port,exit_id))`); err != nil {
+			return err
+		}
+		if err = EnsureIndex(ctx, conn, s.Dialect, "cp_exit_ports", "cp_exit_ports_exit", "exit_id", false); err != nil {
+			return err
+		}
+		if err = EnsureIndex(ctx, conn, s.Dialect, "cp_exit_ports", "cp_exit_ports_physical", "node_id,network,port", false); err != nil {
+			return err
+		}
+		if err = s.backfillExitPorts(ctx, conn); err != nil {
+			return err
+		}
+		if _, err = conn.ExecContext(ctx, "INSERT INTO cp_schema(version) VALUES(12)"); err != nil {
+			return err
+		}
+	}
 	if s.Dialect == "sqlite" {
 		_, err = conn.ExecContext(ctx, "COMMIT")
 	}

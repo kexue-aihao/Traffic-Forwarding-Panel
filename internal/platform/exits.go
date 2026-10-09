@@ -53,11 +53,15 @@ func (s *Server) exits(w http.ResponseWriter, r *http.Request) {
 		}
 		e.Online = seen > 0 && time.Now().Unix()-seen <= 90
 		e.Tunnel.Token = ""
+		if e.UDP != nil {
+			e.UDP.Token = ""
+		}
 		for i := range e.Tunnel.Chain {
 			e.Tunnel.Chain[i].Token = ""
 		}
 		if actor.Role != "admin" && owner != actor.ID {
 			e.Tunnel = contract.Tunnel{}
+			e.UDP = nil
 		}
 		items = append(items, e)
 	}
@@ -137,6 +141,12 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal([]byte(raw), &old); err != nil {
 				return err
 			}
+			if actor.Role != "admin" {
+				e.UDP = old.UDP
+			}
+			if e.UDP != nil && old.UDP != nil && e.UDP.Token == "" && e.UDP.Endpoint == old.UDP.Endpoint && e.UDP.ServerName == old.UDP.ServerName {
+				e.UDP.Token = old.UDP.Token
+			}
 			if e.Tunnel.Token == "" && e.Tunnel.Endpoint == old.Tunnel.Endpoint && e.Tunnel.ServerName == old.Tunnel.ServerName {
 				e.Tunnel.Token = old.Tunnel.Token
 			}
@@ -146,10 +156,22 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		if actor.Role != "admin" && create && e.UDP != nil {
+			return errors.New("only administrators configure native UDP exits")
+		}
+		if e.UDP != nil && (group.Type != contract.GroupExit || e.Tunnel.Reverse != "" || len(e.Tunnel.Chain) > 0) {
+			return errors.New("native UDP supports ordinary single exits")
+		}
+		if err := contract.ValidateUDPExit(e.UDP); err != nil {
+			return err
+		}
 		if err := tunnel.ValidateChain(contract.TunnelHop{Transport: e.Transport, Endpoint: e.Tunnel.Endpoint, ServerName: e.Tunnel.ServerName, Token: e.Tunnel.Token}, e.Tunnel.Chain); err != nil {
 			return err
 		}
 		if err := (contract.Rule{Network: "tcp", Tunnel: &e.Tunnel}).ValidateAdvanced(); err != nil {
+			return err
+		}
+		if err := s.reserveExitPorts(r.Context(), tx, e); err != nil {
 			return err
 		}
 		if create {
@@ -173,6 +195,9 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.Tunnel.Token = ""
+	if e.UDP != nil {
+		e.UDP.Token = ""
+	}
 	for i := range e.Tunnel.Chain {
 		e.Tunnel.Chain[i].Token = ""
 	}
@@ -186,6 +211,10 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 // Weighted rendezvous selection is stable for a rule until candidate health or
 // configuration changes. Liveness is panel heartbeat, not target reachability.
 func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.Rule) (string, error) {
+	return s.resolveExitWithUDP(ctx, tx, rule, true)
+}
+
+func (s *Server) resolveExitWithUDP(ctx context.Context, tx *sql.Tx, rule *contract.Rule, native bool) (string, error) {
 	if rule.ExitGroupID == "" {
 		rule.SelectedExitID = ""
 		return "1", nil
@@ -238,7 +267,7 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 			seenGroups[gid] = true
 			part := *rule
 			part.ExitGroupID, part.ExitID = gid, "auto"
-			if _, err := s.resolveExitTx(ctx, tx, &part); err != nil {
+			if _, err := s.resolveExitWithUDP(ctx, tx, &part, false); err != nil {
 				return "", err
 			}
 			if part.Tunnel == nil || len(part.Tunnel.Chain) > 0 || part.Tunnel.Reverse != "" {
@@ -273,7 +302,15 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 		rule.Transport, rule.Tunnel, rule.SelectedExitID = candidate.Transport, candidate.Tunnel, parts[0].SelectedExitID
 		return g.Multiplier, nil
 	}
-	rows, err := tx.QueryContext(ctx, s.q("SELECT e.payload,n.last_seen FROM cp_exits e JOIN cp_nodes n ON n.id=e.node_id JOIN cp_node_groups ng ON ng.node_id=e.node_id AND ng.group_id=e.group_id WHERE e.group_id=? AND NOT EXISTS(SELECT 1 FROM cp_node_operations o WHERE o.node_id=n.id AND o.kind='uninstall' AND (o.status IN ('running','succeeded') OR (o.status='pending' AND o.expires_at>?))) ORDER BY e.id"), g.ID, time.Now().Unix())
+	var entryRaw string
+	if err := tx.QueryRowContext(ctx, s.q("SELECT payload FROM cp_nodes WHERE id=?"), rule.NodeID).Scan(&entryRaw); err != nil {
+		return "", err
+	}
+	var entryNode contract.Node
+	if err := json.Unmarshal([]byte(entryRaw), &entryNode); err != nil {
+		return "", err
+	}
+	rows, err := tx.QueryContext(ctx, s.q("SELECT e.payload,n.last_seen,n.payload FROM cp_exits e JOIN cp_nodes n ON n.id=e.node_id JOIN cp_node_groups ng ON ng.node_id=e.node_id AND ng.group_id=e.group_id WHERE e.group_id=? AND NOT EXISTS(SELECT 1 FROM cp_node_operations o WHERE o.node_id=n.id AND o.kind='uninstall' AND (o.status IN ('running','succeeded') OR (o.status='pending' AND o.expires_at>?))) ORDER BY e.id"), g.ID, time.Now().Unix())
 	if err != nil {
 		return "", err
 	}
@@ -281,11 +318,11 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 	var best *contract.Exit
 	score := math.Inf(1)
 	for rows.Next() {
-		var raw string
+		var raw, nodeRaw string
 		var seen int64
 
 		var e contract.Exit
-		if err = rows.Scan(&raw, &seen); err != nil {
+		if err = rows.Scan(&raw, &seen, &nodeRaw); err != nil {
 			return "", err
 		}
 		if err = json.Unmarshal([]byte(raw), &e); err != nil {
@@ -293,6 +330,19 @@ func (s *Server) resolveExitTx(ctx context.Context, tx *sql.Tx, rule *contract.R
 		}
 		if !e.Enabled || e.NodeID == rule.NodeID || seen == 0 || time.Now().Unix()-seen > 90 || rule.ExitID != "" && rule.ExitID != "auto" && rule.ExitID != e.ID {
 			continue
+		}
+		forcedTCP := entry.Advanced != nil && entry.Advanced.UDPOverTCP || g.Advanced != nil && g.Advanced.UDPOverTCP
+		if native && rule.Network == "udp" && e.UDP != nil && !forcedTCP {
+			var exitNode contract.Node
+			if json.Unmarshal([]byte(nodeRaw), &exitNode) != nil {
+				return "", errors.New("invalid exit node")
+			}
+			if contains(entryNode.Capabilities, "udp-datagram-v1") && contains(exitNode.Capabilities, "udp-datagram-v1") {
+				e.Transport = "quic"
+				e.Tunnel = contract.Tunnel{Endpoint: e.UDP.Endpoint, ServerName: e.UDP.ServerName, Token: e.UDP.Token}
+			} else if !e.UDP.AllowTCPFallback {
+				continue
+			}
 		}
 		candidate := *rule
 		candidate.Transport = e.Transport
@@ -389,6 +439,7 @@ func (s *Server) refreshExits(ctx context.Context, node string) error {
 				continue
 			}
 			rule.Lease = nil
+			rule.StandbyLease = nil
 			res, err := tx.ExecContext(ctx, s.q("UPDATE cp_rules SET payload=? WHERE id=? AND version=?"), strJSON(rule), rule.ID, rule.Version)
 			if err != nil {
 				return err

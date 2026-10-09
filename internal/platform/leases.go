@@ -19,6 +19,15 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 		return err
 	}
 	return s.Store.Write(ctx, storage.Critical, func(tx *sql.Tx) error {
+		var nodeRaw string
+		if e := tx.QueryRowContext(ctx, s.q("SELECT payload FROM cp_nodes WHERE id=?"), node).Scan(&nodeRaw); e != nil {
+			return e
+		}
+		var info contract.Node
+		if e := json.Unmarshal([]byte(nodeRaw), &info); e != nil {
+			return e
+		}
+		pipeline := contains(info.Capabilities, "lease-set-v1")
 		rows, e := tx.QueryContext(ctx, s.q(`SELECT r.payload,g.payload,u.disabled,u.role,CASE WHEN EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=u.id))) THEN 1 ELSE 0 END FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
 		if e != nil {
 			return e
@@ -74,6 +83,17 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 				return err
 			}
 			legacyLimits := rule.Lease != nil && rule.Lease.Limits != (contract.ResourceLimits{})
+			leaseChanged := false
+			if rule.StandbyLease != nil {
+				live, e := s.liveLeaseTx(ctx, tx, rule.UserID, rule.StandbyLease)
+				if e != nil {
+					return e
+				}
+				if !live || !pipeline {
+					rule.StandbyLease = nil
+					leaseChanged = true
+				}
+			}
 			if legacyLimits {
 				rule.Lease.Limits = contract.ResourceLimits{}
 			}
@@ -95,7 +115,7 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 				}
 			}
 			if valid {
-				if legacyLimits {
+				if legacyLimits || leaseChanged {
 					res, err := tx.ExecContext(ctx, s.q(`UPDATE cp_rules SET payload=? WHERE id=? AND version=? AND deleted=0`), strJSON(rule), rule.ID, rule.Version)
 					if err != nil {
 						return err
@@ -109,8 +129,13 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 				continue
 			}
 			oldLease := rule.Lease
-			rule.Lease = nil
-			if allowed && s.opts.Entitlements != nil {
+			if !allowed {
+				rule.StandbyLease = nil
+			}
+			rule.Lease = rule.StandbyLease
+			rule.StandbyLease = nil
+			promoted := rule.Lease != nil
+			if allowed && s.opts.Entitlements != nil && !promoted {
 				if a, ok := s.opts.Entitlements.(interface {
 					AllocateWithMultiplier(context.Context, *sql.Tx, string, string, string, string) (*contract.Lease, error)
 				}); ok {
@@ -133,7 +158,7 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 			if oldLease == nil && rule.Lease == nil {
 				continue
 			}
-			if rule.Lease != nil {
+			if rule.Lease != nil && !promoted {
 				if rule.Lease.Bytes <= 0 || !rule.Lease.ExpiresAt.After(time.Now()) || rule.Lease.ExpiresAt.After(time.Now().Add(24*time.Hour+time.Second)) {
 					return errors.New("invalid lease")
 				}

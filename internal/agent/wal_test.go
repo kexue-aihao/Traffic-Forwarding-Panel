@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,6 +29,39 @@ func reopen(t *testing.T, s *Store) *Store {
 	return next
 }
 func used(s *Store, id string) int64 { s.mu.Lock(); defer s.mu.Unlock(); return s.state.Used[id] }
+
+func TestV1WALWithoutCheckpointMigratesBeforeMutation(t *testing.T) {
+	s, _, cfg := setup(t)
+	rule := testRule("127.0.0.1:1")
+	if e := s.Charge(rule, cfg.ValidUntil, true, 12); e != nil {
+		t.Fatal(e)
+	}
+	s.Close()
+	b, e := os.ReadFile(s.path + ".wal")
+	if e != nil {
+		t.Fatal(e)
+	}
+	copy(b[:8], []byte("TFPWAL01"))
+	binary.BigEndian.PutUint32(b[16:20], crc32.Checksum(b[:16], crcTable))
+	if e := os.WriteFile(s.path+".wal", b, 0600); e != nil {
+		t.Fatal(e)
+	}
+	next, e := OpenStore(s.path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer next.Close()
+	b, e = os.ReadFile(s.path + ".wal")
+	if e != nil || string(b[:8]) != "TFPWAL02" {
+		t.Fatal("legacy WAL remained writable", e)
+	}
+	if used(next, rule.Lease.ID) != 12 || len(next.Pending()) != 1 {
+		t.Fatal("WAL-only migration lost accounting")
+	}
+	if e := next.Charge(rule, cfg.ValidUntil, false, 1); e != nil {
+		t.Fatal(e)
+	}
+}
 func TestWALChargeAndCheckpointCrashBoundaries(t *testing.T) {
 	for _, point := range []string{"append_before", "append_after", "sync_before", "sync_after"} {
 		t.Run(point, func(t *testing.T) {

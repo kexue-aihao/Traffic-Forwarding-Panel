@@ -20,6 +20,12 @@ interface Exit {
     reverse?: string;
     chain?: unknown[];
   };
+  udp?: {
+    endpoint: string;
+    server_name: string;
+    token?: string;
+    allow_tcp_fallback?: boolean;
+  } | null;
   weight: number;
   enabled: boolean;
   version: number;
@@ -76,7 +82,11 @@ async function open(v?: Exit) {
       all("/groups"),
       all("/nodes"),
     ]);
-    groups.value = groups.value.filter((g) => isPhysicalExitGroup(g) && (admin.value || g.owner_id === state.user?.id));
+    groups.value = groups.value.filter(
+      (g) =>
+        isPhysicalExitGroup(g) &&
+        (admin.value || g.owner_id === state.user?.id),
+    );
     form.value = v
       ? (JSON.parse(JSON.stringify(v)) as Exit)
       : {
@@ -164,7 +174,9 @@ onMounted(load);
         ><button v-if="admin || userExit" class="primary" @click="open()">
           {{ admin ? "新增出口" : "绑定我的出口设备" }}
         </button>
-        <button v-if="userExit" @click="createMyExitGroup">新增我的出口设备组</button>
+        <button v-if="userExit" @click="createMyExitGroup">
+          新增我的出口设备组
+        </button>
       </div>
     </div>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
@@ -180,7 +192,8 @@ onMounted(load);
       <div v-for="v in items" :key="v.id" class="task-row">
         <span
           >{{ v.name }} · {{ v.transport }} · 权重 {{ v.weight }} ·
-          {{ v.enabled ? (v.online ? "在线" : "离线") : "已停用" }}</span
+          {{ v.enabled ? (v.online ? "在线" : "离线") : "已停用"
+          }}{{ v.udp ? " · 原生 UDP 已配置" : "" }}</span
         ><button @click="open(v)">编辑出口</button>
       </div>
       <div class="toolbar">
@@ -238,8 +251,53 @@ onMounted(load);
             type="password"
             autocomplete="new-password"
             :required="!form.id"
-            placeholder="编辑时留空保留既有凭据" /></label
-        ><label
+            placeholder="编辑时留空保留既有凭据"
+        /></label>
+        <label v-if="admin" class="check"
+          ><input
+            type="checkbox"
+            :checked="!!form.udp"
+            @change="
+              form.udp = ($event.target as HTMLInputElement).checked
+                ? {
+                    endpoint: '',
+                    server_name: form.tunnel.server_name,
+                    token: '',
+                    allow_tcp_fallback: false,
+                  }
+                : null
+            "
+          />启用原生 UDP 出口</label
+        >
+        <template v-if="admin && form.udp">
+          <label
+            >UDP 出口端点<input
+              v-model="form.udp.endpoint"
+              required
+              placeholder="exit.example.com:9443"
+          /></label>
+          <label
+            >UDP TLS 校验名称<input v-model="form.udp.server_name"
+          /></label>
+          <label
+            >UDP 出口凭据<input
+              v-model="form.udp.token"
+              type="password"
+              autocomplete="new-password"
+              placeholder="与出口监听凭据一致；编辑时留空保留"
+          /></label>
+          <label class="check"
+            ><input
+              v-model="form.udp.allow_tcp_fallback"
+              type="checkbox"
+            />允许不支持原生 UDP 的节点使用 TCP 隧道</label
+          >
+          <p class="muted small">
+            入口与出口支持原生 UDP 时使用 QUIC DATAGRAM。设备组高级设置中的 UDP
+            over TCP 可强制使用 TCP 隧道。
+          </p>
+        </template>
+        <label
           >选择权重<input
             v-model.number="form.weight"
             type="number"
@@ -261,7 +319,13 @@ onMounted(load);
       @close="groupDialog = false"
     >
       <p v-if="groupError" class="error" role="alert">{{ groupError }}</p>
-      <p class="muted small">设备组 {{ groupID }} 已创建。把下面的命令复制到你的出口机器上，注册成功后回到本页绑定出口设备。</p>
+      <p class="muted small">
+        设备组
+        {{
+          groupID
+        }}
+        已创建。把下面的命令复制到你的出口机器上，注册成功后回到本页绑定出口设备。
+      </p>
       <OnboardPanel :access-key="groupAccessKey" />
       <div class="form-actions">
         <button type="button" @click="groupDialog = false">完成</button>

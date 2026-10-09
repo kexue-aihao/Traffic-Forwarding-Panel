@@ -22,6 +22,9 @@ func (s *Server) persistUsageBatch(ctx context.Context, tx *sql.Tx, node string,
 	unique := []contract.UsageRecord{}
 	args := []any{}
 	for _, u := range records {
+		if !u.ValidWindowMetadata() {
+			return errors.New("invalid window usage metadata")
+		}
 		if u.NodeID != node || u.ID == "" || len(u.ID) > 128 || u.UploadBytes < 0 || u.DownloadBytes < 0 || u.UploadBytes > math.MaxInt64-u.DownloadBytes || u.StartedAt.IsZero() || u.EndedAt.Before(u.StartedAt) || u.EndedAt.After(time.Now().Add(time.Minute)) {
 			return errors.New("invalid usage record")
 		}

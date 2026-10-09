@@ -26,6 +26,9 @@ let createdKeys = [];
 let reconcileCalls = 0;
 let historyMode = "samples";
 let historyRequests = [];
+let exitEditingFixture = false;
+let savedNativeExit = null;
+let auditRuleFilter = "";
 const summerUTC = "2026-07-14T16:20:30.000Z";
 const winterUTC = "2026-01-15T16:20:30.000Z";
 let tokenExpiry = "";
@@ -170,6 +173,17 @@ const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = raw ? JSON.parse(raw) : {};
+    if (path === "/exits" && req.method === "POST") {
+      savedNativeExit = body;
+      return json({ ...body, id: "exit-native", version: 1, tunnel: { ...body.tunnel, token: "" }, udp: { ...body.udp, token: "" } }, 201);
+    }
+    if (path === "/exits") return json({ items: [], total: 0 });
+    if (path === "/groups" && exitEditingFixture) return json({ items: [{ ...group, id: "g-exit", type: "exit", name: "UDP exit fixture" }], total: 1 });
+    if (path === "/usage-audit") {
+      auditRuleFilter = url.searchParams.get("rule_id") || "";
+      const items = ["normal", "recovery"].map((kind, index) => ({ id: "a".repeat(32) + `:${index + 1}`, rule_id: "r1", lease_id: "lease-audit", entitlement_id:"audit-period", node_id: "n1", kind, window_id:"a".repeat(32), window_sequence:index+1, upload_bytes: "9007199254740993123", download_bytes: "0", started_at: winterUTC, ended_at: winterUTC }));
+      return json({ items: auditRuleFilter && auditRuleFilter !== "r1" ? [] : items, total: auditRuleFilter && auditRuleFilter !== "r1" ? 0 : items.length });
+    }
     if (path === "/nodes/n1/operations") return json({ items: probeOperations });
     if (path === "/nodes/n1/operation-access") return json({ token: "fixture-operation-token" }, 201);
     if (["/nodes/n1/shell", "/nodes/n1/uninstall"].includes(path)) {
@@ -425,6 +439,7 @@ async function pickOption(page, label, value) {
   const select = page.getByLabel(label).first();
   // evaluateAll 不像点击那样自动等待：页面或弹窗还在渲染时会读到空列表。
   await select.waitFor();
+  await select.locator(`option[value="${value}"]`).waitFor({ state: "attached" });
   const values = await select
     .locator("option")
     .evaluateAll((options) => options.map((o) => o.value));
@@ -453,6 +468,8 @@ try {
     probeOperations = [];
     historyMode = "samples";
     historyRequests = [];
+    exitEditingFixture = false;
+    savedNativeExit = null;
     const browser = await engine.launch({ headless: true });
     try {
       const page = await browser.newPage({ timezoneId: "America/New_York" });
@@ -636,6 +653,9 @@ try {
       const exitCommand = await page.getByLabel("设备接入命令").textContent();
       assert.match(exitCommand, /-m exit .* -q 'public-ip'/);
       assert.doesNotMatch(exitCommand, / -w /);
+      await page.getByLabel("启用原生 UDP 监听", { exact: true }).check();
+      await page.getByLabel("UDP 监听地址", { exact: true }).fill("0.0.0.0:9444");
+      assert.match(await page.getByLabel("设备接入命令").textContent(), / -D '0\.0\.0\.0:9444'/);
       await page.getByLabel("证书模式", { exact: true }).selectOption("auto");
       await page.getByLabel("出口域名", { exact: true }).waitFor();
       assert.equal(await page.getByLabel("设备接入命令").count(), 0);
@@ -687,6 +707,43 @@ try {
         assert.equal(await page.locator("dialog").count(), 0);
         assert.equal(rules.length, 0, "关闭新增规则不应保存草稿");
       }
+      // Native UDP is an administrator exit setting; the rule editor remains
+      // independent of the carrier. Verify the new fields reach the API.
+      exitEditingFixture = true;
+      await page.getByRole("link", { name: "出口管理", exact: true }).click();
+      await page.getByRole("button", { name: "新增出口", exact: true }).click();
+      await page.getByLabel("出口名称", { exact: true }).fill("Native UDP fixture");
+      await pickOption(page, "出口设备组", "g-exit");
+      await pickOption(page, "出口服务器", "n1");
+      await page.getByLabel("出口端点", { exact: true }).fill("exit.example:9443");
+      await page.getByLabel("TLS 服务器名称", { exact: true }).fill("exit.example");
+      await page.getByLabel("出口凭据", { exact: true }).fill("fixture-exit-token-012345");
+      await page.getByLabel("启用原生 UDP 出口", { exact: true }).check();
+      await page.getByLabel("UDP 出口端点", { exact: true }).fill("exit.example:9444");
+      await page.getByLabel("UDP 出口凭据", { exact: true }).fill("fixture-exit-token-012345");
+      assert.equal(await page.getByLabel("允许不支持原生 UDP 的节点使用 TCP 隧道").isChecked(), false);
+      await page.locator("dialog form").getByRole("button", { name: /保存/ }).click();
+      await page.locator("dialog").waitFor({ state: "detached" });
+      assert.equal(savedNativeExit.udp.endpoint, "exit.example:9444");
+      assert.equal(savedNativeExit.udp.server_name, "exit.example");
+      assert.equal(savedNativeExit.udp.allow_tcp_fallback, false);
+      exitEditingFixture = false;
+      await page.getByRole("link", { name: "计量审计", exact: true }).click();
+      await page.getByText("崩溃保守结算", { exact: true }).waitFor();
+      await page.getByText("普通放行计量", { exact: true }).waitFor();
+      await page.getByText("本页崩溃保守结算合计 9007199254740993123 B", { exact: true }).waitFor();
+      assert.match(await page.locator(".page").innerText(), /9007199254740993123 B/);
+      await page.getByLabel("规则 ID", { exact: true }).fill("r1");
+      await Promise.all([
+        page.waitForResponse(response => response.url().includes("/usage-audit?") && response.url().includes("rule_id=r1")),
+        page.getByRole("button", { name: "查询", exact: true }).click(),
+      ]);
+      assert.equal(auditRuleFilter, "r1");
+      for (const width of [320, 1440]) {
+        await page.setViewportSize({ width, height: 900 });
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `usage audit overflow at ${width}px`);
+      }
+      await page.getByRole("link", { name: "转发规则", exact: true }).click();
       await page.getByRole("button", { name: "新增", exact: true }).click();
       await page
         .getByLabel("名称", { exact: true })
@@ -1340,7 +1397,7 @@ try {
         [],
       );
       console.log(
-        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), rule creation closes without confirmation, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, recharge in yuan with channel fee, purchase, dropdown list clicks (page, dialog, diagnostics), themes, 401 PASS`,
+        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), native UDP exit and installer command, recovery usage audit, rule creation closes without confirmation, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, recharge in yuan with channel fee, purchase, dropdown list clicks (page, dialog, diagnostics), themes, 401 PASS`,
       );
     } finally {
       await browser.close();

@@ -387,7 +387,7 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, transport := range g.DisabledTransports {
-		if !contains([]string{"direct", "direct-tls", "secure-direct", "tls", "ws", "wss", "http"}, transport) {
+		if !contains([]string{"direct", "direct-tls", "secure-direct", "tls", "ws", "wss", "http", "quic"}, transport) {
 			fail(w, 400, "unsupported disabled transport")
 			return
 		}
@@ -608,6 +608,9 @@ func redact(rule *contract.Rule) {
 		rule.Tunnel = nil
 	}
 	rule.Lease = nil
+	rule.StandbyLease = nil
+	rule.UDP = nil
+	rule.LeasePipeline = false
 	if rule.Tunnel != nil {
 		rule.Tunnel.Token = ""
 		for i := range rule.Tunnel.Chain {
@@ -634,7 +637,7 @@ func (s *Server) allocateListen(ctx context.Context, tx *sql.Tx, groupPayload, n
 	for i := 0; i < span; i++ {
 		port := g.PortMin + (start+i)%span
 		var n int
-		if e := tx.QueryRowContext(ctx, s.q("SELECT COUNT(*) FROM cp_ports WHERE node_id=? AND network=? AND port=?"), node, network, port).Scan(&n); e != nil {
+		if e := tx.QueryRowContext(ctx, s.q("SELECT (SELECT COUNT(*) FROM cp_ports WHERE node_id=? AND network=? AND port=?)+(SELECT COUNT(*) FROM cp_exit_ports WHERE node_id=? AND network=? AND port=?)"), node, network, port, node, network, port).Scan(&n); e != nil {
 			return "", e
 		}
 		if n == 0 {
@@ -645,7 +648,7 @@ func (s *Server) allocateListen(ctx context.Context, tx *sql.Tx, groupPayload, n
 }
 
 func validateRule(rule contract.Rule) (int, error) {
-	if len(rule.Name) > 190 || strings.TrimSpace(rule.Name) == "" || !contains([]string{"tcp", "udp"}, rule.Network) || !contains([]string{"direct", "direct-tls", "secure-direct", "tls", "ws", "wss", "http"}, rule.Transport) {
+	if len(rule.Name) > 190 || strings.TrimSpace(rule.Name) == "" || !contains([]string{"tcp", "udp"}, rule.Network) || !contains([]string{"direct", "direct-tls", "secure-direct", "tls", "ws", "wss", "http", "quic"}, rule.Transport) {
 		return 0, errors.New("invalid name, network or transport")
 	}
 	host, p, e := net.SplitHostPort(rule.Listen)
@@ -698,7 +701,15 @@ func validateRule(rule contract.Rule) (int, error) {
 			return 0, fmt.Errorf("invalid secure-direct obfuscation: %w", err)
 		}
 	}
-	if rule.Transport != "direct" && rule.Transport != "direct-tls" && rule.Tunnel != nil {
+	if rule.Transport == "quic" {
+		if rule.Network != "udp" || rule.Tunnel == nil || rule.Tunnel.Mux || rule.Tunnel.Reverse != "" || len(rule.Tunnel.Chain) > 0 {
+			return 0, errors.New("QUIC DATAGRAM requires single-exit UDP")
+		}
+		if e := contract.ValidateUDPExit(&contract.UDPExit{Endpoint: rule.Tunnel.Endpoint, ServerName: rule.Tunnel.ServerName, Token: rule.Tunnel.Token}); e != nil {
+			return 0, e
+		}
+	}
+	if rule.Transport != "direct" && rule.Transport != "direct-tls" && rule.Transport != "quic" && rule.Tunnel != nil {
 		if e := tunnel.ValidateChain(contract.TunnelHop{Transport: rule.Transport, Endpoint: rule.Tunnel.Endpoint, ServerName: rule.Tunnel.ServerName, Token: rule.Tunnel.Token}, rule.Tunnel.Chain); e != nil {
 			return 0, e
 		}
@@ -738,6 +749,17 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 	reply(w, status, rule)
 }
 func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User, rule *contract.Rule, create bool) error {
+	query := "SELECT id FROM cp_nodes WHERE id=?"
+	if s.Store.Dialect != "sqlite" {
+		query += " FOR UPDATE"
+	}
+	var lockedNode string
+	if e := tx.QueryRowContext(ctx, s.q(query), rule.NodeID).Scan(&lockedNode); e != nil {
+		return e
+	}
+	rule.StandbyLease = nil
+	rule.UDP = nil
+	rule.LeasePipeline = false
 	oldVersion := rule.Version
 	// 分类存在列里，不进 payload —— 那是发给 Agent 的配置，归类和它无关。
 	rule.Category = ""
@@ -777,6 +799,7 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 			}
 		}
 		rule.Lease = old.Lease
+		rule.StandbyLease = old.StandbyLease
 	}
 	exitMultiplier, e := s.resolveExitTx(ctx, tx, rule)
 	if e != nil {
@@ -806,6 +829,13 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 	if e != nil {
 		return e
 	}
+	var reservedExit int
+	if e := tx.QueryRowContext(ctx, s.q("SELECT COUNT(*) FROM cp_exit_ports WHERE node_id=? AND network=? AND port=?"), rule.NodeID, rule.Network, port).Scan(&reservedExit); e != nil {
+		return e
+	}
+	if reservedExit > 0 {
+		return errors.New("physical port reserved by exit listener")
+	}
 	var g contract.Group
 	if e = json.Unmarshal([]byte(payload), &g); e != nil {
 		return e
@@ -823,6 +853,7 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 	}
 	if !create && (previousMultiplier != rule.BillingMultiplier || old.ExitGroupID != rule.ExitGroupID || old.SelectedExitID != rule.SelectedExitID) {
 		rule.Lease = nil
+		rule.StandbyLease = nil
 	}
 	if create {
 		if e = s.checkRuleLimit(ctx, tx, rule.UserID, g); e != nil {

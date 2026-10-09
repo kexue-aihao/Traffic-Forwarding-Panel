@@ -147,6 +147,7 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request) {
 		// those records independently of the removed rule tombstones.
 		for _, query := range []string{
 			"DELETE FROM cp_rules WHERE group_id=? AND deleted=1",
+			"DELETE FROM cp_exit_ports WHERE exit_id IN(SELECT id FROM cp_exits WHERE group_id=?)",
 			"DELETE FROM cp_exits WHERE group_id=?",
 			"DELETE FROM cp_node_groups WHERE group_id=?",
 			"DELETE FROM cp_group_users WHERE group_id=?",

@@ -63,6 +63,7 @@ func run() error {
 	ca := flag.String("ca", "", "PEM root CA for panel and tunnel certificate validation")
 	listen := flag.String("listen", "127.0.0.1:9443", "exit listening address")
 	transport := flag.String("transport", "tls", "exit transport: tls/ws/wss/http/secure-direct")
+	udpListen := flag.String("udp-listen", "", "optional single-exit QUIC DATAGRAM listening address (UDP)")
 	cert := flag.String("cert", "", "exit PEM certificate")
 	key := flag.String("key", "", "exit PEM private key")
 	allow := flag.String("allow", "", "authorized reverse carrier identities e.g. reverse|exit-a; legacy tcp/udp destinations are ignored")
@@ -114,6 +115,26 @@ func run() error {
 		if e != nil {
 			return e
 		}
+		udpErrors := make(chan error, 1)
+		if *udpListen != "" {
+			if *mode != "exit" || len(hops) > 0 {
+				return errors.New("-udp-listen requires an ordinary single exit")
+			}
+			ds := &tunnel.DatagramServer{TLS: s.TLS, Token: s.Token}
+			defer ds.Close()
+			if e := ds.Listen(*udpListen); e != nil {
+				return e
+			}
+			go func() {
+				if err := ds.ServeBound(); err != nil && ctx.Err() == nil {
+					udpErrors <- err
+					log.Printf("UDP exit: %v", err)
+					stop()
+					s.Close()
+				}
+			}()
+			go func() { <-ctx.Done(); ds.Close() }()
+		}
 		l, e := net.Listen("tcp", *listen)
 		if e != nil {
 			return e
@@ -127,6 +148,11 @@ func run() error {
 		log.Printf("%s %s listening on %s", *mode, serveTransport, l.Addr())
 		e = s.Serve(l, serveTransport)
 		if ctx.Err() != nil {
+			select {
+			case udpErr := <-udpErrors:
+				return udpErr
+			default:
+			}
 			return nil
 		}
 		return e

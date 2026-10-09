@@ -170,6 +170,9 @@ func main() {
 	model("Health", schema{"status": str, "database": str, "version": num}, "status", "database", "version")
 	model("Audit", schema{"id": str, "user_id": str, "action": str, "target": str, "created_at": date}, "id", "user_id", "action", "target", "created_at")
 	model("RetireLease", schema{"lease_id": str, "used_bytes": money}, "lease_id", "used_bytes")
+	model("LeasePrefetch", schema{"rule_id": str, "lease_id": str, "raw_budget": money}, "rule_id", "lease_id", "raw_budget")
+	model("LeasePrefetched", schema{"lease_id": str}, "lease_id")
+	model("UsageAuditPage", schema{"items": array(ref("UsageRecord")), "total": num}, "items", "total")
 	model("UsageAccepted", schema{"accepted": ids}, "accepted")
 	model("DiagnosticCheck", schema{"name": str, "ok": flag, "detail": str}, "name", "ok", "detail")
 	model("Diagnostic", schema{"rule_id": str, "node_id": str, "desired_version": num, "applied_version": num, "generated_at": date, "checks": array(ref("DiagnosticCheck"))}, "rule_id", "node_id", "desired_version", "applied_version", "generated_at", "checks")
@@ -380,6 +383,8 @@ func main() {
 		{"POST", "/agent/probe", "Probe", "", "204", "node", "Submit actual probe observations", false},
 		{"POST", "/agent/usage", "UsageBatch", "UsageAccepted", "200", "node", "At most 500 usage facts; acknowledge only after durable settlement", false},
 		{"POST", "/agent/leases/retire", "RetireLease", "", "204", "node", "Retire lease only after final usage is settled", false},
+		{"POST", "/agent/leases/prefetch", "LeasePrefetch", "LeasePrefetched", "200", "node", "Reserve bounded standby quota before the active lease runs out", false},
+		{"GET", "/usage-audit", "", "UsageAuditPage", "200", "admin", "Audit normal and conservative crash usage facts", true},
 		{"POST", "/agent/control", "", "Control", "200", "node", "Claim one authorized node operation", false},
 		{"POST", "/agent/control/result", "OperationResult", "", "204", "node", "Report operation completion", false},
 		{"GET", "/agent/control/{id}/terminal", "", "", "101", "node", "Agent-side terminal WebSocket", false},
@@ -467,6 +472,9 @@ func main() {
 			for _, name := range []string{"page", "page_size"} {
 				params = append(params, schema{"name": name, "in": "query", "schema": schema{"type": "integer", "minimum": 1}, "description": "page starts at 1; page_size defaults to 20, capped at 100"})
 			}
+		}
+		if r.path == "/usage-audit" {
+			params = append(params, schema{"name": "rule_id", "in": "query", "schema": schema{"type": "string", "maxLength": 64}, "description": "Optional exact rule ID; empty returns all visible audit facts"})
 		}
 		if r.method != "GET" && r.auth != "public" && r.auth != "provider" && r.auth != "node" && r.auth != "agent" {
 			params = append(params, schema{"name": "X-Requested-With", "in": "header", "schema": schema{"const": "fetch"}, "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt"})

@@ -58,6 +58,8 @@ function randomToken() {
 const exitToken = ref(randomToken());
 const serverName = ref("");
 const listen = ref("0.0.0.0:9443");
+const nativeUDP = ref(false);
+const udpListen = ref("0.0.0.0:9443");
 const transport = ref("tls");
 const obfuscation = ref("random-padding");
 const certMode = ref("provided");
@@ -82,8 +84,13 @@ const exitCommand = computed(
     `bash <(curl -fLsS ${origin}/download/agent-install.sh) -t '${props.accessKey}' -u '${origin}' -m ${mode.value === "secure-direct" ? "secure-direct" : "exit"}` +
     (publicIP.value ? "" : ` -S '${serverName.value.trim()}'`) +
     ` -e '${exitToken.value}'` +
-    (certMode.value === "provided" ? ` -C '${certPath.value}' -K '${keyPath.value}'` : ` -q '${certMode.value}'`) +
+    (certMode.value === "provided"
+      ? ` -C '${certPath.value}' -K '${keyPath.value}'`
+      : ` -q '${certMode.value}'`) +
     ` -l '${listen.value}' -p '${mode.value === "secure-direct" ? "secure-direct" : transport.value}'` +
+    (mode.value === "exit" && nativeUDP.value
+      ? ` -D '${udpListen.value}'`
+      : "") +
     (mode.value === "secure-direct" ? ` -O '${obfuscation.value}'` : ""),
 );
 const exitTokenCopied = ref(false);
@@ -152,16 +159,28 @@ async function copyExitToken() {
       </p>
       <div class="onboard-grid">
         <label v-if="!publicIP"
-          >{{ mode === 'secure-direct' ? '目标设备服务名' : '出口域名' }}（证书必须覆盖它）
+          >{{
+            mode === "secure-direct" ? "目标设备服务名" : "出口域名"
+          }}（证书必须覆盖它）
           <input
             v-model="serverName"
-            :placeholder="mode === 'secure-direct' ? 'target.example.com' : 'exit.example.com'"
-            :aria-label="mode === 'secure-direct' ? '目标设备服务名' : '出口域名'"
+            :placeholder="
+              mode === 'secure-direct'
+                ? 'target.example.com'
+                : 'exit.example.com'
+            "
+            :aria-label="
+              mode === 'secure-direct' ? '目标设备服务名' : '出口域名'
+            "
           />
         </label>
         <label
           >承载
-          <Select v-model="transport" aria-label="出口承载" :disabled="mode === 'secure-direct'">
+          <Select
+            v-model="transport"
+            aria-label="出口承载"
+            :disabled="mode === 'secure-direct'"
+          >
             <option value="tls">tls</option>
             <option value="ws">ws</option>
             <option value="wss">wss</option>
@@ -196,6 +215,12 @@ async function copyExitToken() {
           >监听地址
           <input v-model="listen" aria-label="监听地址" />
         </label>
+        <label v-if="mode === 'exit'" class="check"
+          ><input v-model="nativeUDP" type="checkbox" />启用原生 UDP 监听</label
+        >
+        <label v-if="mode === 'exit' && nativeUDP"
+          >UDP 监听地址<input v-model="udpListen" aria-label="UDP 监听地址"
+        /></label>
         <label
           >出口令牌（至少 16 字符）
           <input v-model="exitToken" aria-label="出口令牌" />
@@ -205,12 +230,7 @@ async function copyExitToken() {
         转发目标在转发规则中配置，协议嗅探与禁用通过设备组的高级设置配置。私钥保存在目标设备上，面板不保存私钥。
       </p>
 
-      <OnboardCommand
-        v-if="exitReady"
-        :command="exitCommand"
-        manual=""
-        fixed
-      >
+      <OnboardCommand v-if="exitReady" :command="exitCommand" manual="" fixed>
         <template #after>
           <div class="actions">
             <button type="button" @click="copyExitToken">
@@ -223,11 +243,14 @@ async function copyExitToken() {
         </template>
       </OnboardCommand>
       <p v-if="mode === 'secure-direct'" class="muted small">
-        安全直连需要在目标设备上同时运行注册 Agent 和直连服务；上面的安装命令会自动完成两者。
+        安全直连需要在目标设备上同时运行注册 Agent
+        和直连服务；上面的安装命令会自动完成两者。
         手动启动单个出口进程不会把设备注册到控制台。
       </p>
       <p v-if="!exitReady" class="empty">
-        填好{{ mode === 'secure-direct' ? '目标设备服务名' : '出口域名' }}后生成命令。
+        填好{{
+          mode === "secure-direct" ? "目标设备服务名" : "出口域名"
+        }}后生成命令。
       </p>
     </template>
   </div>

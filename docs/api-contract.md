@@ -59,6 +59,7 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 | GET /online/device/ip/list | 可选 `group_id` | `{items:[DeviceIP],total}`；一组多台时用它。**一台设备一条记录**，机器被换掉/少了一族地址都只体现在同一份列表里，调用方无需改代码 |
 | GET /probes/{node_id}/history | `resolution=minute\|hour&from=RFC3339&to=RFC3339` | 授权节点聚合历史；无权限与节点不存在均404 |
 | GET /audit | 分页 | 管理员审计列表 |
+| GET /usage-audit | 分页，可选 `rule_id` | 管理员读取不可变用量事实；`kind=normal|recovery`，窗口 ID/序号和原权益周期；历史记录无 kind |
 | GET /health | 无 | `{status,database,version}`，不含 DSN |
 | POST /agent/register | Registration | Registered |
 | GET /agent/config | 节点 Bearer | Config；最长 24 小时并受有效期/配额限制 |
@@ -66,6 +67,7 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 | POST /agent/probe | Probe | 204，身份绑定 node_id |
 | POST /agent/usage | UsageBatch | `{accepted: [id...]}`；持久化后确认 |
 | POST /agent/leases/retire | `{lease_id,used_bytes}` | 204；最终用量必须已全部结算，重复相同退租安全 |
+| POST /agent/leases/prefetch | `{rule_id,lease_id,raw_budget}`，字节为整数字符串 | `lease-set-v1` 节点提前预留有限备用租约，返回 `{lease_id}`；没有可用预算时空 ID，配置/租约已变更 409，策略禁止 403 |
 | POST /nodes/{id}/operation-access | `{password}` 或 `{scope:"shell"}` | 返回 15 分钟节点运维 token。WebSSH 只发 `scope:"shell"`、不发密码，换来的授权只能开终端；卸载与升级要 `password`（scope 缺省即 sensitive）。两者给其一即可 |
 | POST /nodes/{id}/terminal | `{access_token,idempotency_key}` | 创建审计终端任务；节点需声明 `terminal-v1` |
 | POST /nodes/{id}/upgrade | `{access_token,idempotency_key,upgrade}` | 创建签名升级任务；Agent 校验 HTTPS、SHA-256、Ed25519 和平台 |
@@ -79,7 +81,9 @@ YAML 启动配置可另外设置 `user-rate-limit`（按账号）和 `default-ra
 
 共享 Go 类型见 `internal/contract/types.go`。探针实时接口先实现 SSE；WebSocket 作为后续相同权限语义传输适配，不能混称隧道 WSS。
 
-当前 Agent 的配置与探针默认各每5秒同步，用量每1秒或待报记录达到100条时主动上报，每批最多500条；三者独立运行，单通道失败不会阻止其他通道。租约退还成功后立即触发配置拉取。仅租约/配置有效期刷新保留现有连接，后续计量切换到当前租约；退租仍须先持久停止旧租约并确认全部用量。TCP 遇到临时额度/待报队列不足最多等待30秒，UDP 丢弃当前未计费报文并保留会话，不使用过期或未签发额度。详细时序及边界见 [流量连续性修复](traffic-continuity.md)。这些改动保持现有 API 与 WAL 格式兼容。
+当前 Agent 的配置与探针默认各每5秒同步，用量每1秒或待报记录达到100条时主动上报，每批最多500条；三者独立运行，单通道失败不会阻止其他通道。租约退还成功后立即触发配置拉取。仅租约/配置有效期刷新保留现有连接，后续计量切换到当前租约；退租仍须先持久停止旧租约并确认全部用量。TCP 遇到临时额度/待报队列不足最多等待30秒，UDP 丢弃当前未计费报文并保留会话，不使用过期或未签发额度。详细时序及边界见 [流量连续性修复](traffic-continuity.md)。UDP 改进新增可选能力 `udp-credit-v1`、`udp-datagram-v1`、`lease-set-v1`，配置包含 `udp`、`standby_lease` 和 `lease_pipeline`；旧节点不接收这些字段。新 Agent 使用 WAL 2，可向前迁移旧状态，不能直接二进制降级读取新 WAL，见 [UDP 实现与升级说明](udp-performance-implementation.md)。
+
+普通单出口可由管理员配置 `Exit.udp={endpoint,server_name,token,allow_tcp_fallback}`；凭据仅下发指定 Agent，不出现在列表或保存响应中。两端支持时 UDP 规则实际承载为 `quic`；设备组 `udp_over_tcp` 强制已有 TCP 隧道。无能力节点仅在显式允许时兼容回退；UDP 网络故障不静默回退。规则创建/编辑表单不增加转发方式选择。
 
 `DeviceIP`：`{group_name,ipv4?,ipv6?}`。`group_name` 是**设备组名**（不是机器自报的主机名）—— 客户脚本按设备组认机器。**一台设备一条记录**，两个地址各取该节点最近一次的观测值：只有一族时只出现那一个字段，两族都有就都给 —— 客户脚本不必先判断机器是单栈还是双栈。地址是 Agent 上报的观测值而不是面板主动探测，机器没上报过地址时两个字段都不出现，客户端要能接受缺失（包含 `group_name` 在内，只有它为必填）。接口带 `Authorization: Bearer <API Token>`，也接受同源 Cookie 会话；`/online/device/ip` 与 `/online/device/ip/list` 两个不带 `/api/v1` 前缀的路径是为客户脚本保留的稳定入口，与带前缀的同名接口等价。
 

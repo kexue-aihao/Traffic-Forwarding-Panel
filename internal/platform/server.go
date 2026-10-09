@@ -358,6 +358,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/register", s.registerUser)
 	mux.HandleFunc("POST /api/v1/registration-invites", s.admin(s.registrationInvite))
 	mux.HandleFunc("GET /api/v1/exits", s.RequireUser(s.exits))
+	mux.HandleFunc("GET /api/v1/usage-audit", s.admin(s.usageAudit))
 	mux.HandleFunc("POST /api/v1/exits", s.admin(s.saveExit))
 	mux.HandleFunc("PUT /api/v1/exits/{id}", s.admin(s.saveExit))
 	mux.HandleFunc("POST /api/v1/my-exits", s.RequireUser(s.saveExit))
@@ -365,6 +366,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/auth/tokens", s.RequireUser(s.listTokens))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/rotate-token", s.admin(s.rotateNodeToken))
 	mux.HandleFunc("POST /api/v1/agent/leases/retire", s.agent(s.retireLease))
+	mux.HandleFunc("POST /api/v1/agent/leases/prefetch", s.agent(s.prefetchLease))
 	mux.HandleFunc("POST /api/v1/auth/tokens", s.RequireUser(s.createToken))
 	mux.HandleFunc("DELETE /api/v1/auth/tokens/{id}", s.RequireUser(s.revokeToken))
 	// 管理员给账号发凭据：建完账号拿到密钥交给用户，事后能看、能重置、能撤。

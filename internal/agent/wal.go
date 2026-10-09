@@ -15,14 +15,14 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
 
-const walVersion = 1
+const walVersion = 2
 const walHeaderSize = 20
 const recordHeaderSize = 24
 const maxWALRecord = 4 << 20
 const maxSnapshot = 64 << 20
 const walCheckpointBytes = 8 << 20
 
-var walMagic = []byte("TFPWAL01")
+var walMagic = []byte("TFPWAL02")
 var recordMagic = []byte("EV01")
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
@@ -66,6 +66,9 @@ func encodeRecord(seq uint64, event stateEvent) ([]byte, error) {
 	return b, nil
 }
 func (s *Store) initializeMaps() {
+	if s.state.Windows == nil {
+		s.state.Windows = map[string]creditWindow{}
+	}
 	if s.state.Used == nil {
 		s.state.Used = map[string]int64{}
 	}
@@ -76,9 +79,11 @@ func (s *Store) initializeMaps() {
 		s.state.Leases = map[string]contract.Lease{}
 	}
 	for _, r := range s.state.Config.Rules {
-		if r.Lease != nil {
-			if _, ok := s.state.Leases[r.Lease.ID]; !ok {
-				s.state.Leases[r.Lease.ID] = *r.Lease
+		for _, l := range ruleLeases(r) {
+			if l != nil {
+				if _, ok := s.state.Leases[l.ID]; !ok {
+					s.state.Leases[l.ID] = *l
+				}
 			}
 		}
 	}
@@ -102,9 +107,10 @@ func (s *Store) openDurable() error {
 			}
 		} else {
 			versioned = true
-			if c.Version != walVersion || checksum(c.Sequence, c.State) != c.CRC {
+			if (c.Version != 1 && c.Version != walVersion) || checksum(c.Sequence, c.State) != c.CRC {
 				return errors.New("unsupported or corrupt checkpoint")
 			}
+			legacy = c.Version == 1
 			s.seq = c.Sequence
 			if e = json.Unmarshal(c.State, &s.state); e != nil {
 				return e
@@ -114,8 +120,8 @@ func (s *Store) openDurable() error {
 		return e
 	}
 	s.initializeMaps()
-	if len(s.state.Pending) > MaxPendingRecords {
-		return errors.New("usage spool over limit")
+	if e = s.validateSnapshot(); e != nil {
+		return e
 	}
 	file, e := os.OpenFile(s.path+".wal", os.O_RDWR, 0600)
 	if os.IsNotExist(e) {
@@ -129,9 +135,16 @@ func (s *Store) openDurable() error {
 		return e
 	} else {
 		s.wal = file
+		var magic [8]byte
+		if _, readErr := file.ReadAt(magic[:], 0); readErr == nil && bytes.Equal(magic[:], []byte("TFPWAL01")) {
+			legacy = true
+		}
 		if e = s.replay(); e != nil {
 			return e
 		}
+	}
+	if e = s.validateSnapshot(); e != nil {
+		return e
 	}
 	if legacy {
 		return s.checkpointLocked()
@@ -151,7 +164,7 @@ func (s *Store) replay() error {
 	if _, e = s.wal.ReadAt(header, 0); e != nil {
 		return e
 	}
-	if !bytes.Equal(header[:8], walMagic) || binary.BigEndian.Uint32(header[16:]) != crc32.Checksum(header[:16], crcTable) {
+	if (!bytes.Equal(header[:8], walMagic) && !bytes.Equal(header[:8], []byte("TFPWAL01"))) || binary.BigEndian.Uint32(header[16:]) != crc32.Checksum(header[:16], crcTable) {
 		return errors.New("corrupt or unsupported WAL header")
 	}
 	base := binary.BigEndian.Uint64(header[8:16])
@@ -335,6 +348,7 @@ func syncDirectory(path string) error {
 	return dir.Sync()
 }
 func (s *Store) checkpointLocked() error {
+	s.pruneLeaseHistoryLocked()
 	state, e := json.Marshal(s.state)
 	if e != nil {
 		return e

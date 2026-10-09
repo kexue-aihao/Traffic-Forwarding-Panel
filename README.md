@@ -1,8 +1,8 @@
 # Traffic-Forwarding-Panel
 
-Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP 和 secure-direct 五种加密承载。
+Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP、secure-direct 和单出口 QUIC DATAGRAM 加密承载。
 
-当前版本为正式版 `v0.1.37`。安装包、更新范围及构建方式见 [发布说明](docs/releases/v0.1.37.md)。已实现内容、实测记录和未完成项见 [实施状态](docs/implementation-status.md)；完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持对已有 Docker 安装自动备份并升级；[租约切换保留连接与独立同步](docs/traffic-continuity.md) 需要升级入口 Agent 才生效。Cyber 按用户要求跳过；生产容量及 Linux/公网/真实支付仍待验收。
+当前版本为正式版 `v0.1.38`。安装包、更新范围及升级注意事项见 [发布说明](docs/releases/v0.1.38.md)。本版增加直连 UDP 优化、单出口 QUIC DATAGRAM、额度窗口与恢复审计，以及 Debian/Ubuntu、Red Hat、Arch 系列接入脚本兼容处理。需要更新入口与出口 Agent；Agent WAL 2 状态不能直接交给旧版读取。[UDP 实现与验收边界](docs/udp-performance-implementation.md) 明确区分功能测试和待测性能；Linux 跨机吞吐/P99 与 24 小时稳定性尚未验收。已实现内容见 [实施状态](docs/implementation-status.md)，完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持已有 Docker 安装自动备份并升级。Cyber 按用户要求跳过；生产容量、公网和真实支付仍待验收。
 
 ## 本机启动
 
@@ -66,7 +66,7 @@ Docker 部署也可以下载 [综合管理脚本](docs/docker-deployment.md#综�
 
 ## Agent、支付和接口
 
-- [Agent 安装与四承载示例](examples/agent-README.md)：入口 Agent 可用控制台生成的一条命令接入（下载、装 systemd 服务、注册），注册后拉取配置；出口需提供证书和凭据，目标由转发规则指定；WS/HTTP 内层同样使用 TLS，禁止证书验证降级。
+- [Agent 安装与四承载示例](examples/agent-README.md)：入口 Agent 可用控制台生成的一条命令接入（下载、装 systemd 服务、注册），注册后拉取配置；出口需提供证书和凭据，目标由转发规则指定；WS/HTTP 内层同样使用 TLS，禁止证书验证降级。接入脚本支持 Debian/Ubuntu、Red Hat 与 Arch 系列，要求和验证范围见 [Linux 兼容性说明](docs/agent-linux-compatibility.md)。
 - [支付配置示例](examples/payments.example.json)：复制到仓库外的受保护文件，填写商户资料，以 `-payments /path/payments.json -origin https://panel.example.com` 启动。示例占位值不能直接付款。
 - [支付协议与固定版本](docs/payment/protocol-sources.md)、[支付实现边界](docs/payment/implementation-status.md)：已接入的渠道仍需分别验证真实商户；Cyber 已跳过。
 - [API 契约](docs/api-contract.md)：浏览器使用 Cookie；自动化使用独立 API Token（权限固定为所有者资源）。管理员建号后即可在「用户管理」里签发凭据交给用户：明文只在创建或重置的那一次显示，之后连管理员也取不回来，遗失只能重置；有效期可选有限时长或永久。

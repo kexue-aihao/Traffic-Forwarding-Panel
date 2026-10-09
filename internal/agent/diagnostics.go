@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"time"
 
@@ -13,18 +14,41 @@ func (a *Agent) diagnosticChecks(ctx context.Context, d contract.Diagnostic) []c
 	var rule *contract.Rule
 	cfg := a.Store.Config()
 	for _, r := range cfg.Rules {
-		if r.ID == d.RuleID && r.Version == d.RuleVersion && r.Enabled && r.Network == "tcp" && a.Store.Available(r, cfg.ValidUntil) == nil {
+		if r.ID == d.RuleID && r.Version == d.RuleVersion && r.Enabled && a.Store.Available(r, cfg.ValidUntil) == nil {
 			v := r
 			rule = &v
 			break
 		}
 	}
 	checks = append(checks, contract.DiagnosticCheck{Stage: "entry_config", OK: rule != nil})
+	if stats, ok := a.Runtime.UDPStats()[d.RuleID]; ok {
+		detail, _ := json.Marshal(stats)
+		checks = append(checks, contract.DiagnosticCheck{Stage: "udp_counters", OK: true, Detail: string(detail)})
+	}
 	if rule == nil {
 		return checks
 	}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
+	if rule.Network == "udp" {
+		if rule.Transport == "quic" {
+			stats, _ := json.Marshal(a.Runtime.Datagrams.Stats())
+			checks = append(checks, contract.DiagnosticCheck{Stage: "udp_carrier_counters", OK: true, Detail: string(stats)})
+			start := time.Now()
+			conn, e := a.Runtime.Datagrams.Dial(ctx, a.Runtime.Client.TLS, rule.Tunnel.Endpoint, rule.Tunnel.ServerName, rule.Tunnel.Token, rule.Target)
+			if conn != nil {
+				conn.Close()
+			}
+			checks = append(checks, contract.DiagnosticCheck{Stage: "udp_datagram", OK: e == nil, Milliseconds: time.Since(start).Milliseconds(), Detail: "QUIC DATAGRAM session; target UDP delivery requires an application response"})
+		} else {
+			detail := "UDP over TCP"
+			if rule.Transport == "direct" {
+				detail = "direct UDP"
+			}
+			checks = append(checks, contract.DiagnosticCheck{Stage: "udp_transport", OK: true, Detail: detail + "; target delivery requires an application response"})
+		}
+		return checks
+	}
 	if rule.Transport == "direct" {
 		host, port, _ := net.SplitHostPort(rule.Target)
 		start := time.Now()

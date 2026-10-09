@@ -23,7 +23,7 @@ def shell_path(path):
     return "/" + value[0].lower() + value[2:] if os.name == "nt" else value
 
 
-class CertificateInstallerTests(unittest.TestCase):
+class InstallerSandbox(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="tfp-certificate-test-")
         self.addCleanup(self.temp.cleanup)
@@ -32,10 +32,14 @@ class CertificateInstallerTests(unittest.TestCase):
         self.bin.mkdir()
         for path in ("etc/systemd/system", "usr/local/bin", "etc/tfp-agent", "var/lib/tfp-agent"):
             (self.root / path).mkdir(parents=True, exist_ok=True)
-        self.env = dict(os.environ, TFP_TEST_ROOT=shell_path(self.root), FAKE_IP4="8.8.8.8", FAKE_IP6="", MSYS_NO_PATHCONV="1")
+        self.ca_bundle = self.root / "system-ca.pem"
+        self.ca_bundle.write_text("fixture CA", encoding="utf-8")
+        (self.root / "etc/os-release").write_text('ID=ubuntu\nID_LIKE=debian\nPRETTY_NAME="Ubuntu fixture"\n', encoding="utf-8")
+        self.env = dict(os.environ, TFP_TEST_ROOT=shell_path(self.root), FAKE_IP4="8.8.8.8", FAKE_IP6="", MSYS_NO_PATHCONV="1", SSL_CERT_FILE=shell_path(self.ca_bundle), CURL_CA_BUNDLE="")
         self.mock("id", "echo 0")
-        self.mock("uname", 'if [ "$1" = -s ]; then echo Linux; else echo x86_64; fi')
+        self.mock("uname", 'case "$1" in -s) echo Linux ;; -n) echo fixture-node ;; *) echo "${FAKE_ARCH:-x86_64}" ;; esac')
         self.mock("journalctl", "exit 0")
+        self.mock("restorecon", 'printf "%s\\n" "$*" >> "$TFP_TEST_ROOT/restorecon.log"')
         if os.name == "nt":
             self.mock("chmod", "exit 0")
             self.mock("install", r'''
@@ -46,6 +50,8 @@ done
 if [ "$directory" = 1 ]; then mkdir -p "$@"; else cp "$1" "$2"; fi
 ''')
         self.mock("curl", r'''
+printf '%s\n' "$*" >> "$TFP_TEST_ROOT/curl.log"
+if [ "${PRIVATE_CA:-0}" = 1 ] && [[ "$*" == *https://panel.example.com* ]] && [[ "$*" != *--cacert* ]]; then exit 60; fi
 case "$*" in
   *https://api.ipify.org*) [ -n "$FAKE_IP4" ] || exit 1; printf '%s' "$FAKE_IP4"; exit ;;
   *https://api6.ipify.org*) [ -n "$FAKE_IP6" ] || exit 1; printf '%s' "$FAKE_IP6"; exit ;;
@@ -82,7 +88,7 @@ printf 'fixture key' > "$config/live/$name/privkey.pem"
 if [ "${1:-}" = -m ] && [ "${2:-}" = venv ]; then
   mkdir -p "$3/bin"
   cp "$(command -v certbot)" "$3/bin/certbot"
-  cp "$(command -v python3)" "$3/bin/python"
+  cp "$0" "$3/bin/python"
   exit
 fi
 if [ "${1:-}" = -m ] && [ "${2:-}" = pip ]; then
@@ -96,6 +102,7 @@ if [ "${FAIL_TIMER:-0}" = 1 ] && [[ "$*" == 'is-active --quiet tfp-cert-renew.ti
 if [[ "$*" == 'restart tfp-agent.service' ]]; then
   printf '{"kind":"identity"}' > "$TFP_TEST_ROOT/var/lib/tfp-agent/agent-state.json"
 fi
+if [ "${NO_SYSTEMD:-0}" = 1 ] && [[ "$*" == 'show --property=Version' ]]; then exit 1; fi
 ''')
 
     def mock(self, name, body):
@@ -103,19 +110,22 @@ fi
         path.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + body + "\n", encoding="utf-8", newline="\n")
         path.chmod(0o755)
 
-    def run_script(self, name="agent-install.sh", extra=(), env=None):
+    def run_script(self, name="agent-install.sh", extra=(), env=None, args=None, prelude=""):
         script = (ROOT / "internal/agentdist" / name).read_text(encoding="utf-8")
-        for prefix in ("/etc/systemd/system", "/etc/tfp-agent", "/var/lib/tfp-agent", "/var/log/tfp-agent-acme", "/usr/local/bin/tfp-agent"):
+        for prefix in ("/etc/systemd/system", "/etc/tfp-agent", "/var/lib/tfp-agent", "/var/log/tfp-agent-acme", "/usr/local/bin/tfp-agent", "/etc/os-release", "/usr/lib/os-release", "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem"):
             script = script.replace(prefix, shell_path(self.root) + prefix)
         staged = self.root / name
-        staged.write_text(script, encoding="utf-8", newline="\n")
-        args = [] if name == "agent-uninstall.sh" else ["-t", "fixture-key", "-u", "https://panel.example.com", "-m", "secure-direct", "-q", "public-ip", "-e", "fixture-exit-token", "-p", "secure-direct", "-O", "random-padding"]
+        staged.write_text(prelude + script, encoding="utf-8", newline="\n")
+        if args is None:
+            args = [] if name == "agent-uninstall.sh" else ["-t", "fixture-key", "-u", "https://panel.example.com", "-m", "secure-direct", "-q", "public-ip", "-e", "fixture-exit-token", "-p", "secure-direct", "-O", "random-padding"]
         command = 'export PATH=' + shlex.quote(shell_path(self.bin)) + ':"$PATH"; exec bash ' + shlex.quote(shell_path(staged)) + " " + shlex.join(args + list(extra))
         return subprocess.run([BASH, "-c", command], capture_output=True, text=True, encoding="utf-8", errors="replace", env=dict(self.env, **(env or {})), timeout=30)
 
     def success(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+
+class CertificateInstallerTests(InstallerSandbox):
     def test_exit_modes_install_without_target_allowlist(self):
         for mode, transport in (("exit", "tls"), ("secure-direct", "secure-direct")):
             with self.subTest(mode=mode):

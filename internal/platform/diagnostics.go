@@ -43,8 +43,8 @@ func (s *Server) createDiagnostic(w http.ResponseWriter, r *http.Request) {
 		if !visible {
 			return sql.ErrNoRows
 		}
-		if rule.Network != "tcp" {
-			return errors.New("TCP diagnostic required; UDP connect alone cannot prove reachability")
+		if rule.Network != "tcp" && rule.Network != "udp" {
+			return errors.New("unsupported diagnostic network")
 		}
 		if seen == 0 || time.Now().Unix()-seen > 90 || !rule.Enabled {
 			return errors.New("online node and enabled rule required")

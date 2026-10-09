@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
@@ -16,13 +17,17 @@ import (
 )
 
 type Runtime struct {
-	mu        sync.Mutex
-	Store     *Store
-	Client    tunnel.Client
-	listeners map[string]*binding
-	pools     map[string]*resourcePool
-	version   int64
-	closed    bool
+	mu              sync.Mutex
+	Store           *Store
+	Client          tunnel.Client
+	Datagrams       *tunnel.DatagramPool
+	listeners       map[string]*binding
+	pools           map[string]*resourcePool
+	version         int64
+	closed          bool
+	udpDialSlots    chan struct{}
+	udpSessionSlots chan struct{}
+	udpQueued       atomic.Int64
 }
 type binding struct {
 	changed  chan struct{}
@@ -41,22 +46,28 @@ type binding struct {
 	slots    chan struct{}
 	routes   map[string]route
 	backends map[string]*backendState
+	udpStats udpCounters
 }
 type udpSession struct {
-	ctx     context.Context
-	pool    *resourcePool
-	release func()
-	conn    net.Conn
-	tunnel  *tunnel.Session
-	peer    *net.UDPAddr
-	rule    contract.Rule
+	ctx        context.Context
+	pool       *resourcePool
+	release    func()
+	conn       net.Conn
+	tunnel     *tunnel.Session
+	peer       *net.UDPAddr
+	rule       contract.Rule
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	out        chan *udpPacket
+	activity   atomic.Int64
+	finishOnce sync.Once
 }
 
 func NewRuntime(store *Store, client tunnel.Client) *Runtime {
 	if client.Pool == nil {
 		client.Pool = &tunnel.MuxPool{}
 	}
-	return &Runtime{Store: store, Client: client, listeners: map[string]*binding{}, pools: map[string]*resourcePool{}}
+	return &Runtime{Store: store, Client: client, Datagrams: &tunnel.DatagramPool{}, listeners: map[string]*binding{}, pools: map[string]*resourcePool{}, udpDialSlots: make(chan struct{}, 32), udpSessionSlots: make(chan struct{}, 4096)}
 }
 func (r *Runtime) Version() int64 { r.mu.Lock(); defer r.mu.Unlock(); return r.version }
 func key(v contract.Rule) string  { return v.Network + "|" + v.Listen }
@@ -77,6 +88,13 @@ func validate(v contract.Rule) error {
 		return e
 	}
 	switch v.Transport {
+	case "quic":
+		if v.Network != "udp" || v.Tunnel == nil || v.Tunnel.Mux || v.Tunnel.Reverse != "" || len(v.Tunnel.Chain) > 0 || v.Tunnel.Obfuscation != nil {
+			return errors.New("QUIC DATAGRAM requires single-exit UDP")
+		}
+		if e := contract.ValidateUDPExit(&contract.UDPExit{Endpoint: v.Tunnel.Endpoint, ServerName: v.Tunnel.ServerName, Token: v.Tunnel.Token}); e != nil {
+			return e
+		}
 	case "direct":
 		if v.Tunnel != nil {
 			return errors.New("direct transport cannot contain a tunnel")
@@ -123,6 +141,15 @@ func validate(v contract.Rule) error {
 	if v.Lease == nil || v.Lease.ID == "" || v.Lease.Bytes <= 0 {
 		return errors.New("finite lease required")
 	}
+	if v.UDP != nil && (v.Network != "udp" || v.UDP.MaxSessions < 0 || v.UDP.MaxSessions > 4096) {
+		return errors.New("invalid UDP session limit")
+	}
+	if v.StandbyLease != nil {
+		l := v.StandbyLease
+		if !v.LeasePipeline || l.ID == "" || l.ID == v.Lease.ID || l.EntitlementID != v.Lease.EntitlementID || l.Bytes <= 0 || !time.Now().Before(l.ExpiresAt) || l.ExpiresAt.After(time.Now().Add(5*time.Minute+time.Second)) {
+			return errors.New("invalid standby lease")
+		}
+	}
 	if err := v.Lease.Limits.Validate(); err != nil {
 		return err
 	}
@@ -162,6 +189,15 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 	}
 	if err := validateSharedRules(c.Rules); err != nil {
 		return err
+	}
+	udpListeners := 0
+	for _, rule := range c.Rules {
+		if rule.Enabled && rule.Network == "udp" {
+			udpListeners++
+		}
+	}
+	if udpListeners > 128 {
+		return errors.New("UDP listener capacity exceeded (128 per Agent)")
 	}
 	for _, v := range c.Rules {
 		if !v.Enabled {
@@ -221,6 +257,13 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 			return fail(e)
 		}
 	}
+	for _, v := range c.Rules {
+		if v.Enabled && v.Network == "udp" {
+			if e := r.Store.PrimeUDPCredits(v, c.ValidUntil); e != nil {
+				return fail(e)
+			}
+		}
+	}
 	for owner, limits := range policies {
 		pool := r.pools[owner]
 		if pool == nil {
@@ -262,7 +305,7 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 				conn.Close()
 			}
 			for _, session := range b.sessions {
-				session.conn.Close()
+				session.stop()
 			}
 		}
 		b.mu.Unlock()
@@ -287,6 +330,7 @@ func (r *Runtime) Close() {
 		b.close()
 	}
 	r.Client.Pool.Close()
+	r.Datagrams.Close()
 }
 func (r *Runtime) StopLease(id string) {
 	r.mu.Lock()
@@ -303,7 +347,7 @@ func (r *Runtime) StopLease(id string) {
 				c.Close()
 			}
 			for _, s := range b.sessions {
-				s.conn.Close()
+				s.stop()
 			}
 		}
 		b.mu.Unlock()
@@ -324,7 +368,7 @@ func (b *binding) close() {
 		c.Close()
 	}
 	for _, s := range b.sessions {
-		s.conn.Close()
+		s.stop()
 	}
 }
 func (b *binding) snapshot() (contract.Rule, time.Time, context.Context, *resourcePool) {
@@ -350,6 +394,10 @@ func (b *binding) dial(ctx context.Context, v contract.Rule) (net.Conn, *tunnel.
 	return b.dialTarget(ctx, v)
 }
 func (b *binding) dialTarget(ctx context.Context, v contract.Rule) (net.Conn, *tunnel.Session, error) {
+	if v.Transport == "quic" {
+		c, e := b.runtime.Datagrams.Dial(ctx, b.runtime.Client.TLS, v.Tunnel.Endpoint, v.Tunnel.ServerName, v.Tunnel.Token, v.Target)
+		return c, nil, e
+	}
 	if v.Transport == "direct" {
 		c, e := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, v.Network, v.Target)
 		return c, nil, e
@@ -522,107 +570,4 @@ func blocked(p []byte, policies []string) bool {
 		}
 	}
 	return false
-}
-func (b *binding) serveUDP() {
-	buf := make([]byte, 65535)
-	for {
-		n, peer, e := b.udp.ReadFromUDP(buf)
-		if e != nil {
-			return
-		}
-		v, until, ctx, pool := b.snapshot()
-		if blocked(buf[:n], v.BlockedProtocols) {
-			continue
-		}
-		if e := b.runtime.Store.Available(v, until); e != nil {
-			if transientMeterError(e) {
-				b.runtime.Store.requestUsage()
-			}
-			continue
-		}
-		k := peer.String()
-		b.mu.Lock()
-		s := b.sessions[k]
-		b.mu.Unlock()
-		if s == nil {
-			b.mu.Lock()
-			full := len(b.sessions) >= 256
-			b.mu.Unlock()
-			if full {
-				continue
-			}
-			release, ok := pool.acquire(peer)
-			if !ok {
-				continue
-			}
-			conn, t, e := b.dial(ctx, v)
-			if e != nil {
-				release()
-				continue
-			}
-			s = &udpSession{ctx: ctx, pool: pool, release: release, conn: conn, tunnel: t, peer: peer, rule: v}
-			b.mu.Lock()
-			if b.closed {
-				b.mu.Unlock()
-				conn.Close()
-				release()
-				return
-			}
-			b.sessions[k] = s
-			b.mu.Unlock()
-			go b.readUDP(k, s)
-		}
-		if err := b.charge(s.ctx, s.pool, s.rule, true, n); err != nil {
-			if errors.Is(err, errRateDrop) {
-				continue
-			}
-			s.conn.Close()
-			continue
-		}
-		s.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if s.tunnel != nil {
-			e = s.tunnel.WritePacket(buf[:n])
-		} else {
-			_, e = s.conn.Write(buf[:n])
-		}
-		if e != nil {
-			s.conn.Close()
-		}
-	}
-}
-func (b *binding) readUDP(k string, s *udpSession) {
-	defer s.release()
-	defer func() {
-		s.conn.Close()
-		b.mu.Lock()
-		if b.sessions[k] == s {
-			delete(b.sessions, k)
-		}
-		b.mu.Unlock()
-	}()
-	buf := make([]byte, 65535)
-	for {
-		s.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		var p []byte
-		var e error
-		if s.tunnel != nil {
-			p, e = s.tunnel.ReadPacket()
-		} else {
-			var n int
-			n, e = s.conn.Read(buf)
-			p = buf[:n]
-		}
-		if e != nil {
-			return
-		}
-		if e = b.charge(s.ctx, s.pool, s.rule, false, len(p)); e != nil {
-			if errors.Is(e, errRateDrop) {
-				continue
-			}
-			return
-		}
-		if _, e = b.udp.WriteToUDP(p, s.peer); e != nil {
-			return
-		}
-	}
 }
