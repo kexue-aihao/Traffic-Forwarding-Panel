@@ -95,17 +95,6 @@ const groupTransports = [
   { value: "wss", label: "WSS 隧道" },
   { value: "http", label: "HTTP 隧道" },
 ];
-// 承载。direct 与 direct-tls 都没有出口，区别只在到目标的那一段加不加密 ——
-// 前者把业务明文直接发出去，后者在同一条连接上先做 TLS 握手。
-const transports = [
-  { value: "direct", label: "direct（明文到目标）" },
-  { value: "direct-tls", label: "direct-tls（TLS 到目标）" },
-  { value: "secure-direct", label: "secure-direct（TLS 1.3 到目标 Agent）" },
-  { value: "tls", label: "tls" },
-  { value: "ws", label: "ws" },
-  { value: "wss", label: "wss" },
-  { value: "http", label: "http" },
-];
 const onboardTarget = ref<Row | null>(null);
 const joinKey = ref("");
 const confirmRotate = ref(false);
@@ -856,6 +845,11 @@ function payload(): Row {
       port_max: f.port_max,
       max_rules: f.max_rules,
     };
+  // New rules without an exit use ordinary direct forwarding. Managed exits
+  // choose their own transport on the server. Keep legacy manual tunnels when
+  // editing unrelated fields, but drop a managed tunnel when its exit is cleared.
+  const ruleTransport =
+    !f.exit_group_id && selected.value?.exit_group_id ? "direct" : f.transport;
   return {
     exit_group_id: f.exit_group_id,
     exit_id: f.exit_group_id
@@ -879,7 +873,7 @@ function payload(): Row {
     node_id: f.node_id,
     group_id: f.group_id,
     network: f.network,
-    transport: f.transport,
+    transport: ruleTransport,
     listen: f.listen,
     target: f.target,
     enabled: f.enabled,
@@ -891,13 +885,13 @@ function payload(): Row {
             server_name: f.shared_name.toLowerCase(),
           }
         : null,
-    ...(f.transport === "direct" || f.exit_group_id
+    ...(ruleTransport === "direct" || f.exit_group_id
       ? {}
-      : f.transport === "direct-tls"
+      : ruleTransport === "direct-tls"
         ? f.server_name
           ? { tunnel: { server_name: f.server_name } }
           : {}
-        : f.transport === "secure-direct"
+        : ruleTransport === "secure-direct"
           ? {
               tunnel: {
                 endpoint: f.endpoint,
@@ -1937,7 +1931,13 @@ const labels: Record<string, string> = {
                 v-model="form.exit_group_id"
                 aria-label="出口选择"
               >
-                <option value="">直接转发或手工配置隧道</option>
+                <option value="">
+                  {{
+                    selected && !selected.exit_group_id && form.transport !== 'direct'
+                      ? "保留现有隧道"
+                      : "直接转发"
+                  }}
+                </option>
                 <option
                   v-for="g in exitGroups"
                   :key="String(g.id)"
@@ -1971,27 +1971,12 @@ const labels: Record<string, string> = {
                   : "自动选择该组内授权且在线的出口。"
               }}流量按入口组倍率 × 出口组倍率结算。
             </p>
-            <div class="form-grid">
-              <label
-                >传输层<Select v-model="form.network" :disabled="!!selected">
-                  <option value="tcp">TCP</option>
-                  <option value="udp">UDP</option>
-                </Select></label
-              ><label
-                >转发方式<Select v-model="form.transport" aria-label="转发方式">
-                  <option
-                    v-for="t in transports"
-                    :key="t.value"
-                    :value="t.value"
-                  >
-                    {{ t.label }}
-                  </option>
-                </Select></label
-              >
-            </div>
-            <p class="small muted">
-              可用组合由节点能力校验。WS 与 HTTP 本身不加密。
-            </p>
+            <label
+              >传输层<Select v-model="form.network" :disabled="!!selected">
+                <option value="tcp">TCP</option>
+                <option value="udp">UDP</option>
+              </Select></label
+            >
             <p v-if="selected" class="small muted">
               入口、设备组、传输层和监听地址创建后不可更改。如需调整，请删除并等待节点确认解绑后重建。
             </p>
@@ -2005,110 +1990,6 @@ const labels: Record<string, string> = {
                 v-model="form.target"
                 required
                 placeholder="127.0.0.1:8080" /></label
-            ><template
-              v-if="form.transport === 'direct-tls' && !form.exit_group_id"
-              ><label
-                >TLS 校验名<input
-                  v-model="form.server_name"
-                  placeholder="留空则用目标地址的主机部分" /></label></template
-            ><template
-              v-else-if="form.transport !== 'direct' && !form.exit_group_id"
-              ><label>隧道端点<input v-model="form.endpoint" required /></label
-              ><label>TLS 服务器名称<input v-model="form.server_name" /></label
-              ><label
-                >隧道凭据<input
-                  v-model="form.token"
-                  type="password"
-                  autocomplete="new-password"
-                  :required="!selected"
-                  :placeholder="selected ? '留空保留既有凭据' : ''"
-              /></label>
-              <label v-if="form.transport === 'secure-direct'"
-                >混淆策略<Select v-model="form.obfuscation" aria-label="混淆策略">
-                  <option value="random-padding">random-padding</option>
-                  <option value="timing-perturb">timing-perturb</option>
-                  <option value="tls-mimic">tls-mimic</option>
-                </Select></label
-              >
-              <label v-if="form.transport !== 'secure-direct'" class="check"
-                ><input v-model="form.mux" type="checkbox" />启用 Mux
-                连接复用</label
-              >
-              <label v-if="form.transport !== 'secure-direct'"
-                >反向出口标识<input
-                  v-model="form.reverse"
-                  maxlength="128"
-                  placeholder="留空使用普通出口"
-              /></label>
-              <p v-if="form.reverse && form.transport !== 'secure-direct'" class="muted small">
-                出口主动连接隧道端点。反向路由不能添加后续出口。
-              </p>
-              <fieldset v-if="form.transport !== 'secure-direct'">
-                <legend>后续出口（最多两跳）</legend>
-                <p class="muted small">
-                  入口 → 首出口<span
-                    v-for="(_, index) in form.chain"
-                    :key="index"
-                  >
-                    → 出口 {{ index + 2 }}</span
-                  >
-                  → 目标
-                </p>
-                <div
-                  v-for="(hop, index) in form.chain"
-                  :key="index"
-                  class="card"
-                >
-                  <label :for="`hop-transport-${index}`"
-                    >出口 {{ index + 2 }} 承载</label
-                  ><Select
-                    :id="`hop-transport-${index}`"
-                    v-model="hop.transport"
-                  >
-                    <option
-                      v-for="t in ['tls', 'ws', 'wss', 'http']"
-                      :key="t"
-                      :value="t"
-                    >
-                      {{ t }}
-                    </option>
-                  </Select>
-                  <label
-                    >出口 {{ index + 2 }} 端点<input
-                      v-model="hop.endpoint"
-                      required
-                  /></label>
-                  <label
-                    >出口 {{ index + 2 }} TLS 服务器名称<input
-                      v-model="hop.server_name"
-                  /></label>
-                  <label
-                    >出口 {{ index + 2 }} 凭据<input
-                      v-model="hop.token"
-                      type="password"
-                      autocomplete="new-password"
-                      :required="!selected"
-                      :placeholder="selected ? '地址和身份不变时留空保留' : ''"
-                  /></label>
-                  <button type="button" @click="form.chain.splice(index, 1)">
-                    移除出口 {{ index + 2 }}
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  :disabled="form.chain.length >= 2 || !!form.reverse"
-                  @click="
-                    form.chain.push({
-                      transport: 'tls',
-                      endpoint: '',
-                      server_name: '',
-                      token: '',
-                    })
-                  "
-                >
-                  添加后续出口
-                </button>
-              </fieldset></template
             >
             <fieldset v-if="form.network === 'tcp'">
               <legend>Proxy Protocol</legend>

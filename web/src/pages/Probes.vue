@@ -129,6 +129,12 @@ function nodeShortID(p: Probe) {
 function groupLabel(p: Probe) {
   return (p.group_ids || []).map((id) => groupNames.value[id] || id).join("、");
 }
+function groupTitle(p: Probe) {
+  const preferred = (p.group_ids || []).includes(group.value)
+    ? groupNames.value[group.value]
+    : "";
+  return preferred || groupLabel(p) || nodeTitle(p);
+}
 function ipFamily(ip: ProbeIP) {
   const family = ip.family?.toLowerCase();
   if (family === "ipv4" || family === "ipv6") return family;
@@ -367,7 +373,7 @@ onUnmounted(() => {
           <div class="probe-identity">
             <h2 class="probe-name">
               <span class="probe-name-chip" :title="p.node_id">
-                <span>{{ nodeTitle(p) }}</span>
+                <span>{{ groupTitle(p) }}</span>
                 <small>ID: {{ nodeShortID(p) }}</small>
               </span>
             </h2>

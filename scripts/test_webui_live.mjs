@@ -1108,6 +1108,7 @@ try {
       await user.evaluate(() => { location.hash = "#/overview"; });
       await user.getByRole("link", { name: "转发规则", exact: true }).click();
       await user.getByRole("button", { name: "新增", exact: true }).click();
+      assert.equal(await user.getByLabel("转发方式", { exact: true }).count(), 0);
       await user
         .getByLabel("名称", { exact: true })
         .fill("disabled-integration-rule");
@@ -1123,6 +1124,13 @@ try {
       await user.getByLabel("目标地址", { exact: true }).fill("127.0.0.1:8080");
       await user.getByLabel("启用规则", { exact: true }).uncheck();
       await save(user);
+      const directRules = await (
+        await user.request.get(base + "/api/v1/rules")
+      ).json();
+      const directRule = directRules.items.find(
+        (rule) => rule.name === "disabled-integration-rule",
+      );
+      assert.equal(directRule.transport, "direct");
       // 规则分类：多选之后归到一类，走的是真实接口 —— 请求体的字段名对不上会被
       // 严格解码挡回来，假后端验不出这一点。
       const classifiedRow = user.locator("tr", {
@@ -1152,41 +1160,53 @@ try {
       );
       await user.getByLabel("目标地址", { exact: true }).fill("127.0.0.1:8081");
       await save(user);
-      await user.getByRole("button", { name: "编辑", exact: true }).click();
-      await user.getByLabel("转发方式", { exact: true }).selectOption("tls");
-      await user
-        .getByLabel("隧道端点", { exact: true })
-        .fill("first.example.test:443");
-      await user
-        .getByLabel("隧道凭据", { exact: true })
-        .fill("fixture-chain-first-secret");
-      for (const hop of [2, 3]) {
-        await user
-          .getByRole("button", { name: "添加后续出口", exact: true })
-          .click();
-        await user
-          .getByLabel(`出口 ${hop} 端点`, { exact: true })
-          .fill(`exit${hop}.example.test:443`);
-        await user
-          .getByLabel(`出口 ${hop} 凭据`, { exact: true })
-          .fill(`fixture-chain-${hop}-secret`);
-      }
-      await save(user);
+      // Older manual tunnel rules remain editable after removing the transport
+      // controls from the rule form. Create one through the compatible API.
+      const currentRule = (
+        await (await user.request.get(base + "/api/v1/rules")).json()
+      ).items[0];
+      const legacySave = await user.request.put(
+        base + `/api/v1/rules/${currentRule.id}`,
+        {
+          headers: { Origin: base, "X-Requested-With": "fetch" },
+          data: {
+            name: currentRule.name,
+            node_id: currentRule.node_id,
+            group_id: currentRule.group_id,
+            network: currentRule.network,
+            transport: "tls",
+            listen: currentRule.listen,
+            target: currentRule.target,
+            enabled: false,
+            version: currentRule.version,
+            tunnel: {
+              endpoint: "first.example.test:443",
+              token: "fixture-chain-first-secret",
+              chain: [2, 3].map((hop) => ({
+                transport: "tls",
+                endpoint: `exit${hop}.example.test:443`,
+                token: `fixture-chain-${hop}-secret`,
+              })),
+            },
+          },
+        },
+      );
+      assert.equal(legacySave.status(), 200, await legacySave.text());
+      await user.reload();
       const chainedRules = await (
         await user.request.get(base + "/api/v1/rules")
       ).json();
       assert.equal(chainedRules.items[0].tunnel.chain.length, 2);
       assert.equal(chainedRules.items[0].tunnel.chain[0].token, undefined);
       await user.getByRole("button", { name: "编辑", exact: true }).click();
-      assert.equal(
-        await user.getByLabel("出口 2 端点", { exact: true }).inputValue(),
-        "exit2.example.test:443",
-      );
-      assert.equal(
-        await user.getByLabel("出口 2 凭据", { exact: true }).inputValue(),
-        "",
-      );
+      assert.equal(await user.getByLabel("转发方式", { exact: true }).count(), 0);
+      await user.getByLabel("目标地址", { exact: true }).fill("127.0.0.1:8082");
       await save(user);
+      const preservedRules = await (
+        await user.request.get(base + "/api/v1/rules")
+      ).json();
+      assert.equal(preservedRules.items[0].transport, "tls");
+      assert.equal(preservedRules.items[0].tunnel.chain.length, 2);
       await user.getByRole("button", { name: "删除", exact: true }).click();
       await user.getByRole("button", { name: "确认删除", exact: true }).click();
       await user.locator("dialog").waitFor({ state: "detached" });
@@ -1334,7 +1354,7 @@ try {
       // 有了权益，探针才可见：只包含本组设备，且对普通用户隐藏公网 IP。
       await user.evaluate(() => { location.hash = "#/probes"; });
       await user
-        .getByRole("heading", { name: `simulated-${browserName}` })
+        .getByRole("heading", { name: savedGroup.name })
         .waitFor();
       assert.equal(
         (await user.locator("body").innerText()).includes("203.0.113.99"),
@@ -1781,8 +1801,21 @@ try {
         (x) => x.name === "managed draft",
       );
       assert.ok(managedRule.selected_exit_id);
+      assert.equal(managedRule.transport, "tls");
       assert.equal(managedRule.tunnel, undefined);
       assert.equal(managedRule.proxy_protocol.send, "v2");
+      await user.getByRole("row").filter({ hasText: "managed draft" })
+        .getByRole("button", { name: "编辑", exact: true }).click();
+      assert.equal(await user.getByLabel("转发方式", { exact: true }).count(), 0);
+      await user.getByLabel("出口选择", { exact: true }).selectOption("");
+      await save(user);
+      const clearedRules = await (
+        await user.request.get(base + "/api/v1/rules")
+      ).json();
+      const clearedRule = clearedRules.items.find((rule) => rule.id === managedRule.id);
+      assert.equal(clearedRule.transport, "direct");
+      assert.equal(clearedRule.tunnel, undefined);
+      assert.ok(!clearedRule.exit_group_id);
       await admin.getByRole("link", { name: "设备组", exact: true }).click();
       await admin
         .getByRole("row")
@@ -2108,7 +2141,7 @@ try {
       await user.getByRole("button", { name: "登录控制台" }).waitFor();
       assert.deepEqual(exceptions, []);
       console.log(
-        `${browserName}: REAL Go/SQLite/embedded UI PASS (login, user/group/enrollment, simulated Agent/probe privacy, persisted history fixture API/permissions/chart, zero wallet + insufficient funds, redeem credit, webhook CRUD/mute/enable + alert policy/events, export task result, auto-renew toggle, plan limits/edit/add-on purchase, site/invitation registration, managed exits + Proxy Protocol editor, import preview/port update, purchase refund funding, three-hop editor, Token isolation/revocation, admin-issued token issue/reset/revoke, device address API permission, password, disable + session revoke)`,
+        `${browserName}: REAL Go/SQLite/embedded UI PASS (login, user/group/enrollment, simulated Agent/probe privacy, persisted history fixture API/permissions/chart, zero wallet + insufficient funds, redeem credit, webhook CRUD/mute/enable + alert policy/events, export task result, auto-renew toggle, plan limits/edit/add-on purchase, site/invitation registration, managed exits + Proxy Protocol editor, import preview/port update, purchase refund funding, legacy three-hop preservation, Token isolation/revocation, admin-issued token issue/reset/revoke, device address API permission, password, disable + session revoke)`,
       );
       await userContext.close();
     } finally {

@@ -101,7 +101,9 @@ Token 明文只在**创建或重置**的那一次响应里出现（库里只有 
 
 监听地址、协议、所属用户、节点和组在创建后不可变；修改使用 `version` 乐观锁，迁移监听需删除并等待节点 ACK 释放端口。端口按节点/网络/端口保守独占，暂不支持同机按 IP 细分复用。
 
-设备组的协议屏蔽与转发设置使用独立字段：`blocked_protocols` 仅存应用屏蔽值 `app:http|app:socks`；`disabled_networks` 存禁用的 `tcp|udp`；`disabled_transports` 存禁用的 `direct|direct-tls|secure-direct|tls|ws|wss|http`。后两项为空表示全部允许，界面以正向勾选展示允许的网络协议及转发方式。屏蔽 HTTP 应用流量不会禁用 HTTP 隧道；取消某种转发方式只影响规则可用性，不增加应用检测项，并作用于链式每一跳。
+设备组的协议屏蔽与转发设置使用独立字段：`blocked_protocols` 仅存应用屏蔽值 `app:http|app:socks`；`disabled_networks` 存禁用的 `tcp|udp`；`disabled_transports` 存禁用的 `direct|direct-tls|secure-direct|tls|ws|wss|http`。后两项为空表示全部允许。应用协议嗅探与禁用由管理员在设备组“高级设置”中配置。屏蔽 HTTP 应用流量不会禁用 HTTP 隧道；禁用某种转发方式只影响规则可用性，不增加应用检测项，并作用于链式每一跳。
+
+新增和编辑转发规则表单不再提供“转发方式”及手工隧道配置。新规则不选择出口时使用 `direct`；选择出口或链式出口时，由服务端解析出口配置并决定实际 `transport` 与 `tunnel`。旧手工隧道规则在编辑目标等字段时保留已有承载及隧道，凭据沿用既有保留逻辑；已配置出口的规则清除出口选择后改为直接转发。API 的承载字段继续兼容既有规则和客户端。
 
 设备组的 `advanced` 是独立的额外设置对象，字段对应参考面板的 `allowed_host`、`blocked_host`、`blocked_path`、`blocked_protocol`、`tls_inbound_policy`、`tls_reject_empty_sni`、`disable_udp`、`udp_over_tcp`、`ipv6_group`、`max_fail`、`fail_timout_sec`、`reverse_group`、`protocol` 和 `tls`。设备组列表通过独立的“高级设置”弹窗配置参数，不再把这些参数塞进新增设备组主表单。白名单与其他入站屏蔽选项冲突、禁用 UDP 同时启用 UDP over TCP、未知协议或超出范围的值会被拒绝。`blocked_protocol` 中的 `http`/`socks` 表示应用协议屏蔽，与转发方式完全独立。旧版顶层 `blocked_protocols` 仍可读取并会迁移到对应策略字段。字段名 `fail_timout_sec` 保留参考文档中的拼写。
 

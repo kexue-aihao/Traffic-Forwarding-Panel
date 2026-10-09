@@ -734,12 +734,12 @@ try {
         ]);
         await tab.waitForLoadState("domcontentloaded");
         assert.equal(await tab.locator(".sidebar").count(), 0, "新标签页里不该有侧栏");
-        await tab.getByRole("heading", { name: "Fixture node" }).waitFor();
+        await tab.getByRole("heading", { name: "Fixture group" }).waitFor();
         await tab.close();
       }
       await page.evaluate(() => { location.hash = "#/probes"; });
       assert.equal(await page.locator(".sidebar").count(), 0, "独立窗口里不该有侧栏");
-      await page.getByRole("heading", { name: "Fixture node" }).waitFor();
+      await page.getByRole("heading", { name: "Fixture group" }).waitFor();
       await page.locator(".probe-details summary").first().click();
       await page
         .getByText("采样于 2026-01-16 00:20:30", { exact: true })
@@ -875,7 +875,7 @@ try {
       // 探针页面按设备组收窄：选了组之后仍然只显示这一组的机器。这里走真实
       // 点击：切换是这套自绘下拉唯一的入口，值得按用户的方式验一遍。
       await pickOption(page, "设备组", "g1");
-      await page.getByRole("heading", { name: "Fixture node" }).waitFor();
+      await page.getByRole("heading", { name: "Fixture group" }).waitFor();
       assert.equal(
         await page.locator(".probe-api code").count(),
         4,
