@@ -47,17 +47,20 @@ func TestCreditSnapshotRejectsOvercommittedRecovery(t *testing.T) {
 
 func TestLeaseHistoryCheckpointKeepsLiveTombstonesAndPendingFacts(t *testing.T) {
 	s, _, _ := setup(t)
+	now := time.Now()
 	s.mu.Lock()
 	for _, id := range []string{"expired", "live", "pending"} {
-		until := time.Now().Add(-time.Minute)
+		until := now.Add(-time.Minute)
 		if id == "live" {
-			until = time.Now().Add(time.Minute)
+			until = now.Add(time.Minute)
 		}
 		s.state.Leases[id] = contract.Lease{ID: id, Bytes: 100, EntitlementID: "ent", ExpiresAt: until}
 		s.state.Used[id] = 10
 		s.state.Retired[id] = id != "pending"
 	}
-	s.state.Pending = []contract.UsageRecord{{ID: "unacked", LeaseID: "pending", NodeID: "node", EntitlementID: "ent", UploadBytes: 10, StartedAt: time.Now().Add(-2 * time.Minute), EndedAt: time.Now().Add(-time.Minute)}}
+	// End exactly at expiry using the same clock sample. Separate calls can
+	// create a genuinely invalid record on systems with finer clock resolution.
+	s.state.Pending = []contract.UsageRecord{{ID: "unacked", LeaseID: "pending", NodeID: "node", EntitlementID: "ent", UploadBytes: 10, StartedAt: now.Add(-2 * time.Minute), EndedAt: now.Add(-time.Minute)}}
 	s.mu.Unlock()
 	if e := s.Checkpoint(); e != nil {
 		t.Fatal(e)
