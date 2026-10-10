@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy/detect"
 )
 
 func (b *binding) policyRejected(id string) {
@@ -16,6 +17,7 @@ func (b *binding) policyRejected(id string) {
 	}
 	v := b.policyStatus[id]
 	v.RuleID = id
+	v.InspectionLocation = "entry"
 	v.Rejected++
 	b.policyStatus[id] = v
 }
@@ -27,6 +29,7 @@ func (b *binding) recordDial(rule contract.Rule, candidate string, conn net.Conn
 	}
 	v := b.policyStatus[rule.ID]
 	v.RuleID = rule.ID
+	v.InspectionLocation = "entry"
 	v.CandidateID = candidate
 	v.Carrier = rule.Transport
 	if rule.EffectivePolicy != nil {
@@ -45,6 +48,27 @@ func (b *binding) recordDial(rule contract.Rule, candidate string, conn net.Conn
 	}
 	b.policyStatus[rule.ID] = v
 }
+func (b *binding) recordInspection(id string, d detect.Detection, visibility string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.policyStatus == nil {
+		b.policyStatus = map[string]contract.RuleRuntimeStatus{}
+	}
+	v := b.policyStatus[id]
+	v.RuleID = id
+	v.InspectionLocation = "entry"
+	v.Visibility = visibility
+	v.DetectedProtocol = d.Protocol
+	v.DetectedVariant = d.Variant
+	v.Evidence = string(d.Evidence)
+	v.InspectionReason = d.Reason
+	if d.Status == detect.Unavailable {
+		v.Unavailable++
+	} else if d.Status == detect.NoMatch {
+		v.Unknown++
+	}
+	b.policyStatus[id] = v
+}
 func (r *Runtime) PolicyStatuses() []contract.RuleRuntimeStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -56,6 +80,7 @@ func (r *Runtime) PolicyStatuses() []contract.RuleRuntimeStatus {
 		}
 		b.mu.Unlock()
 	}
+	out = append(out, r.Services.RuleStatuses()...)
 	slices.SortFunc(out, func(a, b contract.RuleRuntimeStatus) int { return strings.Compare(a.RuleID, b.RuleID) })
 	return out
 }

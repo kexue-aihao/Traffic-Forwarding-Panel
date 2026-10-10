@@ -74,6 +74,7 @@ func (p *MuxPool) Close() {
 
 func (c Client) DialRoute(ctx context.Context, transport, network, target string, t contract.Tunnel) (*Session, error) {
 	c.InspectionEnabled = t.Inspect
+	c.StagedInspection = t.StagedInspection
 	c.useMux = t.Mux
 	c.reverse = t.Reverse
 	c.obfuscation = t.Obfuscation
@@ -88,7 +89,11 @@ func (c Client) open(conn net.Conn, token, network, target string, chain []contr
 	if c.InspectionEnabled && network == "tcp" {
 		version = 3
 	}
-	p, e := json.Marshal(openRequest{RuleID: c.RuleID, Inspect: c.InspectionEnabled && network == "tcp", Version: version, Token: token, Network: network, Target: target, Chain: chain, Visited: visited, Reverse: c.reverse})
+	staged := network == "tcp" && (c.StagedInspection || c.Business != nil && !c.Business.WebSocket)
+	if (c.Business != nil || staged) && network == "tcp" {
+		version = 4
+	}
+	p, e := json.Marshal(openRequest{StagedInspection: staged, Business: c.Business, RuleID: c.RuleID, Inspect: (c.InspectionEnabled || c.Business != nil || staged) && network == "tcp", Version: version, Token: token, Network: network, Target: target, Chain: chain, Visited: visited, Reverse: c.reverse})
 	if e != nil {
 		return e
 	}
@@ -99,7 +104,7 @@ func (c Client) open(conn net.Conn, token, network, target string, chain []contr
 	if e != nil {
 		return e
 	}
-	if k == acceptedFrame && version == 3 {
+	if k == acceptedFrame && (version == 3 || version == 4) {
 		if len(c.InspectionPrefix) == 0 {
 			return errors.New("missing inspection prefix")
 		}
@@ -111,7 +116,7 @@ func (c Client) open(conn net.Conn, token, network, target string, chain []contr
 			return e
 		}
 	}
-	if k != readyFrame || string(p) != "ok" {
+	if k != readyFrame || string(p) != "ok" && !(staged && (c.Business == nil || !c.Business.WebSocket) && string(p) == "inspect-stream") {
 		return errors.New("tunnel authorization or target rejected")
 	}
 	return nil
@@ -217,6 +222,8 @@ func (c Client) connectMux(ctx context.Context, key string, entry *muxEntry, tra
 	plain.useMux = false
 	plain.reverse = ""
 	plain.InspectionEnabled = false
+	plain.StagedInspection = false
+	plain.Business = nil
 	plain.InspectionPrefix = nil
 	conn, err := plain.dial(ctx, transport, endpoint, serverName, token, "mux", "", nil, nil)
 	var session *yamux.Session
@@ -355,7 +362,9 @@ func (s *Server) openReverse(req openRequest) (*Session, error) {
 	c := s.Client
 	c.reverse = ""
 	c.RuleID = req.RuleID
+	c.Business = req.Business
 	c.InspectionEnabled = req.Inspect
+	c.StagedInspection = req.StagedInspection
 	c.InspectionPrefix = req.inspectionPrefix
 	token := req.Token
 	if e = c.open(conn, token, req.Network, req.Target, nil, nil); e != nil {

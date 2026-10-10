@@ -50,18 +50,19 @@ func splitGroupPolicy(g contract.Group) contract.Group {
 		case p == "socks":
 			add(&apps, "app:socks")
 		default:
-			add(&apps, p)
+			if app, ok := policy.NormalizeApplication(p); ok {
+				add(&apps, "app:"+app)
+			} else {
+				add(&apps, p)
+			}
 		}
 	}
 	if g.Advanced != nil {
 		apps = nil
 		for _, p := range g.Advanced.BlockedProtocol {
-			switch p {
-			case "http", "app:http":
-				add(&apps, "app:http")
-			case "socks", "app:socks":
-				add(&apps, "app:socks")
-			default:
+			if app, ok := policy.NormalizeApplication(p); ok {
+				add(&apps, "app:"+app)
+			} else {
 				add(&apps, p)
 			}
 		}
@@ -122,8 +123,22 @@ func validateGroupAdvanced(a *contract.GroupAdvanced) error {
 		return errors.New("allowed_host 不能与其他入站屏蔽选项同时使用")
 	}
 	for _, protocol := range a.BlockedProtocol {
-		if !contains([]string{"http", "socks", "app:http", "app:socks"}, protocol) {
+		if _, ok := policy.NormalizeApplication(protocol); !ok {
 			return errors.New("不支持的屏蔽协议")
+		}
+	}
+	if a.Inspection != nil {
+		if a.PolicyVersion != contract.GroupPolicyVersion {
+			return errors.New("inspection_requires_active_group_policy")
+		}
+		if err := policy.NormalizeInspection(a.Inspection); err != nil {
+			return err
+		}
+	}
+	for _, raw := range a.BlockedProtocol {
+		app, _ := policy.NormalizeApplication(raw)
+		if newApplication(app) && (a.PolicyVersion != contract.GroupPolicyVersion || a.Inspection == nil) {
+			return errors.New("new_application_requires_inspection_policy:" + app)
 		}
 	}
 	if a.PolicyVersion == contract.GroupPolicyVersion {
@@ -168,17 +183,16 @@ func applicationBlocks(rule, group []string) []string {
 		}
 	}
 	for _, p := range rule {
-		if p == "http" || p == "socks" {
-			add(p)
-		} else if p == "app:http" || p == "app:socks" {
-			add(strings.TrimPrefix(p, "app:"))
+		if app, ok := policy.NormalizeApplication(p); ok {
+			add(app)
 		}
 	}
 	for _, p := range group {
-		if p == "app:http" || p == "app:socks" {
-			add(strings.TrimPrefix(p, "app:"))
-		} else if p == "socks" {
-			add(p)
+		// Bare http is a legacy forwarding carrier in this field.
+		if p != "http" {
+			if app, ok := policy.NormalizeApplication(p); ok {
+				add(app)
+			}
 		}
 	}
 	return out
@@ -392,8 +406,13 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	g = splitGroupPolicy(g)
 	for _, p := range g.BlockedProtocols {
-		if !contains([]string{"app:http", "app:socks"}, p) {
+		if _, ok := policy.NormalizeApplication(p); !ok || !strings.HasPrefix(p, "app:") {
 			fail(w, 400, "unsupported blocked protocol")
+			return
+		}
+		app, _ := policy.NormalizeApplication(p)
+		if newApplication(app) && (!activeAdvanced(g) || g.Advanced.Inspection == nil) {
+			fail(w, 400, "new_application_requires_inspection_policy:"+app)
 			return
 		}
 	}
@@ -754,18 +773,18 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rule.Tunnel != nil {
-		if rule.Tunnel.Inspect || rule.Tunnel.ServiceID != "" {
+		if rule.Tunnel.Inspect || rule.Tunnel.StagedInspection || rule.Tunnel.ServiceID != "" {
 			fail(w, 400, "runtime inspection fields are server-generated")
 			return
 		}
 		for _, h := range rule.Tunnel.Chain {
-			if h.Inspect || h.PreferIPv6 {
+			if h.Inspect || h.StagedInspection || h.PreferIPv6 {
 				fail(w, 400, "runtime hop fields are server-generated")
 				return
 			}
 		}
 	}
-	if rule.EffectivePolicy != nil || len(rule.RouteCandidates) > 0 {
+	if rule.EffectivePolicy != nil || len(rule.RouteCandidates) > 0 || rule.Business != nil {
 		fail(w, 400, "runtime policy fields are server-generated")
 		return
 	}
@@ -794,15 +813,15 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 	reply(w, status, rule)
 }
 func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User, rule *contract.Rule, create bool) error {
-	if rule.EffectivePolicy != nil || len(rule.RouteCandidates) > 0 {
+	if rule.EffectivePolicy != nil || len(rule.RouteCandidates) > 0 || rule.Business != nil {
 		return errors.New("runtime fields are server-generated")
 	}
 	if rule.Tunnel != nil {
-		if rule.Tunnel.Inspect || rule.Tunnel.ServiceID != "" {
+		if rule.Tunnel.Inspect || rule.Tunnel.StagedInspection || rule.Tunnel.ServiceID != "" {
 			return errors.New("runtime inspection fields are server-generated")
 		}
 		for _, h := range rule.Tunnel.Chain {
-			if h.Inspect || h.PreferIPv6 {
+			if h.Inspect || h.StagedInspection || h.PreferIPv6 {
 				return errors.New("runtime hop fields are server-generated")
 			}
 		}
@@ -932,7 +951,7 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 		return errors.New("group policy denied")
 	}
 	for _, p := range rule.BlockedProtocols {
-		if !contains([]string{"http", "socks", "app:http", "app:socks"}, p) {
+		if _, ok := policy.NormalizeApplication(p); !ok {
 			return errors.New("unsupported rule protocol policy")
 		}
 	}
@@ -1088,6 +1107,7 @@ func (s *Server) diagnoseRule(w http.ResponseWriter, r *http.Request) {
 	var supported, withinLimit bool
 	var compiled *contract.EffectivePolicy
 	var runtimeStatus *contract.RuleRuntimeStatus
+	observations := []map[string]any{}
 	var policyError string
 	err := s.Store.Write(r.Context(), storage.Background, func(tx *sql.Tx) error {
 		var err error
@@ -1107,7 +1127,7 @@ func (s *Server) diagnoseRule(w http.ResponseWriter, r *http.Request) {
 		if e = tx.QueryRowContext(r.Context(), s.q("SELECT role FROM cp_users WHERE id=?"), owner).Scan(&role); e != nil {
 			return e
 		}
-		if e = compileGroupPolicy(&rule, role, groups, node.Capabilities); e != nil {
+		if e = compileGroupPolicy(&rule, role, groups, node.Capabilities, node.InspectionProfiles); e != nil {
 			policyError = e.Error()
 		} else {
 			compiled = rule.EffectivePolicy
@@ -1115,9 +1135,38 @@ func (s *Server) diagnoseRule(w http.ResponseWriter, r *http.Request) {
 		for _, status := range node.RuleStatuses {
 			if status.RuleID == rule.ID {
 				copy := status
-				runtimeStatus = &copy
-				break
+				if runtimeStatus == nil || status.InspectionLocation == "entry" {
+					runtimeStatus = &copy
+				}
 			}
+		}
+		// Keep each observation point separate: a multi-hop flow can be seen
+		// repeatedly, so these counters are never added as user connection counts.
+		rows, err := tx.QueryContext(r.Context(), "SELECT id,payload FROM cp_nodes ORDER BY id")
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id, raw string
+			if err := rows.Scan(&id, &raw); err != nil {
+				rows.Close()
+				return err
+			}
+			var observed contract.Node
+			if err := json.Unmarshal([]byte(raw), &observed); err != nil {
+				rows.Close()
+				return err
+			}
+			for _, status := range observed.RuleStatuses {
+				if status.RuleID == rule.ID {
+					observations = append(observations, map[string]any{"node_id": id, "runtime": status})
+				}
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
 		}
 		supported, err = s.resourceCapabilities(r.Context(), tx, rule)
 		if err != nil {
@@ -1150,7 +1199,7 @@ func (s *Server) diagnoseRule(w http.ResponseWriter, r *http.Request) {
 		applyError = "node reported a configuration error"
 	}
 	add("agent_error", applyError == "", applyError)
-	reply(w, 200, map[string]any{"rule_id": rule.ID, "node_id": nodeID, "desired_version": desired, "applied_version": applied, "checks": checks, "generated_at": now, "effective_policy": compiled, "runtime": runtimeStatus})
+	reply(w, 200, map[string]any{"rule_id": rule.ID, "node_id": nodeID, "desired_version": desired, "applied_version": applied, "checks": checks, "generated_at": now, "effective_policy": compiled, "runtime": runtimeStatus, "runtime_observations": observations})
 }
 
 // Callers hold the group row lock. A locking read avoids stale MySQL snapshots.

@@ -6,6 +6,7 @@ import { api, errorText } from "../core/api";
 import { notice } from "../core/state";
 import {
   advancedSections,
+  applicationProtocols,
   formatGroupAdvanced,
   initialGroupAdvanced,
   parseGroupAdvanced,
@@ -25,8 +26,31 @@ const activated = ref(
     Number((props.group.advanced as Settings).policy_version) === 2,
 );
 const preview = ref<{
-  rules: { rule_id: string; status: string; reason?: string }[];
+  rules: {
+    rule_id: string;
+    status: string;
+    reason?: string;
+    inspection?: {
+      protocol: string;
+      network: string;
+      mode: string;
+      status: string;
+      reason?: string;
+    }[];
+  }[];
   notes: string[];
+  inspection_profiles?: {
+    node_id: string;
+    name: string;
+    profiles: {
+      label: string;
+      protocol: string;
+      variants?: string[];
+      networks?: string[];
+      ready: boolean;
+      reason?: string;
+    }[];
+  }[];
 } | null>(null);
 const previewError = ref("");
 const error = ref("");
@@ -160,6 +184,66 @@ function toggleListValue(key: string, value: string, enabled: boolean) {
 }
 function toggleProtocol(value: string, enabled: boolean) {
   toggleListValue("blocked_protocol", value, enabled);
+  if (
+    enabled &&
+    !["http", "socks"].includes(value) &&
+    !Object.hasOwn(settings.value, "inspection")
+  ) {
+    settings.value = {
+      ...settings.value,
+      inspection: {
+        version: 1,
+        profiles: [],
+        mode: "strict",
+        unknown: "allow",
+      },
+    };
+    activated.value = true;
+  }
+}
+function inspectionValue(key: string) {
+  const v = settings.value.inspection as Settings | undefined;
+  return String(
+    v?.[key] || (key === "mode" ? "strict" : key === "unknown" ? "allow" : ""),
+  );
+}
+function setInspection(key: string, value: unknown) {
+  settings.value.inspection = {
+    ...(settings.value.inspection as Settings),
+    [key]: value,
+  };
+  if (key === "mode" && value === "observe")
+    (settings.value.inspection as Settings).unknown = "allow";
+}
+function profileText() {
+  const v = (settings.value.inspection as Settings)?.profiles;
+  return Array.isArray(v) ? v.join("\n") : "";
+}
+function setProfiles(source: string) {
+  setInspection(
+    "profiles",
+    source
+      .split(/\r?\n/)
+      .map((v) => v.trim())
+      .filter(Boolean),
+  );
+}
+function businessValue(key: string) {
+  return (
+    (settings.value.inspection as Settings)?.business as Settings | undefined
+  )?.[key];
+}
+function setBusiness(key: string, value: unknown) {
+  const current = (settings.value.inspection as Settings)?.business as
+    | Settings
+    | undefined;
+  const next = { ...current, [key]: value };
+  if (key === "websocket" && !value) next.websocket_early_data = false;
+  if (!next.tls_profile && !next.upstream_tls_profile && !next.websocket) {
+    const inspection = { ...(settings.value.inspection as Settings) };
+    delete inspection.business;
+    settings.value.inspection = inspection;
+  } else setInspection("business", next);
 }
 function toggleGroup(key: string, value: string, enabled: boolean) {
   toggleListValue(key, value, enabled);
@@ -328,9 +412,32 @@ async function save() {
       <p v-if="previewError" class="error">{{ previewError }}</p>
       <div v-if="preview" class="muted small" aria-label="策略影响预览">
         <p v-if="!preview.rules.length">无适用规则</p>
-        <p v-for="item in preview.rules" :key="item.rule_id">
-          {{ item.rule_id }} · {{ item.status }} {{ item.reason || "" }}
-        </p>
+        <div v-for="item in preview.rules" :key="item.rule_id">
+          <p>{{ item.rule_id }} · {{ item.status }} {{ item.reason || "" }}</p>
+          <p v-for="scope in item.inspection || []" :key="scope.protocol">
+            {{ scope.protocol }} · {{ scope.network }} · {{ scope.mode }} ·
+            {{ scope.status }} {{ scope.reason || "" }}
+          </p>
+        </div>
+        <div
+          v-for="node in preview.inspection_profiles || []"
+          :key="node.node_id"
+          aria-label="节点本地检测配置"
+        >
+          <p>{{ node.name || node.node_id }} · 本地检测配置</p>
+          <p v-if="!node.profiles.length">
+            未报告本地 profile；严格检测规则无法使用需要凭据的协议。
+          </p>
+          <p
+            v-for="profile in node.profiles"
+            :key="`${profile.label}/${profile.protocol}`"
+          >
+            {{ profile.label }} · {{ profile.protocol }} ·
+            {{ (profile.variants || []).join(", ") }} ·
+            {{ (profile.networks || []).join(", ") }} ·
+            {{ profile.ready ? "就绪" : "未就绪" }} {{ profile.reason || "" }}
+          </p>
+        </div>
         <p v-for="note in preview.notes" :key="note">{{ note }}</p>
       </div>
       <div class="editor-heading">
@@ -453,34 +560,136 @@ async function save() {
             class="choice-list"
           >
             <legend class="sr-only">应用协议屏蔽</legend>
-            <label class="check">
+            <label
+              v-for="choice in applicationProtocols"
+              :key="choice.value"
+              class="check"
+            >
               <input
                 type="checkbox"
-                :checked="listValue(field.key).includes('http')"
+                :checked="listValue(field.key).includes(choice.value)"
+                :aria-label="choice.label"
                 :disabled="busy"
                 @change="
                   toggleProtocol(
-                    'http',
+                    choice.value,
                     ($event.target as HTMLInputElement).checked,
                   )
                 "
               />
-              <span>HTTP</span>
+              <span
+                >{{ choice.label }}
+                <span class="muted small">· {{ choice.scope }}</span></span
+              >
             </label>
-            <label class="check">
-              <input
-                type="checkbox"
-                :checked="listValue(field.key).includes('socks')"
+          </fieldset>
+
+          <fieldset v-else-if="field.key === 'inspection'" class="choice-list">
+            <legend class="sr-only">协议检测范围</legend>
+            <label
+              >检测方式
+              <Select
+                :model-value="inspectionValue('mode')"
+                aria-label="协议检测方式"
                 :disabled="busy"
-                @change="
-                  toggleProtocol(
-                    'socks',
-                    ($event.target as HTMLInputElement).checked,
+                @update:model-value="setInspection('mode', $event)"
+              >
+                <option value="strict">strict · 按声明范围阻断</option>
+                <option value="observe">observe · 只观测</option>
+              </Select>
+            </label>
+            <label
+              >未知应用处理
+              <Select
+                :model-value="inspectionValue('unknown')"
+                aria-label="未知应用处理"
+                :disabled="busy || inspectionValue('mode') === 'observe'"
+                @update:model-value="setInspection('unknown', $event)"
+              >
+                <option value="allow">allow · 允许未知应用</option>
+                <option value="deny">deny · 拒绝未知应用</option>
+              </Select>
+            </label>
+            <p v-if="inspectionValue('unknown') === 'deny'" class="muted small">
+              会拒绝普通未知业务和不可见内层；拒绝未知不等于识别了代理协议。
+            </p>
+            <label
+              >本地凭据 profile 标签（每行一个）
+              <textarea
+                :value="profileText()"
+                aria-label="本地检测 profile 标签"
+                :disabled="busy"
+                rows="3"
+                placeholder="local-ss\nlocal-vmess"
+                @input="
+                  setProfiles(($event.target as HTMLTextAreaElement).value)
+                "
+              />
+            </label>
+            <label
+              >受控业务 TLS profile 标签
+              <input
+                :value="String(businessValue('tls_profile') || '')"
+                aria-label="业务 TLS profile 标签"
+                :disabled="busy"
+                placeholder="owned-service"
+                @input="
+                  setBusiness(
+                    'tls_profile',
+                    ($event.target as HTMLInputElement).value.trim(),
                   )
                 "
               />
-              <span>SOCKS</span>
             </label>
+            <label
+              >业务上游 TLS profile 标签
+              <input
+                :value="String(businessValue('upstream_tls_profile') || '')"
+                aria-label="业务上游 TLS profile 标签"
+                :disabled="busy"
+                placeholder="trusted-origin"
+                @input="
+                  setBusiness(
+                    'upstream_tls_profile',
+                    ($event.target as HTMLInputElement).value.trim(),
+                  )
+                "
+              />
+            </label>
+            <label class="check"
+              ><input
+                type="checkbox"
+                :checked="Boolean(businessValue('websocket'))"
+                :disabled="busy"
+                @change="
+                  setBusiness(
+                    'websocket',
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />受控 WebSocket 内层检测</label
+            >
+            <label class="check"
+              ><input
+                type="checkbox"
+                :checked="Boolean(businessValue('websocket_early_data'))"
+                :disabled="busy || !businessValue('websocket')"
+                @change="
+                  setBusiness(
+                    'websocket_early_data',
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />受控 Xray WebSocket early-data</label
+            >
+            <p v-if="businessValue('websocket_early_data')" class="muted small">
+              仅支持 early-data 中完整的认证首部；截断首部在 Upgrade
+              前拒绝。默认不把普通子协议名称当作业务数据。
+            </p>
+            <p class="muted small">
+              仅用于拥有服务身份的入口。透传 TLS 的 SNI/ALPN 无法证明内层是
+              Trojan、VMess 或 Shadowsocks。
+            </p>
           </fieldset>
 
           <fieldset

@@ -105,19 +105,23 @@ Token 明文只在**创建或重置**的那一次响应里出现（库里只有 
 
 监听地址、协议、所属用户、节点和组在创建后不可变；修改使用 `version` 乐观锁，迁移监听需删除并等待节点 ACK 释放端口。端口按节点/网络/端口保守独占，暂不支持同机按 IP 细分复用。
 
-设备组的协议屏蔽与转发设置使用独立字段：`blocked_protocols` 仅存应用屏蔽值 `app:http|app:socks`；`disabled_networks` 存禁用的 `tcp|udp`；`disabled_transports` 存禁用的 `direct|direct-tls|secure-direct|tls|ws|wss|http`。后两项为空表示全部允许。应用协议嗅探与禁用由管理员在设备组“高级设置”中配置。屏蔽 HTTP 应用流量不会禁用 HTTP 隧道；禁用某种转发方式只影响规则可用性，不增加应用检测项，并作用于链式每一跳。
+设备组的协议屏蔽与转发设置使用独立字段：`blocked_protocols` 存应用屏蔽值 `app:http|app:socks|app:socks4|app:socks5|app:shadowsocks|app:trojan|app:vmess`；`disabled_networks` 存禁用的 `tcp|udp`；`disabled_transports` 存禁用的 `direct|direct-tls|secure-direct|tls|ws|wss|http`。后两项为空表示全部允许。应用协议嗅探与禁用由管理员在设备组“高级设置”中配置。屏蔽 HTTP 应用流量不会禁用 HTTP 隧道；禁用某种转发方式只影响规则可用性，不增加应用检测项，并作用于链式每一跳。
 
 新增和编辑转发规则表单不再提供“转发方式”及手工隧道配置。新规则不选择出口时使用 `direct`；选择出口或链式出口时，由服务端解析出口配置并决定实际 `transport` 与 `tunnel`。旧手工隧道规则在编辑目标等字段时保留已有承载及隧道，凭据沿用既有保留逻辑；已配置出口的规则清除出口选择后改为直接转发。API 的承载字段继续兼容既有规则和客户端。
 
-设备组的 `advanced` 是独立的额外设置对象，字段对应参考面板的 `allowed_host`、`blocked_host`、`blocked_path`、`blocked_protocol`、`tls_inbound_policy`、`tls_reject_empty_sni`、`disable_udp`、`udp_over_tcp`、`ipv6_group`、`max_fail`、`fail_timout_sec`、`reverse_group`、`protocol` 和 `tls`。设备组列表通过独立的“高级设置”弹窗配置参数，不再把这些参数塞进新增设备组主表单。白名单与其他入站屏蔽选项冲突、禁用 UDP 同时启用 UDP over TCP、未知协议或超出范围的值会被拒绝。`blocked_protocol` 中的 `http`/`socks` 表示应用协议屏蔽，与转发方式完全独立。旧版顶层 `blocked_protocols` 仍可读取并会迁移到对应策略字段。字段名 `fail_timout_sec` 保留参考文档中的拼写。
+设备组的 `advanced` 是独立的额外设置对象，字段包含 `allowed_host`、`blocked_host`、`blocked_path`、`blocked_protocol`、`inspection`、`tls_inbound_policy`、`tls_reject_empty_sni`、`disable_udp`、`udp_over_tcp`、`ipv6_group`、`max_fail`、`fail_timout_sec`、`reverse_group`、`protocol` 和 `tls`。设备组列表通过独立的“高级设置”弹窗配置参数。白名单与其他入站屏蔽选项冲突、禁用 UDP 同时启用 UDP over TCP、未知协议或超出范围的值会被拒绝。`blocked_protocol` 接受上述应用协议规范名和 `app:` 输入别名；历史 `socks` 保留 SOCKS4+5 联集。旧版顶层 `blocked_protocols` 仍可读取并迁移到对应字段。字段名 `fail_timout_sec` 保留参考文档中的拼写。
 
-高级设置表单通过下拉菜单按需添加参数，按参数类型提供数值、开关、协议枚举、列表和设备组选择控件。新组默认不附加高级参数；添加 `max_fail`、`fail_timout_sec` 或 `protocol` 时分别预填 `3`、`30` 或 `tls`。已有配置按保存值载入，显式数值 `0` 在 API 响应中保留。折叠的 JSONC 兼容编辑器支持行注释、块注释、格式化与未知字段编辑；API 本身仅接受 JSON，注释由浏览器在提交前解析。浏览器将 `fail_timeout_sec` 兼容为文档原名 `fail_timout_sec`，若两者值冲突则拒绝提交。高级设置里的协议保存并回读为 `http`/`socks`，内部顶层策略仍使用 `app:http`/`app:socks`，首次编辑会带入旧组已有的应用屏蔽策略。
+高级设置表单通过下拉菜单按需添加参数，按参数类型提供数值、开关、协议枚举、列表和设备组选择控件。新组默认不附加高级参数；添加 `max_fail`、`fail_timout_sec` 或 `protocol` 时分别预填 `3`、`30` 或 `tls`。已有配置按保存值载入，显式数值 `0` 在 API 响应中保留。折叠的 JSONC 编辑器支持注释和格式化；API 本身仅接受 JSON。浏览器将 `fail_timeout_sec` 兼容为原字段名，冲突值拒绝提交。高级设置里的协议保存为规范名，顶层镜像使用 `app:` 名称；首次编辑会带入旧组已有的应用屏蔽策略。选择新增检测协议会添加 `inspection` 并激活 v2，保留已有检测参数。
 
 完整组策略通过 `advanced.policy_version=2` 显式激活；旧配置缺省为 `0`，保留兼容行为。新建组的高级编辑器默认选中激活，存量组必须显式开启。API 对省略的故障参数使用 `max_fail=3`、`fail_timout_sec=30`，显式零保留；同时接受 `fail_timeout_sec` 输入别名并拒绝冲突值。激活时拒绝未知字段、非法匹配器、无效设备组引用和 TLS 对象中的未知键。
 
-控制面编译 `Rule.effective_policy`、`route_candidates`、`Config.services` 和 `blocked_rules`；这些字段及隧道 `inspect`、`service_id`、逐跳 `prefer_ipv6` 都由控制面生成，规则写入 API 不接受用户注入。入口合并入口、出口和链式组策略；TCP Host/SNI 首包检查和 HTTP/1、明文 HTTP/2 逐请求过滤在计量前执行。出口解封装后独立检查业务侧，激活完整出口组策略要求 `Exit.managed=true` 和相应节点能力，否则撤销路线并显示原因。HTTPS Path、HTTP3、ECH 内层名称不在可见范围。
+控制面编译 `Rule.effective_policy`、`Rule.business`、`route_candidates`、`Config.services` 和 `blocked_rules`；这些字段及隧道 `inspect`、`staged_inspection`、`service_id`、逐跳 `prefer_ipv6` 都由控制面生成，规则写入 API 不接受注入。入口合并入口、出口和链式组策略；TCP Host/SNI 首包检查和 HTTP/1、明文 HTTP/2 逐请求过滤在计量前执行。托管出口解封装后独立检查业务侧；激活完整出口组策略要求 `Exit.managed=true` 和相应节点能力。手工或未托管外部隧道保留入口预检，不能宣称已验证出口独立检测。HTTPS Path、HTTP3、ECH 内层名称不在透传可见范围。
 
-`POST /groups/{id}/advanced-preview` 供管理员预览高级设置草稿，返回规则、策略摘要和阻断原因。`GET /rules/{id}/diagnose` 返回有效策略和上报的最近候选、地址族、载波、拒绝连接计数。ACK 的 `services` 与 `rule_statuses` 独立于心跳；`service_ready` 表示节点托管服务就绪，不能用在线心跳替代。参数语义、部署示例和验证范围见 [高级设置完整技术实现方案](advanced-settings-implementation-plan.md) 与 [实施交付说明](advanced-settings-implementation.md)。本地代码实现与上线发版状态分开记录。
+`POST /groups/{id}/advanced-preview` 返回规则、策略摘要、阻断原因、逐协议声明范围和按节点列出的 `inspection_profiles` 准备状态。`GET /rules/{id}/diagnose` 返回有效策略、候选、地址族、载波和计数，`runtime_observations` 保留入口/出口/chain/reverse 每个观测点的协议、变体、证据、可见性、unknown/unavailable 与拒绝计数；不能相加当作用户连接总数。ACK 的 `services` 与 `rule_statuses` 独立于心跳；`service_ready` 不能用在线心跳替代。参数语义与部署见 [高级设置实施交付](advanced-settings-implementation.md) 与 [协议检测实现与验收](protocol-sniffing-implementation.md)。本地实现与上线发版状态分开记录。
+
+新增协议检测仍使用组策略 v2，独立通过 `advanced.inspection={version:1,profiles:[],mode:"strict",unknown:"allow",business?}` 激活。`profiles` 最多 16 个本地标签，不接受密码、密钥、UUID、摘要或路径；未知键拒绝。`strict` 要求相应能力与准备状态，只阻断声明范围内的匹配；`observe` 只观测，不能与 `unknown:"deny"` 组合。未知凭据/不透明业务 TLS 默认允许，未知拒绝单独计数，不等于代理协议认证识别。SS2017/2022 与 VMess AEAD 需要所选已知凭据；Trojan 需要受控业务 TLS 终止。SOCKS5 UDP 需真实 TCP UDP ASSOCIATE 关联或显式结构 profile；出口不能自行证明原客户端控制关联。VMess/Trojan 的 UDP 位于 TCP 协议流内部，不在裸 UDP 规则声明覆盖。
+
+`inspection.business={tls_profile?,upstream_tls_profile?,websocket?,websocket_early_data?}` 引用本地业务证书/上游验证标签并显式选择内层 WS 适配；early-data 要求 WS，完整认证首部在 Upgrade 前裁决，截断不放行。证书私钥由 Agent 的 `-business-profiles` 本地文件读取，检测凭据由 `-inspection-profiles` 读取；安装脚本使用 `-B`/`-I` 接收本地绝对路径并复制为 `0600`。载波 TLS 不等于业务 TLS 终止，上游 TLS 验证保留。
 
 托管出口扩展字段为 `managed`、`reverse_hub`、`local_profile`、`listen`，仅管理员配置。反向关系由出口组的 `reverse_group` 指向入口组 hub，支持 `tls|tls_simple|ws|http`。节点使用 `-service-profiles` 加载本地证书、CA 和精确监听许可；控制面只下发标签，私钥不离开节点。服务授权限定规则 ID、TCP/UDP 和目标，区分载波与业务凭据。组、规则、出口和账号授权改变会发布新的依赖配置，失效授权关闭旧会话。
 
@@ -216,7 +220,7 @@ Cyber已按用户指示从支付渠道列表及本轮验收中排除。
 
 套餐创建/编辑的商业 `limits` 只包含 `max_rules`（0..100000），0表示不限规则数；购买/兑换保存规则数限制快照，权益返回该商业限制。规则总数按账号跨节点统计（包括停用），套餐降级按ID顺序保留前N条可下发规则，不删除原规则。Agent 配置中仍可能出现 `ResourceLimits` 的连接/IP/带宽字段，它们是运行时安全能力与兼容字段，不再由套餐限制或账号套餐额度设置。
 
-`POST /agent/ack` 可附带 `capabilities` 更新本机能力（最多64项、每项64字符）。Agent 配置中的 `ResourceLimits` 连接/IP/带宽字段仅为运行时安全和旧配置兼容，不由商业套餐或账号规则上限设置；账号规则总数由控制面在创建/导入规则时校验。
+`POST /agent/ack` 可附带 `capabilities` 更新本机能力（最多64项、每项64字符）。注册和 ACK 可包含 `inspection_profiles`，最多384项，单项为 `{label,protocol,variants,networks,ready,reason?}`，只报告标签和声明范围。ACK 省略或 null 保留旧准备状态，明确 `[]` 清除并重新发布依赖配置；Agent 正常上报用空数组表示无准备项。reason 使用固定脱敏原因，不接受自由文本。Agent 配置中的 `ResourceLimits` 连接/IP/带宽字段仅为运行时安全和旧配置兼容，不由商业套餐或账号规则上限设置；账号规则总数由控制面在创建/导入规则时校验。
 
 ### 状态告警与通知控制
 

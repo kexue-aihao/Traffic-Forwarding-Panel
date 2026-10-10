@@ -72,7 +72,11 @@ func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid registration")
 		return
 	}
-	node := contract.Node{ID: id(), Name: in.Name, Version: in.Version, OS: in.OS, Arch: in.Arch, Capabilities: in.Capabilities, DesiredVersion: 1}
+	if err := validateInspectionProfiles(in.InspectionProfiles); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	node := contract.Node{ID: id(), Name: in.Name, Version: in.Version, OS: in.OS, Arch: in.Arch, Capabilities: in.Capabilities, InspectionProfiles: in.InspectionProfiles, DesiredVersion: 1}
 	credential := token()
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
 		// 两种凭据走同一条注册路径：一次性接入令牌，以及设备组的固定接入密钥。
@@ -388,8 +392,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		if rule.Advanced() && !contains(nodeInfo.Capabilities, "advanced-routing-v1") {
 			continue
 		}
-		rule.BlockedProtocols = applicationBlocks(rule.BlockedProtocols, g.BlockedProtocols)
-		if err := compileGroupPolicy(&rule, role, policyGroups, nodeInfo.Capabilities); err != nil {
+		if err := compileGroupPolicy(&rule, role, policyGroups, nodeInfo.Capabilities, nodeInfo.InspectionProfiles); err != nil {
 			cfg.BlockedRules = append(cfg.BlockedRules, contract.BlockedRule{RuleID: rule.ID, Reason: err.Error()})
 			continue
 		}
@@ -459,6 +462,10 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := validateInspectionProfiles(in.InspectionProfiles); err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
 	if len(in.Error) > 2000 || in.Version < 1 || in.AppliedVersion < 0 || in.AppliedVersion > in.Version || (in.Error == "" && in.AppliedVersion != in.Version) {
 		fail(w, 400, "invalid ACK")
 		return
@@ -497,11 +504,21 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 			return errors.New("too many rule status reports")
 		}
 		for _, v := range in.RuleStatuses {
+			if err := validateInspectionRuntime(v); err != nil {
+				return err
+			}
 			if len(v.RuleID) > 128 || len(v.PolicyHash) > 64 || len(v.CandidateID) > 512 || len(v.AddressFamily) > 16 || len(v.Carrier) > 32 {
 				return errors.New("invalid rule status")
 			}
 		}
 		statusNode.RuleStatuses = in.RuleStatuses
+		profilesChanged := false
+		if in.InspectionProfiles != nil {
+			profilesChanged = !slices.EqualFunc(statusNode.InspectionProfiles, in.InspectionProfiles, func(a, b contract.InspectionProfileStatus) bool {
+				return a.Label == b.Label && a.Protocol == b.Protocol && a.Ready == b.Ready && a.Reason == b.Reason && slices.Equal(a.Variants, b.Variants) && slices.Equal(a.Networks, b.Networks)
+			})
+			statusNode.InspectionProfiles = in.InspectionProfiles
+		}
 		for _, v := range in.Services {
 			if len(v.ID) > 128 || len(v.Error) > 256 {
 				return errors.New("invalid service status")
@@ -509,6 +526,11 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := tx.ExecContext(r.Context(), s.q("UPDATE cp_nodes SET payload=? WHERE id=?"), strJSON(statusNode), node); err != nil {
 			return err
+		}
+		if profilesChanged {
+			if err := s.publishGroupDependencies(r.Context(), tx); err != nil {
+				return err
+			}
 		}
 		if in.Capabilities != nil {
 			var raw string

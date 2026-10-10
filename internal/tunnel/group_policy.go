@@ -6,10 +6,12 @@ import (
 	"errors"
 	"io"
 	"net"
+	"reflect"
 	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy/detect"
 )
 
 const acceptedFrame byte = 5
@@ -17,7 +19,7 @@ const inspectionFrame byte = 6
 
 func (s *Server) authorized(req openRequest) bool {
 	if len(s.Grants) == 0 {
-		return !s.Managed && subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) == 1
+		return !s.Managed && req.Business == nil && subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) == 1
 	}
 	for _, g := range s.Grants {
 		if req.Network == "reverse" {
@@ -36,7 +38,7 @@ func (s *Server) authorized(req openRequest) bool {
 			return req.Target == ""
 		}
 		for _, t := range g.Targets {
-			if t.RuleID == req.RuleID && t.Network == req.Network && t.Target == req.Target {
+			if t.RuleID == req.RuleID && t.Network == req.Network && t.Target == req.Target && reflect.DeepEqual(t.Business, req.Business) {
 				return true
 			}
 		}
@@ -53,14 +55,22 @@ func (c *prefixConn) Read(p []byte) (int, error)    { return c.r.Read(p) }
 func (*prefixConn) SetReadDeadline(time.Time) error { return nil }
 
 func inspectPrefix(p []byte, layers []contract.InboundPolicy) (policy.Inspection, error) {
+	return inspectPrefixWithPlan(p, layers, nil)
+}
+
+func inspectPrefixWithPlan(p []byte, layers []contract.InboundPolicy, plan *detect.Plan) (policy.Inspection, error) {
 	if len(p) == 0 {
 		return policy.Inspection{}, errors.New("inspection prefix required")
 	}
-	v, e := policy.Inspect(&prefixConn{r: bytes.NewReader(p)})
+	v, e := policy.InspectWithPlan(&prefixConn{r: bytes.NewReader(p)}, plan)
 	if e != nil {
 		return v, e
 	}
 	return v, v.Check(layers)
+}
+
+func InspectionKey(ruleID, network, target string) string {
+	return ruleID + "|" + network + "|" + target
 }
 
 type verifiedConn struct {

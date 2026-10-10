@@ -91,6 +91,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		var registered contract.Registered
 		reg := contract.Registration{Token: a.EnrollmentToken, Name: a.Name, Version: Version, OS: runtime.GOOS, Arch: runtime.GOARCH, Capabilities: a.capabilities()}
+		if a.Runtime != nil {
+			reg.InspectionProfiles = a.Runtime.InspectionProfileStatuses()
+		}
 		if e = a.request(ctx, "POST", "/agent/register", reg, &registered); e != nil {
 			return e
 		}
@@ -197,6 +200,7 @@ func (a *Agent) syncConfig(ctx context.Context) error {
 	}
 	applyErr := a.Runtime.Apply(c, true)
 	ack := contract.Ack{RuleStatuses: a.Runtime.PolicyStatuses(), Services: a.Runtime.Services.Statuses(), Capabilities: a.capabilities(), AgentVersion: Version, Version: c.Version, AppliedVersion: a.Runtime.Version()}
+	ack.InspectionProfiles = a.Runtime.InspectionProfileStatuses()
 	if applyErr != nil {
 		ack.Error = applyErr.Error()
 	}
@@ -327,5 +331,5 @@ func (a *Agent) retire(ctx context.Context) error {
 }
 
 func capabilities() []string {
-	return []string{"tcp", "udp", "direct", "direct-tls", "secure-direct", "secure-direct-v1", "tls", "ws", "wss", "http", "chain:3", "resource-limits-v1", "advanced-routing-v1", "proxy-protocol-v1", "diagnostics-v1", "block:http", "block:socks", "looking-glass-v1", "probe", "obfuscation-v1", "obfuscation:random-padding", "obfuscation:timing-perturb", "obfuscation:tls-mimic", "udp-credit-v1", "udp-datagram-v1", "lease-set-v1", "group-policy-v2", "inbound-inspection-v1", "http-stream-filter-v1", "peer-address-policy-v1", "route-failover-v1", "managed-services-v1", "reverse-group-v1", "reverse:tls_simple", "tls_simple"}
+	return []string{"tcp", "udp", "direct", "direct-tls", "secure-direct", "secure-direct-v1", "tls", "ws", "wss", "http", "chain:3", "resource-limits-v1", "advanced-routing-v1", "proxy-protocol-v1", "diagnostics-v1", "block:http", "block:socks", "looking-glass-v1", "probe", "obfuscation-v1", "obfuscation:random-padding", "obfuscation:timing-perturb", "obfuscation:tls-mimic", "udp-credit-v1", "udp-datagram-v1", "lease-set-v1", "group-policy-v2", "inbound-inspection-v1", "http-stream-filter-v1", "peer-address-policy-v1", "route-failover-v1", "managed-services-v1", "reverse-group-v1", "reverse:tls_simple", "tls_simple", "application-inspection-v1", "inspect:socks4-tcp-v1", "inspect:socks5-tcp-v1", "inspect:socks5-udp-structural-v1", "inspect:socks5-udp-associated-v1", "inspect:ss-aead2017-v1", "inspect:ss-aead2022-v1", "inspect:ss-sip023-v1", "inspect:vmess-aead-v1", "inspect:trojan-v1", "business-tls-termination-v1", "staged-inspection-v1"}
 }

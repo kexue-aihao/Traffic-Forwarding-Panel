@@ -175,7 +175,8 @@ func main() {
 	model("UsageAuditPage", schema{"items": array(ref("UsageRecord")), "total": num}, "items", "total")
 	model("UsageAccepted", schema{"accepted": ids}, "accepted")
 	model("RuleDiagnosticCheck", schema{"name": str, "ok": flag, "detail": str}, "name", "ok", "detail")
-	model("RuleDiagnostic", schema{"rule_id": str, "node_id": str, "desired_version": num, "applied_version": num, "generated_at": date, "checks": array(ref("RuleDiagnosticCheck")), "effective_policy": nullable(ref("EffectivePolicy")), "runtime": nullable(ref("RuleRuntimeStatus"))}, "rule_id", "node_id", "desired_version", "applied_version", "generated_at", "checks")
+	model("RuleRuntimeObservation", schema{"node_id": str, "runtime": ref("RuleRuntimeStatus")}, "node_id", "runtime")
+	model("RuleDiagnostic", schema{"rule_id": str, "node_id": str, "desired_version": num, "applied_version": num, "generated_at": date, "checks": array(ref("RuleDiagnosticCheck")), "effective_policy": nullable(ref("EffectivePolicy")), "runtime": nullable(ref("RuleRuntimeStatus")), "runtime_observations": array(ref("RuleRuntimeObservation"))}, "rule_id", "node_id", "desired_version", "applied_version", "generated_at", "checks")
 	groupFields := schemas["Group"].(schema)["properties"].(schema)
 	groupFields["type"] = schema{"type": "string", "enum": []string{"", "monitor", "entry", "exit", "chain_exit"}, "description": "Device group role; immutable after creation. Empty preserves legacy groups."}
 	groupFields["direct_policy"] = schema{"type": "string", "enum": []string{"", "forbid", "allow", "force"}, "description": "Entry-only direct forwarding policy."}
@@ -187,16 +188,64 @@ func main() {
 	advancedFields := advancedSchema["properties"].(schema)
 	advancedFields["policy_version"] = schema{"type": "integer", "enum": []int{0, 2}, "description": "Explicit activation: 0 retains legacy behavior; 2 executes the complete advanced policy."}
 	advancedFields["fail_timeout_sec"] = schema{"type": "integer", "minimum": 0, "maximum": 86400, "description": "Input alias of fail_timout_sec; conflicting aliases are rejected."}
-	advancedFields["blocked_protocol"].(schema)["description"] = "Application protocol blacklist: http, socks. Responses use reference names without the legacy app: prefix."
+	appNames := []string{"http", "socks", "socks4", "socks5", "shadowsocks", "trojan", "vmess"}
+	appInputs := append([]string{}, appNames...)
+	for _, name := range appNames {
+		appInputs = append(appInputs, "app:"+name)
+	}
+	advancedFields["blocked_protocol"] = schema{"type": "array", "items": schema{"type": "string", "enum": appInputs}, "description": "Application policy; socks retains the SOCKS4/5 union. New protocols require activated group policy and inspection version 1. Only declared variants and visible carriers are covered; credentials stay on the Agent."}
+	inspectionFields := schemas["InspectionPolicy"].(schema)["properties"].(schema)
+	inspectionFields["version"] = schema{"type": "integer", "enum": []int{1}}
+	inspectionFields["mode"] = schema{"type": "string", "enum": []string{"strict", "observe"}, "default": "strict", "description": "Strict blocks matches in declared scope and refuses missing prerequisites. Observe reports detections and never blocks application matches."}
+	inspectionFields["unknown"] = schema{"type": "string", "enum": []string{"allow", "deny"}, "default": "allow", "description": "Unknown applications are allowed by default. Deny is a separate access policy, available only in strict mode; opaque TLS rejection does not establish an inner protocol match."}
+	inspectionFields["profiles"] = schema{"type": "array", "items": schema{"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}, "maxItems": 16, "description": "Private local credential profile labels only. Never put passwords, UUIDs, PSKs or key paths here."}
+	profileFields := schemas["InspectionProfileStatus"].(schema)["properties"].(schema)
+	profileFields["label"] = schema{"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}
+	profileFields["protocol"] = schema{"type": "string", "enum": append(append([]string{}, appNames...), "business-tls")}
+	profileFields["variants"] = schema{"type": "array", "items": schema{"type": "string", "minLength": 1, "maxLength": 64}, "maxItems": 16}
+	profileFields["networks"] = schema{"type": "array", "items": schema{"type": "string", "enum": []string{"tcp", "udp"}}, "maxItems": 2}
+	profileFields["reason"] = schema{"type": "string", "enum": []string{"", "profile_invalid", "business_certificate_unavailable", "business_ca_unavailable"}, "description": "Fixed public readiness reason. Credentials and file paths never appear here."}
+	for _, modelName := range []string{"Node", "Registration", "Ack"} {
+		fields := schemas[modelName].(schema)["properties"].(schema)
+		fields["inspection_profiles"] = nullable(schema{"type": "array", "items": ref("InspectionProfileStatus"), "maxItems": 384, "description": "Local labels and scope only. Omitted/null reports leave readiness unchanged; an explicit empty ACK array clears readiness and republishes dependent configuration."})
+	}
+	// Legacy Agents omit this field; only explicit [] revokes readiness.
+	ackSchema := schemas["Ack"].(schema)
+	if required, ok := ackSchema["required"].([]string); ok {
+		filtered := make([]string, 0, len(required))
+		for _, name := range required {
+			if name != "inspection_profiles" {
+				filtered = append(filtered, name)
+			}
+		}
+		ackSchema["required"] = filtered
+	}
+	runtimeFields := schemas["RuleRuntimeStatus"].(schema)["properties"].(schema)
+	runtimeFields["inspection_location"] = schema{"type": "string", "enum": []string{"", "entry", "exit", "chain", "reverse"}}
+	runtimeFields["detected_protocol"] = schema{"type": "string", "enum": append([]string{""}, appNames...)}
+	runtimeFields["detected_variant"] = schema{"type": "string", "maxLength": 128}
+	runtimeFields["evidence"] = schema{"type": "string", "enum": []string{"", "structural", "authenticated", "legacy_auth", "probable"}}
+	runtimeFields["visibility"] = schema{"type": "string", "enum": []string{"", "raw", "tls-plaintext", "ws-payload", "opaque"}}
+	runtimeFields["inspection_reason"] = schema{"type": "string", "maxLength": 128, "description": "Fixed detector decision reason, without local credentials or paths."}
+	businessFields := schemas["BusinessInbound"].(schema)["properties"].(schema)
+	for _, name := range []string{"tls_profile", "upstream_tls_profile"} {
+		businessFields[name] = schema{"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$", "description": "Locally prepared operator-owned business TLS profile label."}
+	}
+	businessFields["websocket"] = schema{"type": "boolean", "default": false, "description": "Explicitly adapt the business WebSocket carrier before checking the inner protocol."}
+	businessFields["websocket_early_data"] = schema{"type": "boolean", "default": false, "description": "Explicit controlled Xray early-data mode. Requires websocket=true and a complete authentication header; truncated early-data is rejected before Upgrade."}
+	schemas["Rule"].(schema)["properties"].(schema)["business"].(schema)["description"] = "Server-generated business adaptation plan from group inspection policy; API writes cannot set this field."
 	advancedFields["tls_inbound_policy"] = schema{"type": "integer", "enum": []int{0, 1, 2}, "description": "0: allow ordinary rules; 1: TLS inbound rules only; 2: TLS inbound rules and administrator-owned independent ports only."}
 	advancedFields["max_fail"] = schema{"type": "integer", "minimum": 0, "maximum": 1000, "description": "Consecutive failures tolerated before failover for entry-to-exit or direct forwarding. New editor template uses 3; explicit zero is preserved."}
 	advancedFields["fail_timout_sec"] = schema{"type": "integer", "minimum": 0, "maximum": 86400, "description": "Failover duration in seconds; reference spelling is intentional. New editor template uses 30; explicit zero is preserved."}
 	advancedFields["protocol"] = schema{"type": "string", "enum": []string{"", "tls", "tls_simple", "ws", "http"}, "description": "Reverse tunnel protocol; new editor template uses tls."}
-	groupFields["blocked_protocols"].(schema)["description"] = "Application traffic blocks: app:http, app:socks. Independent of forwarding methods. Legacy network:/transport: entries and bare carrier values are accepted on write and split into disabled_networks/disabled_transports; bare http historically means the HTTP tunnel."
+	groupFields["blocked_protocols"].(schema)["description"] = "Application traffic blocks use app: canonical protocol names. Legacy network:/transport: entries and bare carrier values are accepted and split into forwarding fields; bare http historically means the HTTP tunnel. New application detectors require activated inspection settings."
 	groupFields["disabled_networks"].(schema)["description"] = "Disabled forwarding networks: tcp, udp. Empty means all networks are allowed."
 	groupFields["disabled_transports"].(schema)["description"] = "Disabled forwarding methods: direct, direct-tls, secure-direct, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
 	model("GroupPolicyPreviewRequest", schema{"advanced": ref("GroupAdvanced")}, "advanced")
-	model("GroupPolicyPreview", schema{"policy_version": schema{"type": "integer"}, "rules": array(schema{"type": "object"}), "notes": array(str)}, "policy_version", "rules", "notes")
+	model("InspectionCoverage", schema{"protocol": str, "network": str, "mode": str, "status": str, "reason": str}, "protocol", "network", "mode", "status")
+	model("GroupPolicyPreviewRule", schema{"rule_id": str, "node_id": str, "policy_hash": str, "status": str, "reason": str, "inspection": array(ref("InspectionCoverage"))}, "rule_id", "node_id", "status")
+	model("NodeInspectionProfiles", schema{"node_id": str, "name": str, "profiles": array(ref("InspectionProfileStatus"))}, "node_id", "name", "profiles")
+	model("GroupPolicyPreview", schema{"policy_version": schema{"type": "integer"}, "rules": array(ref("GroupPolicyPreviewRule")), "notes": array(str), "inspection_profiles": array(ref("NodeInspectionProfiles"))}, "policy_version", "rules", "notes", "inspection_profiles")
 	requestFrom("GroupCreate", "Group", "name type? direct_policy? chain_group_ids? advanced? identity_group_ids? blocked_protocols? disabled_networks? disabled_transports? multiplier? port_min port_max max_rules?")
 	requestFrom("GroupUpdate", "Group", "name type? direct_policy? chain_group_ids? advanced? identity_group_ids? blocked_protocols? disabled_networks? disabled_transports? multiplier? port_min port_max max_rules? version")
 	requestFrom("RuleCreate", "Rule", "user_id? name node_id group_id network transport listen target enabled blocked_protocols? tunnel? backends? shared_tls? proxy_protocol? exit_group_id? exit_id?")

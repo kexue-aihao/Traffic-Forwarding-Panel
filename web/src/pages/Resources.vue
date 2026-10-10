@@ -463,6 +463,21 @@ function highlight(id: unknown) {
 }
 onUnmounted(() => clearTimeout(highlightTimer));
 
+type RuntimeDiagnosis = {
+  policy_hash?: string;
+  candidate_id?: string;
+  address_family?: string;
+  carrier?: string;
+  rejected?: number;
+  inspection_location?: string;
+  detected_protocol?: string;
+  detected_variant?: string;
+  evidence?: string;
+  visibility?: string;
+  inspection_reason?: string;
+  unknown?: number;
+  unavailable?: number;
+};
 const diagnosis = ref<{
   checks: { name: string; ok: boolean; detail: string }[];
   desired_version?: number;
@@ -471,13 +486,8 @@ const diagnosis = ref<{
     hash: string;
     inbound_layers: { group_id: string }[];
   } | null;
-  runtime?: {
-    policy_hash?: string;
-    candidate_id?: string;
-    address_family?: string;
-    carrier?: string;
-    rejected?: number;
-  };
+  runtime?: RuntimeDiagnosis;
+  runtime_observations?: { node_id: string; runtime: RuntimeDiagnosis }[];
 } | null>(null);
 async function diagnose(row: Row) {
   error.value = "";
@@ -1585,7 +1595,34 @@ const labels: Record<string, string> = {
           }}
           · 候选：{{ diagnosis.runtime.candidate_id || "未观测" }}
         </p>
-        <p>策略拒绝连接：{{ diagnosis.runtime?.rejected || 0 }}</p>
+        <p>入口策略拒绝观测：{{ diagnosis.runtime?.rejected || 0 }}</p>
+        <div
+          v-for="(point, index) in diagnosis.runtime_observations || []"
+          :key="`${point.node_id}/${point.runtime.inspection_location}/${index}`"
+          aria-label="协议检测观测"
+        >
+          <p>
+            {{ point.node_id }} ·
+            {{ point.runtime.inspection_location || "未标记位置" }} ·
+            {{ point.runtime.detected_protocol || "未确认协议" }}
+            {{ point.runtime.detected_variant || "" }}
+          </p>
+          <p>
+            证据：{{ point.runtime.evidence || "无匹配证据" }} · 可见层：{{
+              point.runtime.visibility || "未报告"
+            }}
+            · {{ point.runtime.inspection_reason || "未报告检测结果" }}
+          </p>
+          <p>
+            拒绝观测：{{ point.runtime.rejected || 0 }} · 未知：{{
+              point.runtime.unknown || 0
+            }}
+            · 不可检查：{{ point.runtime.unavailable || 0 }}
+          </p>
+        </div>
+        <p class="muted small">
+          各节点和检测位置的观测独立计数；多跳可能重复观察同一业务，不能相加作为用户连接数。拒绝未知流量不代表识别了代理协议。
+        </p>
       </template>
       <button @click="diagnosis = null">关闭诊断</button>
     </section>

@@ -13,6 +13,7 @@ import (
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy/detect"
 )
 
 func hopAddress(h contract.TunnelHop) (string, error) {
@@ -112,6 +113,9 @@ func (s *Server) authorizedNext(requested contract.TunnelHop) (contract.TunnelHo
 }
 func relayPackets(a, b *Session, idle time.Duration) { relayPacketsWithPolicy(a, b, idle, nil) }
 func relayPacketsWithPolicy(a, b *Session, idle time.Duration, layers []contract.InboundPolicy) {
+	relayPacketsWithPolicyPlan(a, b, idle, layers, nil)
+}
+func relayPacketsWithPolicyPlan(a, b *Session, idle time.Duration, layers []contract.InboundPolicy, plan *detect.Plan, observers ...func(detect.Detection, bool)) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	copyOne := func(dst, src *Session, up bool) {
@@ -125,10 +129,12 @@ func relayPacketsWithPolicy(a, b *Session, idle time.Duration, layers []contract
 				return
 			}
 			if up {
-				for _, layer := range layers {
-					if policy.BlockedDatagram(p, layer.BlockedApps) {
-						return
-					}
+				detection, blocked := policy.DatagramDecision(p, layers, plan)
+				for _, observe := range observers {
+					observe(detection, blocked)
+				}
+				if blocked {
+					return
 				}
 			}
 			dst.SetWriteDeadline(time.Now().Add(idle))

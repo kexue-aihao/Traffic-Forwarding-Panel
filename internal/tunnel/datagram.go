@@ -687,6 +687,7 @@ func (p *DatagramPool) Close() {
 }
 
 type datagramAuthorization struct {
+	inspect func(string, string, []byte) bool
 	allow   func(string, string) bool
 	blocked []string
 }
@@ -899,7 +900,7 @@ func (s *DatagramServer) open(l *datagramLink, st *quic.Stream) {
 				}
 				return
 			}
-			if auth != nil && policy.BlockedDatagram(buf[:n], auth.blocked) {
+			if auth != nil && (auth.inspect == nil && policy.BlockedDatagram(buf[:n], auth.blocked) || auth.inspect != nil && auth.inspect(req.Token, req.Target, buf[:n])) {
 				return
 			}
 			target.SetWriteDeadline(time.Now().Add(5 * time.Second))
@@ -936,5 +937,26 @@ func (s *DatagramServer) UpdateAuthorization(allow func(string, string) bool, bl
 	s.mu.Unlock()
 	for _, q := range conns {
 		q.CloseWithError(0, "authorization changed")
+	}
+}
+
+// UpdateInspection changes the actual payload gate and revokes old flows whose
+// authorization snapshot could otherwise retain an outdated detector plan.
+func (s *DatagramServer) UpdateInspection(inspect func(string, string, []byte) bool) {
+	old := s.authorization.Load()
+	next := &datagramAuthorization{inspect: inspect}
+	if old != nil {
+		next.allow = old.allow
+		next.blocked = old.blocked
+	}
+	s.authorization.Store(next)
+	s.mu.Lock()
+	conns := make([]*quic.Conn, 0, len(s.conns))
+	for q := range s.conns {
+		conns = append(conns, q)
+	}
+	s.mu.Unlock()
+	for _, q := range conns {
+		q.CloseWithError(0, "inspection changed")
 	}
 }

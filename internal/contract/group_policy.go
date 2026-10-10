@@ -9,6 +9,52 @@ import (
 
 const GroupPolicyVersion = 2
 
+// InspectionVersion evolves detection without disabling existing v2 policies.
+const InspectionVersion = 1
+
+// InspectionPolicy contains local profile labels only. Authentication material
+// and certificate paths must never enter control-plane configuration.
+type InspectionPolicy struct {
+	Version  int              `json:"version"`
+	Profiles []string         `json:"profiles,omitempty"`
+	Mode     string           `json:"mode,omitempty"`
+	Unknown  string           `json:"unknown,omitempty"`
+	Business *BusinessInbound `json:"business,omitempty"`
+}
+
+// BusinessInbound declares an operator-owned business protocol termination.
+// Profiles resolve locally; it does not attest TLS seen at another node.
+type BusinessInbound struct {
+	TLSProfile         string `json:"tls_profile,omitempty"`
+	WebSocket          bool   `json:"websocket,omitempty"`
+	WebSocketEarlyData bool   `json:"websocket_early_data,omitempty"`
+	UpstreamTLSProfile string `json:"upstream_tls_profile,omitempty"`
+}
+
+type InspectionProfileStatus struct {
+	Label    string   `json:"label"`
+	Protocol string   `json:"protocol"`
+	Variants []string `json:"variants,omitempty"`
+	Networks []string `json:"networks,omitempty"`
+	Ready    bool     `json:"ready"`
+	Reason   string   `json:"reason,omitempty"`
+}
+
+func (p *InspectionPolicy) UnmarshalJSON(data []byte) error {
+	type plain InspectionPolicy
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.DisallowUnknownFields()
+	var v plain
+	if err := d.Decode(&v); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return errors.New("one inspection JSON object required")
+	}
+	*p = InspectionPolicy(v)
+	return nil
+}
+
 // UnmarshalJSON retains explicit zeroes while giving omitted parameters useful
 // defaults. Decode strictly even when nested inside an API request.
 func (a *GroupAdvanced) UnmarshalJSON(data []byte) error {
@@ -51,13 +97,14 @@ type EffectivePolicy struct {
 }
 
 type InboundPolicy struct {
-	GroupID        string   `json:"group_id"`
-	AllowedHosts   []string `json:"allowed_hosts,omitempty"`
-	BlockedHosts   []string `json:"blocked_hosts,omitempty"`
-	BlockedPaths   []string `json:"blocked_paths,omitempty"`
-	BlockedApps    []string `json:"blocked_apps,omitempty"`
-	TLSRequired    bool     `json:"tls_required,omitempty"`
-	RejectEmptySNI bool     `json:"reject_empty_sni,omitempty"`
+	Inspection     *InspectionPolicy `json:"inspection,omitempty"`
+	GroupID        string            `json:"group_id"`
+	AllowedHosts   []string          `json:"allowed_hosts,omitempty"`
+	BlockedHosts   []string          `json:"blocked_hosts,omitempty"`
+	BlockedPaths   []string          `json:"blocked_paths,omitempty"`
+	BlockedApps    []string          `json:"blocked_apps,omitempty"`
+	TLSRequired    bool              `json:"tls_required,omitempty"`
+	RejectEmptySNI bool              `json:"reject_empty_sni,omitempty"`
 }
 
 type FailoverPolicy struct {
@@ -100,9 +147,10 @@ type ServiceGrant struct {
 }
 
 type ServiceTarget struct {
-	RuleID  string `json:"rule_id"`
-	Network string `json:"network"`
-	Target  string `json:"target"`
+	Business *BusinessInbound `json:"business,omitempty"`
+	RuleID   string           `json:"rule_id"`
+	Network  string           `json:"network"`
+	Target   string           `json:"target"`
 }
 
 type ServiceConfig struct {
@@ -130,10 +178,18 @@ type ServiceStatus struct {
 }
 
 type RuleRuntimeStatus struct {
-	RuleID        string `json:"rule_id"`
-	PolicyHash    string `json:"policy_hash,omitempty"`
-	CandidateID   string `json:"candidate_id,omitempty"`
-	AddressFamily string `json:"address_family,omitempty"`
-	Carrier       string `json:"carrier,omitempty"`
-	Rejected      uint64 `json:"rejected"`
+	InspectionLocation string `json:"inspection_location,omitempty"`
+	DetectedProtocol   string `json:"detected_protocol,omitempty"`
+	DetectedVariant    string `json:"detected_variant,omitempty"`
+	Evidence           string `json:"evidence,omitempty"`
+	Visibility         string `json:"visibility,omitempty"`
+	InspectionReason   string `json:"inspection_reason,omitempty"`
+	Unknown            uint64 `json:"unknown,omitempty"`
+	Unavailable        uint64 `json:"unavailable,omitempty"`
+	RuleID             string `json:"rule_id"`
+	PolicyHash         string `json:"policy_hash,omitempty"`
+	CandidateID        string `json:"candidate_id,omitempty"`
+	AddressFamily      string `json:"address_family,omitempty"`
+	Carrier            string `json:"carrier,omitempty"`
+	Rejected           uint64 `json:"rejected"`
 }

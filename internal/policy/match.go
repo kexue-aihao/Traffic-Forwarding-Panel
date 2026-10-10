@@ -144,6 +144,9 @@ func NormalizeLayers(layers []contract.InboundPolicy) error {
 	}
 	for i := range layers {
 		p := &layers[i]
+		if err := NormalizeInspection(p.Inspection); err != nil {
+			return err
+		}
 		for _, values := range []*[]string{&p.AllowedHosts, &p.BlockedHosts} {
 			if len(*values) > 256 {
 				return errors.New("at most 256 host patterns")
@@ -168,10 +171,12 @@ func NormalizeLayers(layers []contract.InboundPolicy) error {
 		}
 		slices.Sort(p.BlockedPaths)
 		p.BlockedPaths = slices.Compact(p.BlockedPaths)
-		for _, app := range p.BlockedApps {
-			if app != "http" && app != "socks" {
+		for j, app := range p.BlockedApps {
+			canonical, ok := NormalizeApplication(app)
+			if !ok {
 				return errors.New("unsupported application detector")
 			}
+			p.BlockedApps[j] = canonical
 		}
 		slices.Sort(p.BlockedApps)
 		p.BlockedApps = slices.Compact(p.BlockedApps)
@@ -201,7 +206,7 @@ func Seal(p *contract.EffectivePolicy) error {
 
 func NeedsInspect(layers []contract.InboundPolicy) bool {
 	for _, p := range layers {
-		if p.TLSRequired || p.RejectEmptySNI || len(p.AllowedHosts)+len(p.BlockedHosts)+len(p.BlockedPaths)+len(p.BlockedApps) > 0 {
+		if p.Inspection != nil || p.TLSRequired || p.RejectEmptySNI || len(p.AllowedHosts)+len(p.BlockedHosts)+len(p.BlockedPaths)+len(p.BlockedApps) > 0 {
 			return true
 		}
 	}

@@ -2,7 +2,7 @@
 
 Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP、secure-direct 和单出口 QUIC DATAGRAM 加密承载。
 
-当前版本为正式版 `v0.1.39`。安装包、更新范围及升级注意事项见 [发布说明](docs/releases/v0.1.39.md)。本版接入设备组全部高级参数的执行链路，增加 Host/SNI 与 HTTP 路径过滤、IPv6 优先、加权故障转移、托管出口和四种反向载波，以及 TLS profile 和授权撤销。需要更新面板及入口、出口 Agent，并在高级设置中显式启用完整策略；部署方法与可见性限制见 [高级设置交付说明](docs/advanced-settings-implementation.md)。保留直连 UDP 与单出口 QUIC DATAGRAM；Linux 跨机吞吐/P99、5% 性能预算和 24 小时稳定性尚未验收。已实现内容见 [实施状态](docs/implementation-status.md)，完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持已有 Docker 安装自动备份并升级。Cyber 按用户要求跳过；生产容量、公网和真实支付仍待验收。
+当前版本为正式版 `v0.1.40`。安装包、更新范围及升级注意事项见 [发布说明](docs/releases/v0.1.40.md)。本版为设备组高级设置接通 Shadowsocks、Trojan、VMess、SOCKS5 的协议嗅探与禁用，覆盖直连入口和入口→出口，并提供本地凭据准备状态、独立出口检查、业务 TLS/WS 适配及 SOCKS5 UDP 受控关联。Shadowsocks/VMess 需要已知本地凭据，Trojan 需要受控业务 TLS 终止；部署与范围见 [协议检测交付说明](docs/protocol-sniffing-implementation.md)。需要更新面板及入口、出口 Agent，并显式启用相应高级检测配置。保留完整高级策略、直连 UDP 与单出口 QUIC DATAGRAM；Linux 跨机吞吐/P99、5% 性能预算和 24 小时稳定性尚未验收。已实现内容见 [实施状态](docs/implementation-status.md)，完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持已有 Docker 安装自动备份并升级。Cyber 按用户要求跳过；生产容量、公网和真实支付仍待验收。
 
 ## 本机启动
 

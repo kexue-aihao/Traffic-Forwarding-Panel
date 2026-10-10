@@ -292,6 +292,15 @@ func (s *Server) resolveExitWithUDP(ctx context.Context, tx *sql.Tx, rule *contr
 			return "", errors.New("链式出口需要 2–3 跳")
 		}
 		parts := []contract.Rule{}
+		top, err := s.managedTopology(ctx, tx)
+		if err != nil {
+			return "", err
+		}
+		business, err := routeBusiness(*rule, top.groups)
+		if err != nil {
+			return "", err
+		}
+		pathNodes := []string{rule.NodeID}
 		seenGroups := map[string]bool{g.ID: true}
 		seenNodes := map[string]bool{rule.NodeID: true}
 		for _, gid := range g.ChainGroupIDs {
@@ -304,6 +313,7 @@ func (s *Server) resolveExitWithUDP(ctx context.Context, tx *sql.Tx, rule *contr
 			}
 			seenGroups[gid] = true
 			part := *rule
+			part.Business = business
 			part.ExitGroupID, part.ExitID = gid, "auto"
 			if _, err := s.resolveExitWithUDP(ctx, tx, &part, false); err != nil {
 				return "", err
@@ -319,12 +329,20 @@ func (s *Server) resolveExitWithUDP(ctx context.Context, tx *sql.Tx, rule *contr
 				return "", errors.New("链式出口不能重复经过同一设备")
 			}
 			seenNodes[nodeID] = true
+			pathNodes = append(pathNodes, nodeID)
 			parts = append(parts, part)
 		}
 		resolved := *parts[0].Tunnel
 		resolved.Chain = nil
 		for _, part := range parts[1:] {
-			resolved.Chain = append(resolved.Chain, contract.TunnelHop{Transport: part.Transport, Endpoint: part.Tunnel.Endpoint, ServerName: part.Tunnel.ServerName, Token: part.Tunnel.Token, Inspect: part.Tunnel.Inspect})
+			resolved.Chain = append(resolved.Chain, contract.TunnelHop{Transport: part.Transport, Endpoint: part.Tunnel.Endpoint, ServerName: part.Tunnel.ServerName, Token: part.Tunnel.Token, Inspect: part.Tunnel.Inspect, StagedInspection: part.Tunnel.StagedInspection})
+		}
+		for i, part := range parts {
+			if part.Tunnel.StagedInspection {
+				if err := stagedCapabilities(top.nodes[pathNodes[i]], top.nodes[pathNodes[i+1]]); err != nil {
+					return "", err
+				}
+			}
 		}
 		candidate := *rule
 		candidate.Transport, candidate.Tunnel = parts[0].Transport, &resolved

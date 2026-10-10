@@ -27,7 +27,14 @@ export const advancedSections = [
         label: "应用协议屏蔽",
         value: [],
         description:
-          "拦截 HTTP/1、明文 HTTP/2、SOCKS4/5；TLS 使用可见 HTTP ALPN，UDP 仅识别数据报首部。",
+          "SOCKS4/5 验证明文握手；Shadowsocks、VMess 需本地凭据，Trojan 需受控业务 TLS 终止。仅覆盖预览中声明的版本与载波。",
+      },
+      {
+        key: "inspection",
+        label: "协议检测范围",
+        value: { version: 1, profiles: [], mode: "strict", unknown: "allow" },
+        description:
+          "strict 按已声明范围阻断；缺少能力或本地 profile 时规则停止。observe 只观测。未知流量默认允许，未知拒绝是独立策略。这里只填写本地标签，不填写密码、密钥或 UUID。",
       },
     ],
   },
@@ -127,13 +134,53 @@ export const advancedSections = [
 
 type Settings = Record<string, unknown>;
 
+export const applicationProtocols = [
+  {
+    value: "http",
+    label: "HTTP",
+    scope: "明文 HTTP/1、HTTP/2；TLS 可见 HTTP ALPN",
+  },
+  {
+    value: "socks",
+    label: "SOCKS",
+    scope: "旧配置兼容：SOCKS4 与 SOCKS5 联集",
+  },
+  { value: "socks4", label: "SOCKS4", scope: "明文 TCP 握手结构" },
+  {
+    value: "socks5",
+    label: "SOCKS5",
+    scope: "明文 TCP 握手；UDP 需受控 TCP 关联或显式选择结构模式",
+  },
+  {
+    value: "shadowsocks",
+    label: "Shadowsocks",
+    scope: "所选本地密钥与支持的 AEAD 版本；未知密钥不可确认",
+  },
+  {
+    value: "trojan",
+    label: "Trojan",
+    scope: "受控业务 TLS 终止后验证本地认证凭据",
+  },
+  {
+    value: "vmess",
+    label: "VMess",
+    scope: "所选本地 UUID 与支持的 AEAD 版本；透传 TLS 内层不可见",
+  },
+];
+
 export function initialGroupAdvanced(group: Record<string, unknown>): Settings {
   if (group.advanced && typeof group.advanced === "object")
     return normalize({ ...group.advanced });
   // Keep application blocks from groups created before the separate editor.
   const migrated: Settings = {};
   const blockedProtocol = ((group.blocked_protocols || []) as string[])
-    .filter((value) => ["app:http", "app:socks", "socks"].includes(value))
+    .filter(
+      (value) =>
+        value !== "http" &&
+        applicationProtocols.some(
+          (p) => p.value === value.replace(/^app:/, ""),
+        ),
+    )
     .map((value) => value.replace(/^app:/, ""));
   if (blockedProtocol.length) migrated.blocked_protocol = blockedProtocol;
   return migrated;
@@ -154,8 +201,85 @@ function normalize(value: unknown): Settings {
   }
   if (Array.isArray(settings.blocked_protocol))
     settings.blocked_protocol = settings.blocked_protocol.map((value) =>
-      typeof value === "string" ? value.replace(/^app:/, "") : value,
+      typeof value === "string"
+        ? value.trim().toLowerCase().replace(/^app:/, "")
+        : value,
     );
+  if (Object.hasOwn(settings, "inspection")) {
+    const v = settings.inspection;
+    if (!v || typeof v !== "object" || Array.isArray(v))
+      throw new Error("inspection 必须是 JSON 对象。");
+    const inspection = v as Settings;
+    if (inspection.version !== 1)
+      throw new Error("inspection.version 必须为 1。");
+    if (
+      ![undefined, "strict", "observe"].includes(
+        inspection.mode as string | undefined,
+      )
+    )
+      throw new Error("inspection.mode 必须为 strict 或 observe。");
+    if (
+      ![undefined, "allow", "deny"].includes(
+        inspection.unknown as string | undefined,
+      )
+    )
+      throw new Error("inspection.unknown 必须为 allow 或 deny。");
+    if (inspection.mode === "observe" && inspection.unknown === "deny")
+      throw new Error("只观测模式不能拒绝未知应用。");
+    if (
+      Object.hasOwn(inspection, "profiles") &&
+      (!Array.isArray(inspection.profiles) ||
+        inspection.profiles.some(
+          (label) =>
+            typeof label !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(label),
+        ))
+    )
+      throw new Error(
+        "inspection.profiles 只接受本地标签，不能填写密码或文件路径。",
+      );
+    const keys = ["version", "profiles", "mode", "unknown", "business"];
+    if (Object.keys(inspection).some((key) => !keys.includes(key)))
+      throw new Error("inspection 含有未知字段；凭据只配置在 Agent 本地。");
+    if (Object.hasOwn(inspection, "business")) {
+      const b = inspection.business;
+      if (!b || typeof b !== "object" || Array.isArray(b))
+        throw new Error("inspection.business 必须是 JSON 对象。");
+      const business = b as Settings;
+      if (
+        Object.keys(business).some(
+          (key) =>
+            ![
+              "tls_profile",
+              "upstream_tls_profile",
+              "websocket",
+              "websocket_early_data",
+            ].includes(key),
+        )
+      )
+        throw new Error("业务入口只接受本地 profile 标签和 websocket 设置。");
+      for (const key of ["tls_profile", "upstream_tls_profile"]) {
+        if (
+          Object.hasOwn(business, key) &&
+          (typeof business[key] !== "string" ||
+            (business[key] !== "" &&
+              !/^[A-Za-z0-9_-]{1,64}$/.test(business[key] as string)))
+        )
+          throw new Error(`${key} 只接受本地 profile 标签。`);
+      }
+      if (
+        Object.hasOwn(business, "websocket") &&
+        typeof business.websocket !== "boolean"
+      )
+        throw new Error("websocket 必须为布尔值。");
+      if (
+        Object.hasOwn(business, "websocket_early_data") &&
+        typeof business.websocket_early_data !== "boolean"
+      )
+        throw new Error("websocket_early_data 必须为布尔值。");
+      if (business.websocket_early_data && !business.websocket)
+        throw new Error("WebSocket early-data 需要先启用受控 WebSocket 检测。");
+    }
+  }
   return settings;
 }
 

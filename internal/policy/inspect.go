@@ -6,12 +6,13 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
-	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy/detect"
 )
 
 const H2Preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
@@ -22,6 +23,8 @@ type Inspection struct {
 	ALPN       []string
 	Prefix     []byte
 	Conn       net.Conn
+	Detection  detect.Detection
+	plan       *detect.Plan
 }
 
 type replay struct {
@@ -54,9 +57,7 @@ func (c *capture) Read(p []byte) (int, error) {
 // The parser never sends handshake replies to the business client.
 func (c *capture) Write(p []byte) (int, error) { return len(p), nil }
 
-func Inspect(conn net.Conn) (Inspection, error) {
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	defer conn.SetReadDeadline(time.Time{})
+func inspectMetadata(conn net.Conn) (Inspection, error) {
 	r := bufio.NewReaderSize(conn, HeaderLimit+1)
 	first, e := r.Peek(1)
 	if e != nil {
@@ -150,15 +151,24 @@ func Inspect(conn net.Conn) (Inspection, error) {
 }
 
 func (v Inspection) Check(layers []contract.InboundPolicy) error {
-	for _, p := range layers {
-		if p.TLSRequired && v.Kind != "tls" {
-			return ErrDenied
+	if err := v.CheckApplications(layers); err != nil {
+		return err
+	}
+	return v.CheckMetadata(layers)
+}
+
+func (v Inspection) CheckApplications(layers []contract.InboundPolicy) error {
+	if v.plan != nil {
+		if err := v.plan.Decision(v.Detection); err != nil {
+			return fmt.Errorf("%w: inspection", ErrDenied)
 		}
-		if p.RejectEmptySNI && v.Kind == "tls" && v.Host == "" {
-			return ErrDenied
+	}
+	for _, p := range layers {
+		if p.Inspection != nil && p.Inspection.Mode == "observe" {
+			continue
 		}
 		for _, app := range p.BlockedApps {
-			if app == "socks" && v.Kind == "socks" {
+			if (app == "socks" && (v.Kind == "socks4" || v.Kind == "socks5")) || app == v.Kind {
 				return ErrDenied
 			}
 			if app == "http" {
@@ -171,6 +181,18 @@ func (v Inspection) Check(layers []contract.InboundPolicy) error {
 					}
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func (v Inspection) CheckMetadata(layers []contract.InboundPolicy) error {
+	for _, p := range layers {
+		if p.TLSRequired && v.Kind != "tls" {
+			return ErrDenied
+		}
+		if p.RejectEmptySNI && v.Kind == "tls" && v.Host == "" {
+			return ErrDenied
 		}
 	}
 	if v.Kind == "h2" {
@@ -231,10 +253,11 @@ func FilterWithRejection(conn net.Conn, v Inspection, layers []contract.InboundP
 	return &rejectionConn{Conn: filtered, reject: reject}
 }
 
-// UDP retains the documented prefix detector; this does not inspect QUIC/DTLS.
+// UDP checks the business datagram, never the outer QUIC/DTLS carrier.
 func BlockedDatagram(p []byte, apps []string) bool {
+	d := detect.Structural(p, true, "udp")
 	for _, app := range apps {
-		if app == "socks" && len(p) > 0 && (p[0] == 4 || p[0] == 5) {
+		if (app == "socks" || app == "socks5") && d.Protocol == "socks5" && d.Status == detect.Match {
 			return true
 		}
 		if app == "http" {
@@ -246,4 +269,33 @@ func BlockedDatagram(p []byte, apps []string) bool {
 		}
 	}
 	return false
+}
+
+func BlockedDatagramWithPlan(p []byte, layers []contract.InboundPolicy, plan *detect.Plan) bool {
+	_, denied := DatagramDecision(p, layers, plan)
+	return denied
+}
+
+// DatagramDecision authenticates each datagram once. A confirmed encrypted
+// protocol takes precedence over coincidental plaintext header bytes.
+func DatagramDecision(p []byte, layers []contract.InboundPolicy, plan *detect.Plan) (detect.Detection, bool) {
+	d := detect.Structural(p, true, "udp")
+	if plan != nil && !plan.Empty() {
+		d = plan.Feed(p, true, "udp")
+		if plan.Decision(d) != nil {
+			return d, true
+		}
+		if d.Status == detect.Match && d.Evidence == detect.Authenticated {
+			return d, false
+		}
+	}
+	for _, layer := range layers {
+		if layer.Inspection != nil && layer.Inspection.Mode == "observe" {
+			continue
+		}
+		if BlockedDatagram(p, layer.BlockedApps) {
+			return d, true
+		}
+	}
+	return d, false
 }

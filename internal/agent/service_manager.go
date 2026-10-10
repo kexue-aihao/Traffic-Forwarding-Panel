@@ -18,6 +18,7 @@ import (
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy/detect"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/tunnel"
 )
 
@@ -52,15 +53,16 @@ func LoadServiceProfiles(path string) (map[string]ServiceProfile, error) {
 }
 
 type serviceEntry struct {
-	config     contract.ServiceConfig
-	server     *tunnel.Server
-	routeTLS   *tls.Config
-	udp        *tunnel.DatagramServer
-	udpAddress string
-	listener   *serviceListener
-	cancel     context.CancelFunc
-	status     contract.ServiceStatus
-	reusedUDP  bool
+	inspectionGeneration string
+	config               contract.ServiceConfig
+	server               *tunnel.Server
+	routeTLS             *tls.Config
+	udp                  *tunnel.DatagramServer
+	udpAddress           string
+	listener             *serviceListener
+	cancel               context.CancelFunc
+	status               contract.ServiceStatus
+	reusedUDP            bool
 }
 type serviceSocket struct {
 	listener net.Listener
@@ -129,14 +131,16 @@ func (s *serviceSocket) serve() {
 }
 
 type ServiceManager struct {
-	mu         sync.Mutex
-	Profiles   map[string]ServiceProfile
-	BaseTLS    *tls.Config
-	entries    map[string]*serviceEntry
-	sockets    map[string]*serviceSocket
-	expiry     *time.Timer
-	generation uint64
-	closed     bool
+	InspectionProfiles detect.Profiles
+	BusinessProfiles   map[string]BusinessProfile
+	mu                 sync.Mutex
+	Profiles           map[string]ServiceProfile
+	BaseTLS            *tls.Config
+	entries            map[string]*serviceEntry
+	sockets            map[string]*serviceSocket
+	expiry             *time.Timer
+	generation         uint64
+	closed             bool
 }
 
 func (m *ServiceManager) tlsConfig(v contract.ServiceConfig) (*tls.Config, error) {
@@ -358,7 +362,11 @@ func (m *ServiceManager) Prepare(configs []contract.ServiceConfig, until time.Ti
 				return fail(fmt.Errorf("service %s outbound TLS: %w", v.ID, e))
 			}
 		}
-		if old := m.entries[v.ID]; liveService(old) && reflect.DeepEqual(old.config, v) && sameServiceTLS(old.server.TLS, tc) && sameServiceTLS(old.routeTLS, routeTLS) {
+		plans, origins, inspectionGeneration, e := prepareServiceInspection(v, m.InspectionProfiles, m.BusinessProfiles)
+		if e != nil {
+			return fail(fmt.Errorf("service %s inspection: %w", v.ID, e))
+		}
+		if old := m.entries[v.ID]; liveService(old) && old.inspectionGeneration == inspectionGeneration && reflect.DeepEqual(old.config, v) && sameServiceTLS(old.server.TLS, tc) && sameServiceTLS(old.routeTLS, routeTLS) {
 			next[v.ID] = old
 			if v.Kind != "reverse" {
 				if used[v.Listen] {
@@ -368,8 +376,12 @@ func (m *ServiceManager) Prepare(configs []contract.ServiceConfig, until time.Ti
 			}
 			continue
 		}
-		entry := &serviceEntry{config: v, routeTLS: routeTLS, status: contract.ServiceStatus{ID: v.ID}}
-		entry.server = &tunnel.Server{Managed: true, Token: v.Token, Grants: v.Grants, Policy: v.Policy, TLS: tc, NodeID: v.ID, NextHops: v.NextHops, Client: tunnel.Client{TLS: tc}}
+		entry := &serviceEntry{config: v, inspectionGeneration: inspectionGeneration, routeTLS: routeTLS, status: contract.ServiceStatus{ID: v.ID}}
+		entry.server = &tunnel.Server{InspectionPlans: plans, OriginTLS: origins, Managed: true, Token: v.Token, Grants: v.Grants, Policy: v.Policy, TLS: tc, NodeID: v.ID, NextHops: v.NextHops, Client: tunnel.Client{TLS: tc}}
+		entry.server.InspectionLocation = "exit"
+		if v.Kind == "reverse" {
+			entry.server.InspectionLocation = "reverse"
+		}
 		if v.Kind != "reverse" {
 			if used[v.Listen] {
 				return fail(errors.New("duplicate service listen"))
@@ -505,6 +517,31 @@ func (m *ServiceManager) Prepare(configs []contract.ServiceConfig, until time.Ti
 						}
 						return false
 					}, apps)
+					entry.udp.UpdateInspection(func(token, target string, payload []byte) bool {
+						for _, g := range config.Grants {
+							if token == g.StreamToken {
+								for _, t := range g.Targets {
+									if t.Network == "udp" && t.Target == target {
+										var layers []contract.InboundPolicy
+										if config.Policy != nil {
+											layers = config.Policy.InboundLayers
+										}
+										plan := entry.server.InspectionPlans[tunnel.InspectionKey(t.RuleID, t.Network, t.Target)]
+										detection, blockedPacket := policy.DatagramDecision(payload, layers, plan)
+										if plan != nil && !plan.Empty() {
+											entry.server.RecordInspection(t.RuleID, detection, "raw")
+										}
+										if blockedPacket {
+											entry.server.RejectPolicy(t.RuleID)
+											return true
+										}
+										return false
+									}
+								}
+							}
+						}
+						return true
+					})
 					if !entry.reusedUDP {
 						ds := entry.udp
 						go func() {
@@ -601,6 +638,15 @@ func (m *ServiceManager) Statuses() []contract.ServiceStatus {
 				}
 			}
 		}
+	}
+	return out
+}
+func (m *ServiceManager) RuleStatuses() []contract.RuleRuntimeStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []contract.RuleRuntimeStatus
+	for _, e := range m.entries {
+		out = append(out, e.server.PolicyStatuses()...)
 	}
 	return out
 }

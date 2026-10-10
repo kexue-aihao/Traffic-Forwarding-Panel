@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
@@ -20,9 +21,11 @@ func groupLayer(g contract.Group) contract.InboundPolicy {
 		p.AllowedHosts = append([]string{}, a.AllowedHost...)
 		p.BlockedHosts = append([]string{}, a.BlockedHost...)
 		p.BlockedPaths = append([]string{}, a.BlockedPath...)
-		p.BlockedApps = applicationBlocks(p.BlockedApps, a.BlockedProtocol)
+		// The advanced field is authoritative; the top-level values mirror it.
+		p.BlockedApps = applicationBlocks(a.BlockedProtocol, nil)
 		p.TLSRequired = a.TLSInboundPolicy > 0
 		p.RejectEmptySNI = a.TLSRejectEmptySNI
+		p.Inspection = a.Inspection
 	}
 	return p
 }
@@ -46,7 +49,7 @@ func loadPolicyGroups(ctx context.Context, tx *sql.Tx) (map[string]contract.Grou
 	}
 	return out, rows.Err()
 }
-func compileGroupPolicy(rule *contract.Rule, role string, groups map[string]contract.Group, caps []string) error {
+func compileGroupPolicy(rule *contract.Rule, role string, groups map[string]contract.Group, caps []string, profiles ...[]contract.InspectionProfileStatus) error {
 	entry, ok := groups[rule.GroupID]
 	if !ok {
 		return errors.New("entry_group_missing")
@@ -86,6 +89,14 @@ func compileGroupPolicy(rule *contract.Rule, role string, groups map[string]cont
 		}
 	}
 	if !enabled {
+		for _, app := range applicationBlocks(rule.BlockedProtocols, nil) {
+			if newApplication(app) {
+				return errors.New("inspection_policy_required:" + app)
+			}
+		}
+		for _, g := range path {
+			rule.BlockedProtocols = applicationBlocks(rule.BlockedProtocols, g.BlockedProtocols)
+		}
 		return nil
 	}
 	for _, cap := range []string{"group-policy-v2", "inbound-inspection-v1", "http-stream-filter-v1", "peer-address-policy-v1", "route-failover-v1"} {
@@ -94,12 +105,55 @@ func compileGroupPolicy(rule *contract.Rule, role string, groups map[string]cont
 		}
 	}
 	p := &contract.EffectivePolicy{Version: contract.GroupPolicyVersion}
+	ruleApps := applicationBlocks(rule.BlockedProtocols, nil)
+	inspectionNode := contract.Node{Capabilities: caps}
+	if len(profiles) > 0 {
+		inspectionNode.InspectionProfiles = profiles[0]
+	}
+	rule.Business = nil
+	for _, g := range path {
+		layer := groupLayer(g)
+		if layer.Inspection != nil && layer.Inspection.Business != nil {
+			business := layer.Inspection.Business
+			if rule.Business != nil && !reflect.DeepEqual(rule.Business, business) {
+				return errors.New("business_adapter_policy_conflict")
+			}
+			copy := *business
+			rule.Business = &copy
+		}
+		p.InboundLayers = append(p.InboundLayers, layer)
+	}
+	for _, layer := range p.InboundLayers {
+		if layer.Inspection != nil && layer.Inspection.Business == nil && rule.Business != nil {
+			copy := *layer.Inspection
+			copy.Business = rule.Business
+			layer.Inspection = &copy
+		}
+		if e := inspectionCapabilities(layer, inspectionNode, rule.Network); e != nil {
+			return e
+		}
+	}
 	for _, g := range path {
 		rule.BlockedProtocols = applicationBlocks(rule.BlockedProtocols, g.BlockedProtocols)
-		p.InboundLayers = append(p.InboundLayers, groupLayer(g))
 	}
-	if len(rule.BlockedProtocols) > 0 {
-		p.InboundLayers = append(p.InboundLayers, contract.InboundPolicy{GroupID: "rule", BlockedApps: rule.BlockedProtocols})
+	if len(ruleApps) > 0 {
+		layer := contract.InboundPolicy{GroupID: "rule", BlockedApps: ruleApps}
+		if activeAdvanced(entry) {
+			if entry.Advanced.Inspection != nil {
+				copy := *entry.Advanced.Inspection
+				copy.Mode = "strict"
+				if copy.Business == nil {
+					copy.Business = rule.Business
+				}
+				layer.Inspection = &copy
+			}
+		}
+		// Group layers already carry their local detection plan. Only validate
+		// additional rule restrictions with the entry's selected profiles.
+		if e := inspectionCapabilities(layer, inspectionNode, rule.Network); e != nil {
+			return e
+		}
+		p.InboundLayers = append(p.InboundLayers, layer)
 	}
 	if activeAdvanced(entry) {
 		a := entry.Advanced

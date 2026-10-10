@@ -172,6 +172,21 @@
           "error": {
             "type": "string"
           },
+          "inspection_profiles": {
+            "anyOf": [
+              {
+                "description": "Local labels and scope only. Omitted/null reports leave readiness unchanged; an explicit empty ACK array clears readiness and republishes dependent configuration.",
+                "items": {
+                  "$ref": "#/components/schemas/InspectionProfileStatus"
+                },
+                "maxItems": 384,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "rule_statuses": {
             "anyOf": [
               {
@@ -333,6 +348,32 @@
           "rule_id",
           "reason"
         ],
+        "type": "object"
+      },
+      "BusinessInbound": {
+        "additionalProperties": false,
+        "properties": {
+          "tls_profile": {
+            "description": "Locally prepared operator-owned business TLS profile label.",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          },
+          "upstream_tls_profile": {
+            "description": "Locally prepared operator-owned business TLS profile label.",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          },
+          "websocket": {
+            "default": false,
+            "description": "Explicitly adapt the business WebSocket carrier before checking the inner protocol.",
+            "type": "boolean"
+          },
+          "websocket_early_data": {
+            "default": false,
+            "description": "Explicit controlled Xray early-data mode. Requires websocket=true and a complete authentication header; truncated early-data is rejected before Upgrade.",
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "Captcha": {
@@ -1158,7 +1199,7 @@
                 "type": "null"
               }
             ],
-            "description": "Application traffic blocks: app:http, app:socks. Independent of forwarding methods. Legacy network:/transport: entries and bare carrier values are accepted on write and split into disabled_networks/disabled_transports; bare http historically means the HTTP tunnel."
+            "description": "Application traffic blocks use app: canonical protocol names. Legacy network:/transport: entries and bare carrier values are accepted and split into forwarding fields; bare http historically means the HTTP tunnel. New application detectors require activated inspection settings."
           },
           "chain_group_ids": {
             "description": "Ordered physical exit group IDs for a chain_exit group.",
@@ -1332,18 +1373,27 @@
             ]
           },
           "blocked_protocol": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Application protocol blacklist: http, socks. Responses use reference names without the legacy app: prefix."
+            "description": "Application policy; socks retains the SOCKS4/5 union. New protocols require activated group policy and inspection version 1. Only declared variants and visible carriers are covered; credentials stay on the Agent.",
+            "items": {
+              "enum": [
+                "http",
+                "socks",
+                "socks4",
+                "socks5",
+                "shadowsocks",
+                "trojan",
+                "vmess",
+                "app:http",
+                "app:socks",
+                "app:socks4",
+                "app:socks5",
+                "app:shadowsocks",
+                "app:trojan",
+                "app:vmess"
+              ],
+              "type": "string"
+            },
+            "type": "array"
           },
           "disable_udp": {
             "type": "boolean"
@@ -1359,6 +1409,16 @@
             "maximum": 86400,
             "minimum": 0,
             "type": "integer"
+          },
+          "inspection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InspectionPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "ipv6_group": {
             "anyOf": [
@@ -1452,7 +1512,7 @@
                 "type": "null"
               }
             ],
-            "description": "Application traffic blocks: app:http, app:socks. Independent of forwarding methods. Legacy network:/transport: entries and bare carrier values are accepted on write and split into disabled_networks/disabled_transports; bare http historically means the HTTP tunnel."
+            "description": "Application traffic blocks use app: canonical protocol names. Legacy network:/transport: entries and bare carrier values are accepted and split into forwarding fields; bare http historically means the HTTP tunnel. New application detectors require activated inspection settings."
           },
           "chain_group_ids": {
             "description": "Ordered physical exit group IDs for a chain_exit group.",
@@ -1596,6 +1656,12 @@
       "GroupPolicyPreview": {
         "additionalProperties": false,
         "properties": {
+          "inspection_profiles": {
+            "items": {
+              "$ref": "#/components/schemas/NodeInspectionProfiles"
+            },
+            "type": "array"
+          },
           "notes": {
             "items": {
               "type": "string"
@@ -1607,7 +1673,7 @@
           },
           "rules": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/GroupPolicyPreviewRule"
             },
             "type": "array"
           }
@@ -1615,7 +1681,8 @@
         "required": [
           "policy_version",
           "rules",
-          "notes"
+          "notes",
+          "inspection_profiles"
         ],
         "type": "object"
       },
@@ -1628,6 +1695,38 @@
         },
         "required": [
           "advanced"
+        ],
+        "type": "object"
+      },
+      "GroupPolicyPreviewRule": {
+        "additionalProperties": false,
+        "properties": {
+          "inspection": {
+            "items": {
+              "$ref": "#/components/schemas/InspectionCoverage"
+            },
+            "type": "array"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "policy_hash": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "rule_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_id",
+          "node_id",
+          "status"
         ],
         "type": "object"
       },
@@ -1650,7 +1749,7 @@
                 "type": "null"
               }
             ],
-            "description": "Application traffic blocks: app:http, app:socks. Independent of forwarding methods. Legacy network:/transport: entries and bare carrier values are accepted on write and split into disabled_networks/disabled_transports; bare http historically means the HTTP tunnel."
+            "description": "Application traffic blocks use app: canonical protocol names. Legacy network:/transport: entries and bare carrier values are accepted and split into forwarding fields; bare http historically means the HTTP tunnel. New application detectors require activated inspection settings."
           },
           "chain_group_ids": {
             "description": "Ordered physical exit group IDs for a chain_exit group.",
@@ -2028,6 +2127,16 @@
           "group_id": {
             "type": "string"
           },
+          "inspection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InspectionPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "reject_empty_sni": {
             "type": "boolean"
           },
@@ -2037,6 +2146,146 @@
         },
         "required": [
           "group_id"
+        ],
+        "type": "object"
+      },
+      "InspectionCoverage": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "protocol",
+          "network",
+          "mode",
+          "status"
+        ],
+        "type": "object"
+      },
+      "InspectionPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "business": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BusinessInbound"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mode": {
+            "default": "strict",
+            "description": "Strict blocks matches in declared scope and refuses missing prerequisites. Observe reports detections and never blocks application matches.",
+            "enum": [
+              "strict",
+              "observe"
+            ],
+            "type": "string"
+          },
+          "profiles": {
+            "description": "Private local credential profile labels only. Never put passwords, UUIDs, PSKs or key paths here.",
+            "items": {
+              "pattern": "^[A-Za-z0-9_-]{1,64}$",
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": "array"
+          },
+          "unknown": {
+            "default": "allow",
+            "description": "Unknown applications are allowed by default. Deny is a separate access policy, available only in strict mode; opaque TLS rejection does not establish an inner protocol match.",
+            "enum": [
+              "allow",
+              "deny"
+            ],
+            "type": "string"
+          },
+          "version": {
+            "enum": [
+              1
+            ],
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "type": "object"
+      },
+      "InspectionProfileStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": "string"
+          },
+          "networks": {
+            "items": {
+              "enum": [
+                "tcp",
+                "udp"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "type": "array"
+          },
+          "protocol": {
+            "enum": [
+              "http",
+              "socks",
+              "socks4",
+              "socks5",
+              "shadowsocks",
+              "trojan",
+              "vmess",
+              "business-tls"
+            ],
+            "type": "string"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Fixed public readiness reason. Credentials and file paths never appear here.",
+            "enum": [
+              "",
+              "profile_invalid",
+              "business_certificate_unavailable",
+              "business_ca_unavailable"
+            ],
+            "type": "string"
+          },
+          "variants": {
+            "items": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": "array"
+          }
+        },
+        "required": [
+          "label",
+          "protocol",
+          "ready"
         ],
         "type": "object"
       },
@@ -2307,6 +2556,21 @@
           "id": {
             "type": "string"
           },
+          "inspection_profiles": {
+            "anyOf": [
+              {
+                "description": "Local labels and scope only. Omitted/null reports leave readiness unchanged; an explicit empty ACK array clears readiness and republishes dependent configuration.",
+                "items": {
+                  "$ref": "#/components/schemas/InspectionProfileStatus"
+                },
+                "maxItems": 384,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "last_seen": {
             "anyOf": [
               {
@@ -2363,6 +2627,29 @@
           "desired_version",
           "applied_version",
           "apply_error"
+        ],
+        "type": "object"
+      },
+      "NodeInspectionProfiles": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/InspectionProfileStatus"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "node_id",
+          "name",
+          "profiles"
         ],
         "type": "object"
       },
@@ -4113,6 +4400,21 @@
               }
             ]
           },
+          "inspection_profiles": {
+            "anyOf": [
+              {
+                "description": "Local labels and scope only. Omitted/null reports leave readiness unchanged; an explicit empty ACK array clears readiness and republishes dependent configuration.",
+                "items": {
+                  "$ref": "#/components/schemas/InspectionProfileStatus"
+                },
+                "maxItems": 384,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -4342,6 +4644,17 @@
                 "type": "null"
               }
             ]
+          },
+          "business": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BusinessInbound"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Server-generated business adaptation plan from group inspection policy; API writes cannot set this field."
           },
           "category": {
             "type": "string"
@@ -4682,6 +4995,12 @@
                 "type": "null"
               }
             ]
+          },
+          "runtime_observations": {
+            "items": {
+              "$ref": "#/components/schemas/RuleRuntimeObservation"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -4740,6 +5059,22 @@
         ],
         "type": "object"
       },
+      "RuleRuntimeObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "node_id": {
+            "type": "string"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuleRuntimeStatus"
+          }
+        },
+        "required": [
+          "node_id",
+          "runtime"
+        ],
+        "type": "object"
+      },
       "RuleRuntimeStatus": {
         "additionalProperties": false,
         "properties": {
@@ -4752,6 +5087,48 @@
           "carrier": {
             "type": "string"
           },
+          "detected_protocol": {
+            "enum": [
+              "",
+              "http",
+              "socks",
+              "socks4",
+              "socks5",
+              "shadowsocks",
+              "trojan",
+              "vmess"
+            ],
+            "type": "string"
+          },
+          "detected_variant": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "evidence": {
+            "enum": [
+              "",
+              "structural",
+              "authenticated",
+              "legacy_auth",
+              "probable"
+            ],
+            "type": "string"
+          },
+          "inspection_location": {
+            "enum": [
+              "",
+              "entry",
+              "exit",
+              "chain",
+              "reverse"
+            ],
+            "type": "string"
+          },
+          "inspection_reason": {
+            "description": "Fixed detector decision reason, without local credentials or paths.",
+            "maxLength": 128,
+            "type": "string"
+          },
           "policy_hash": {
             "type": "string"
           },
@@ -4760,6 +5137,24 @@
             "type": "integer"
           },
           "rule_id": {
+            "type": "string"
+          },
+          "unavailable": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "unknown": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "visibility": {
+            "enum": [
+              "",
+              "raw",
+              "tls-plaintext",
+              "ws-payload",
+              "opaque"
+            ],
             "type": "string"
           }
         },
@@ -5026,6 +5421,16 @@
       "ServiceTarget": {
         "additionalProperties": false,
         "properties": {
+          "business": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BusinessInbound"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "network": {
             "type": "string"
           },
@@ -5497,6 +5902,9 @@
           "service_id": {
             "type": "string"
           },
+          "staged_inspection": {
+            "type": "boolean"
+          },
           "token": {
             "type": "string"
           }
@@ -5521,6 +5929,9 @@
           },
           "server_name": {
             "type": "string"
+          },
+          "staged_inspection": {
+            "type": "boolean"
           },
           "token": {
             "type": "string"

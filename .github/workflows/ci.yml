@@ -60,6 +60,16 @@ jobs:
       - name: Repeat interactive terminal checks under the race detector
         run: go test -race ./internal/agent -run '^TestInteractiveShellRetainsDirectoryResizesAndInterrupts$' -count=50 -timeout=5m
       - run: go test -race ./...
+      - name: Verify independent Xray protocol clients
+        run: |
+          mkdir -p "$RUNNER_TEMP/xray-interop"
+          cd "$RUNNER_TEMP/xray-interop"
+          curl -fsSLO https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip
+          echo '23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae  Xray-linux-64.zip' | sha256sum --check
+          unzip -q Xray-linux-64.zip
+          chmod +x xray
+          cd "$GITHUB_WORKSPACE"
+          TFP_TEST_XRAY="$RUNNER_TEMP/xray-interop/xray" go test -race ./internal/integration -run '^TestIndependentXrayClients$' -count=1 -timeout=5m
       - run: |
           go test ./internal/commerce ./internal/platform ./internal/storage ./internal/app ./internal/integration -count=1
           go test ./internal/platform -run '^TestAccountRuleLimitAcrossNodesAndImport$' -count=10

@@ -72,48 +72,51 @@ type Group struct {
 // GroupAdvanced mirrors the optional device-group settings exposed by the
 // reference panel. The UI edits JSONC; the API validates structured JSON.
 type GroupAdvanced struct {
-	PolicyVersion     int            `json:"policy_version,omitempty"`
-	AllowedHost       []string       `json:"allowed_host,omitempty"`
-	BlockedHost       []string       `json:"blocked_host,omitempty"`
-	BlockedPath       []string       `json:"blocked_path,omitempty"`
-	BlockedProtocol   []string       `json:"blocked_protocol,omitempty"`
-	TLSInboundPolicy  int            `json:"tls_inbound_policy,omitempty"`
-	TLSRejectEmptySNI bool           `json:"tls_reject_empty_sni,omitempty"`
-	DisableUDP        bool           `json:"disable_udp,omitempty"`
-	UDPOverTCP        bool           `json:"udp_over_tcp,omitempty"`
-	IPv6Group         []string       `json:"ipv6_group,omitempty"`
-	MaxFail           int            `json:"max_fail"`
-	FailTimeoutSec    int            `json:"fail_timout_sec"`
-	ReverseGroup      []string       `json:"reverse_group,omitempty"`
-	Protocol          string         `json:"protocol,omitempty"`
-	TLS               map[string]any `json:"tls,omitempty"`
+	PolicyVersion     int               `json:"policy_version,omitempty"`
+	Inspection        *InspectionPolicy `json:"inspection,omitempty"`
+	AllowedHost       []string          `json:"allowed_host,omitempty"`
+	BlockedHost       []string          `json:"blocked_host,omitempty"`
+	BlockedPath       []string          `json:"blocked_path,omitempty"`
+	BlockedProtocol   []string          `json:"blocked_protocol,omitempty"`
+	TLSInboundPolicy  int               `json:"tls_inbound_policy,omitempty"`
+	TLSRejectEmptySNI bool              `json:"tls_reject_empty_sni,omitempty"`
+	DisableUDP        bool              `json:"disable_udp,omitempty"`
+	UDPOverTCP        bool              `json:"udp_over_tcp,omitempty"`
+	IPv6Group         []string          `json:"ipv6_group,omitempty"`
+	MaxFail           int               `json:"max_fail"`
+	FailTimeoutSec    int               `json:"fail_timout_sec"`
+	ReverseGroup      []string          `json:"reverse_group,omitempty"`
+	Protocol          string            `json:"protocol,omitempty"`
+	TLS               map[string]any    `json:"tls,omitempty"`
 }
 
 type Node struct {
-	RuleStatuses   []RuleRuntimeStatus `json:"rule_statuses,omitempty"`
-	Services       []ServiceStatus     `json:"services,omitempty"`
-	ID             string              `json:"id"`
-	Name           string              `json:"name"`
-	GroupIDs       []string            `json:"group_ids"`
-	Version        string              `json:"agent_version"`
-	OS             string              `json:"os"`
-	Arch           string              `json:"arch"`
-	Capabilities   []string            `json:"capabilities"`
-	LastSeen       *time.Time          `json:"last_seen"`
-	DesiredVersion int64               `json:"desired_version"`
-	AppliedVersion int64               `json:"applied_version"`
-	ApplyError     string              `json:"apply_error"`
+	InspectionProfiles []InspectionProfileStatus `json:"inspection_profiles,omitempty"`
+	RuleStatuses       []RuleRuntimeStatus       `json:"rule_statuses,omitempty"`
+	Services           []ServiceStatus           `json:"services,omitempty"`
+	ID                 string                    `json:"id"`
+	Name               string                    `json:"name"`
+	GroupIDs           []string                  `json:"group_ids"`
+	Version            string                    `json:"agent_version"`
+	OS                 string                    `json:"os"`
+	Arch               string                    `json:"arch"`
+	Capabilities       []string                  `json:"capabilities"`
+	LastSeen           *time.Time                `json:"last_seen"`
+	DesiredVersion     int64                     `json:"desired_version"`
+	AppliedVersion     int64                     `json:"applied_version"`
+	ApplyError         string                    `json:"apply_error"`
 }
 
 // Tunnel credentials are distributed only to the assigned Agent, never user lists.
 type Tunnel struct {
-	ServiceID  string `json:"service_id,omitempty"`
-	Inspect    bool   `json:"inspect,omitempty"`
-	Endpoint   string `json:"endpoint"`
-	ServerName string `json:"server_name"`
-	Token      string `json:"token,omitempty"`
-	Mux        bool   `json:"mux,omitempty"`
-	Reverse    string `json:"reverse,omitempty"`
+	StagedInspection bool   `json:"staged_inspection,omitempty"`
+	ServiceID        string `json:"service_id,omitempty"`
+	Inspect          bool   `json:"inspect,omitempty"`
+	Endpoint         string `json:"endpoint"`
+	ServerName       string `json:"server_name"`
+	Token            string `json:"token,omitempty"`
+	Mux              bool   `json:"mux,omitempty"`
+	Reverse          string `json:"reverse,omitempty"`
 	// Chain lists the remaining exits after Endpoint; at most two are allowed.
 	Chain       []TunnelHop        `json:"chain,omitempty"`
 	Obfuscation *ObfuscationConfig `json:"obfuscation,omitempty"`
@@ -126,15 +129,17 @@ type ObfuscationConfig struct {
 
 // TunnelHop is one authenticated, encrypted exit in an ordered tunnel chain.
 type TunnelHop struct {
-	PreferIPv6 bool   `json:"prefer_ipv6,omitempty"`
-	Inspect    bool   `json:"inspect,omitempty"`
-	Transport  string `json:"transport"`
-	Endpoint   string `json:"endpoint"`
-	ServerName string `json:"server_name"`
-	Token      string `json:"token,omitempty"`
+	StagedInspection bool   `json:"staged_inspection,omitempty"`
+	PreferIPv6       bool   `json:"prefer_ipv6,omitempty"`
+	Inspect          bool   `json:"inspect,omitempty"`
+	Transport        string `json:"transport"`
+	Endpoint         string `json:"endpoint"`
+	ServerName       string `json:"server_name"`
+	Token            string `json:"token,omitempty"`
 }
 
 type Rule struct {
+	Business          *BusinessInbound `json:"business,omitempty"`
 	EffectivePolicy   *EffectivePolicy `json:"effective_policy,omitempty"`
 	RouteCandidates   []RouteCandidate `json:"route_candidates,omitempty"`
 	ExitGroupID       string           `json:"exit_group_id,omitempty"`
@@ -193,22 +198,24 @@ type Config struct {
 }
 
 type Ack struct {
-	RuleStatuses   []RuleRuntimeStatus `json:"rule_statuses,omitempty"`
-	Services       []ServiceStatus     `json:"services,omitempty"`
-	AgentVersion   string              `json:"agent_version,omitempty"`
-	Capabilities   []string            `json:"capabilities,omitempty"`
-	Version        int64               `json:"version"`
-	AppliedVersion int64               `json:"applied_version"`
-	Error          string              `json:"error"`
+	InspectionProfiles []InspectionProfileStatus `json:"inspection_profiles"`
+	RuleStatuses       []RuleRuntimeStatus       `json:"rule_statuses,omitempty"`
+	Services           []ServiceStatus           `json:"services,omitempty"`
+	AgentVersion       string                    `json:"agent_version,omitempty"`
+	Capabilities       []string                  `json:"capabilities,omitempty"`
+	Version            int64                     `json:"version"`
+	AppliedVersion     int64                     `json:"applied_version"`
+	Error              string                    `json:"error"`
 }
 
 type Registration struct {
-	Token        string   `json:"token"`
-	Name         string   `json:"name"`
-	Version      string   `json:"agent_version"`
-	OS           string   `json:"os"`
-	Arch         string   `json:"arch"`
-	Capabilities []string `json:"capabilities"`
+	InspectionProfiles []InspectionProfileStatus `json:"inspection_profiles,omitempty"`
+	Token              string                    `json:"token"`
+	Name               string                    `json:"name"`
+	Version            string                    `json:"agent_version"`
+	OS                 string                    `json:"os"`
+	Arch               string                    `json:"arch"`
+	Capabilities       []string                  `json:"capabilities"`
 }
 
 type Registered struct {

@@ -160,7 +160,7 @@ func TestProtocolDetection(t *testing.T) {
 	for _, v := range []struct {
 		p    []byte
 		want bool
-	}{{[]byte("GET / HTTP/1.1"), true}, {[]byte{5, 1, 0}, true}, {[]byte{0x16, 3, 3, 0}, false}, {[]byte("unknown"), false}} {
+	}{{[]byte("GET / HTTP/1.1"), true}, {[]byte{5, 1, 0}, false}, {[]byte{0, 0, 0, 1, 127, 0, 0, 1, 0, 53, 'x'}, true}, {[]byte{0x16, 3, 3, 0}, false}, {[]byte("unknown"), false}} {
 		if got := blocked(v.p, []string{"http", "socks"}); got != v.want {
 			t.Fatalf("%x: %v", v.p, got)
 		}

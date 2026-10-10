@@ -8,8 +8,9 @@ import (
 	"fmt"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/netx"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy/association"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy/detect"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,40 +20,50 @@ import (
 )
 
 type Runtime struct {
-	Services        *ServiceManager
-	mu              sync.Mutex
-	Store           *Store
-	Client          tunnel.Client
-	Datagrams       *tunnel.DatagramPool
-	listeners       map[string]*binding
-	pools           map[string]*resourcePool
-	version         int64
-	closed          bool
-	udpDialSlots    chan struct{}
-	udpSessionSlots chan struct{}
-	udpQueued       atomic.Int64
+	InspectionProfiles    detect.Profiles
+	InspectionProfilePath string
+	BusinessProfiles      map[string]BusinessProfile
+	BusinessProfilePath   string
+	Associations          *association.Registry
+	Services              *ServiceManager
+	mu                    sync.Mutex
+	Store                 *Store
+	Client                tunnel.Client
+	Datagrams             *tunnel.DatagramPool
+	listeners             map[string]*binding
+	pools                 map[string]*resourcePool
+	version               int64
+	closed                bool
+	udpDialSlots          chan struct{}
+	udpSessionSlots       chan struct{}
+	udpQueued             atomic.Int64
 }
 type binding struct {
-	policyStatus map[string]contract.RuleRuntimeStatus
-	changed      chan struct{}
-	ctx          context.Context
-	cancel       context.CancelFunc
-	pool         *resourcePool
-	mu           sync.Mutex
-	rule         contract.Rule
-	until        time.Time
-	tcp          net.Listener
-	udp          *net.UDPConn
-	conns        map[net.Conn]struct{}
-	sessions     map[string]*udpSession
-	closed       bool
-	runtime      *Runtime
-	slots        chan struct{}
-	routes       map[string]route
-	backends     map[string]*backendState
-	udpStats     udpCounters
+	plans                map[string]*detect.Plan
+	inspectionGeneration string
+	business             map[string]*preparedBusiness
+	associations         map[string][]association.Binding
+	policyStatus         map[string]contract.RuleRuntimeStatus
+	changed              chan struct{}
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	pool                 *resourcePool
+	mu                   sync.Mutex
+	rule                 contract.Rule
+	until                time.Time
+	tcp                  net.Listener
+	udp                  *net.UDPConn
+	conns                map[net.Conn]struct{}
+	sessions             map[string]*udpSession
+	closed               bool
+	runtime              *Runtime
+	slots                chan struct{}
+	routes               map[string]route
+	backends             map[string]*backendState
+	udpStats             udpCounters
 }
 type udpSession struct {
+	plan       *detect.Plan
 	ctx        context.Context
 	pool       *resourcePool
 	release    func()
@@ -71,7 +82,7 @@ func NewRuntime(store *Store, client tunnel.Client) *Runtime {
 	if client.Pool == nil {
 		client.Pool = &tunnel.MuxPool{}
 	}
-	return &Runtime{Services: &ServiceManager{BaseTLS: client.TLS}, Store: store, Client: client, Datagrams: &tunnel.DatagramPool{}, listeners: map[string]*binding{}, pools: map[string]*resourcePool{}, udpDialSlots: make(chan struct{}, 32), udpSessionSlots: make(chan struct{}, 4096)}
+	return &Runtime{Associations: association.New(0, 0), Services: &ServiceManager{BaseTLS: client.TLS}, Store: store, Client: client, Datagrams: &tunnel.DatagramPool{}, listeners: map[string]*binding{}, pools: map[string]*resourcePool{}, udpDialSlots: make(chan struct{}, 32), udpSessionSlots: make(chan struct{}, 4096)}
 }
 func (r *Runtime) Version() int64 { r.mu.Lock(); defer r.mu.Unlock(); return r.version }
 func key(v contract.Rule) string  { return v.Network + "|" + v.Listen }
@@ -167,8 +178,8 @@ func validate(v contract.Rule) error {
 		return errors.New("transport unsupported")
 	}
 	for _, p := range v.BlockedProtocols {
-		if p != "http" && p != "socks" {
-			return fmt.Errorf("unsupported protocol detector %q", p)
+		if err := validateDetectorName(p); err != nil {
+			return err
 		}
 	}
 	if v.Lease == nil || v.Lease.ID == "" || v.Lease.Bytes <= 0 {
@@ -208,6 +219,12 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 	if !time.Now().Before(c.ValidUntil) || c.ValidUntil.After(time.Now().Add(24*time.Hour)) {
 		return errors.New("configuration validity must be within 24 hours")
 	}
+	inspectionProfiles, businessProfiles, inputErr := r.inspectionInputs()
+	if inputErr != nil {
+		return inputErr
+	}
+	plans := map[string]*detect.Plan{}
+	business := map[string]*preparedBusiness{}
 	next := map[string]*binding{}
 	rules := map[string]contract.Rule{}
 	ids := map[string]bool{}
@@ -239,6 +256,11 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 		if e := validate(v); e != nil {
 			return fail(fmt.Errorf("rule %s: %w", v.ID, e))
 		}
+		plan, bp, prepareErr := prepareRuleInspection(v, inspectionProfiles, businessProfiles, associationGeneration(v, inspectionProfiles, c.Rules))
+		if prepareErr != nil {
+			return fail(fmt.Errorf("rule %s inspection: %w", v.ID, prepareErr))
+		}
+		plans[v.ID], business[v.ID] = plan, bp
 		owner := limitOwner(v)
 		if prior, exists := policies[owner]; exists && prior != v.Lease.Limits {
 			return fail(errors.New("inconsistent account limits"))
@@ -285,14 +307,22 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 		next[k] = b
 		staged = append(staged, b)
 	}
+	associationBindings, controlAssociations, associationErr := prepareAssociations(c.Rules, plans)
+	if associationErr != nil {
+		return fail(associationErr)
+	}
+	oldInspection, oldBusiness := r.Services.InspectionProfiles, r.Services.BusinessProfiles
+	r.Services.InspectionProfiles, r.Services.BusinessProfiles = inspectionProfiles, businessProfiles
 	commitServices, abortServices, e := r.Services.Prepare(c.Services, c.ValidUntil)
 	if e != nil {
+		r.Services.InspectionProfiles, r.Services.BusinessProfiles = oldInspection, oldBusiness
 		return fail(e)
 	}
 	committedServices := false
 	defer func() {
 		if !committedServices {
 			abortServices()
+			r.Services.InspectionProfiles, r.Services.BusinessProfiles = oldInspection, oldBusiness
 		}
 	}()
 	if persist {
@@ -306,6 +336,12 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 				return fail(e)
 			}
 		}
+	}
+	if r.Associations == nil {
+		r.Associations = association.New(0, 0)
+	}
+	if err := r.Associations.Configure(associationBindings); err != nil {
+		return fail(err)
 	}
 	for owner, limits := range policies {
 		pool := r.pools[owner]
@@ -330,7 +366,16 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 	}
 	for k, b := range next {
 		b.mu.Lock()
-		changed := b.ctx.Err() != nil || !sameForwardingRule(b.rule, rules[k]) || !sameRoutes(b.routes, routes[k])
+		generation := inspectionGeneration(inspectionProfiles, business, rules[k], routes[k])
+		if plan := plans[rules[k].ID]; plan.HasAssociation() {
+			generation += "|udp-association:" + plan.Generation()
+		}
+		for _, binding := range controlAssociations[rules[k].ID] {
+			generation += "|control-association:" + binding.UDPRuleID + ":" + binding.Generation
+		}
+		changed := b.ctx.Err() != nil || b.inspectionGeneration != generation || !sameForwardingRule(b.rule, rules[k]) || !sameRoutes(b.routes, routes[k])
+		b.plans, b.business, b.inspectionGeneration = plans, business, generation
+		b.associations = controlAssociations
 		b.routes = routes[k]
 		for name, v := range b.routes {
 			v.pool = r.pools[limitOwner(v.rule)]
@@ -365,6 +410,7 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 	}
 	commitServices()
 	committedServices = true
+	r.InspectionProfiles, r.BusinessProfiles = inspectionProfiles, businessProfiles
 	r.listeners = next
 	r.version = c.Version
 	for _, b := range staged {
@@ -381,6 +427,9 @@ func (r *Runtime) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed = true
+	if r.Associations != nil {
+		r.Associations.RevokeAll()
+	}
 	for _, b := range r.listeners {
 		b.close()
 	}
@@ -398,6 +447,14 @@ func (r *Runtime) StopLease(id string) {
 			matches = matches || route.rule.Lease != nil && route.rule.Lease.ID == id
 		}
 		if matches {
+			if r.Associations != nil {
+				r.Associations.RevokeRule(b.rule.ID)
+				for _, route := range b.routes {
+					if route.rule.Lease != nil && route.rule.Lease.ID == id {
+						r.Associations.RevokeRule(route.rule.ID)
+					}
+				}
+			}
 			b.cancel()
 			for c := range b.conns {
 				c.Close()
@@ -474,6 +531,7 @@ func (b *binding) dialTarget(ctx context.Context, v contract.Rule) (net.Conn, *t
 		}
 	}
 	tc.RuleID = v.ID
+	tc.Business = v.Business
 	if p, ok := ctx.Value(inspectionContextKey{}).([]byte); ok {
 		tc.InspectionPrefix = p
 	}
@@ -544,23 +602,23 @@ func (b *binding) handleTCP(c net.Conn) {
 	if err != nil {
 		return
 	}
-	var inspected policy.Inspection
-	layers := []contract.InboundPolicy{}
-	if v.EffectivePolicy != nil {
-		layers = v.EffectivePolicy.InboundLayers
-	}
-	if len(v.BlockedProtocols) > 0 {
-		layers = append(layers, contract.InboundPolicy{GroupID: "rule", BlockedApps: v.BlockedProtocols})
-	}
-	if v.SharedTLS != nil || policy.NeedsInspect(layers) {
-		inspected, err = policy.Inspect(client)
+	var inspected, outer policy.Inspection
+	layers := ruleLayers(v)
+	b.mu.Lock()
+	plan, business := b.plans[v.ID], b.business[v.ID]
+	b.mu.Unlock()
+	if v.SharedTLS != nil || business != nil && business.inbound != nil {
+		outer, err = policy.Inspect(client)
 		if err != nil {
+			if outer.Detection.Reason != "" {
+				b.recordInspection(v.ID, outer.Detection, "raw")
+			}
 			return
 		}
-		client = inspected.Conn
+		client = outer.Conn
 		if v.SharedTLS != nil {
-			name, e := policy.Host(inspected.Host)
-			if e != nil || inspected.Kind != "tls" {
+			name, e := policy.Host(outer.Host)
+			if e != nil || outer.Kind != "tls" {
 				return
 			}
 			b.mu.Lock()
@@ -571,19 +629,61 @@ func (b *binding) handleTCP(c net.Conn) {
 				return
 			}
 			v, pool = selected.rule, selected.pool
-			layers = nil
-			if v.EffectivePolicy != nil {
-				layers = v.EffectivePolicy.InboundLayers
-			}
-			if len(v.BlockedProtocols) > 0 {
-				layers = append(layers, contract.InboundPolicy{GroupID: "rule", BlockedApps: v.BlockedProtocols})
-			}
+			layers = ruleLayers(v)
+			b.mu.Lock()
+			plan, business = b.plans[v.ID], b.business[v.ID]
+			b.mu.Unlock()
 		}
-		if err = inspected.Check(layers); err != nil {
+		if err = outer.CheckMetadata(layers); err != nil {
 			b.policyRejected(v.ID)
 			return
 		}
-		client = policy.FilterWithRejection(client, inspected, layers, func() { b.policyRejected(v.ID) })
+		if business != nil && business.inbound != nil {
+			if err = outer.CheckApplications(layers); err != nil {
+				b.policyRejected(v.ID)
+				return
+			}
+			client, err = business.accept(ctx, client)
+			if err != nil {
+				return
+			}
+		} else {
+			inspected = outer
+		}
+	}
+	inspectionLayers := layers
+	if business != nil && business.inbound != nil {
+		inspectionLayers = append([]contract.InboundPolicy(nil), layers...)
+		for i := range inspectionLayers {
+			inspectionLayers[i].TLSRequired = false
+			inspectionLayers[i].RejectEmptySNI = false
+		}
+	}
+	if inspected.Conn == nil && (policy.NeedsInspect(layers) || plan != nil && !plan.Empty() || v.Business != nil) {
+		selectedPlan := plan
+		if v.Business != nil && v.Business.WebSocket {
+			selectedPlan = nil
+		}
+		inspected, err = policy.InspectWithPlan(client, selectedPlan)
+		if err != nil {
+			if inspected.Detection.Reason != "" {
+				b.recordInspection(v.ID, inspected.Detection, inspectionVisibility(v.Business))
+			}
+			return
+		}
+		client = inspected.Conn
+	}
+	if inspected.Conn != nil {
+		if plan != nil && !plan.Empty() && (v.Business == nil || !v.Business.WebSocket) {
+			b.recordInspection(v.ID, inspected.Detection, inspectionVisibility(v.Business))
+		}
+		if err = inspected.Check(inspectionLayers); err != nil {
+			b.policyRejected(v.ID)
+			return
+		}
+		if v.Business == nil || !v.Business.WebSocket {
+			client = policy.FilterWithRejection(client, inspected, inspectionLayers, func() { b.policyRejected(v.ID) })
+		}
 	}
 	release, ok := pool.acquire(client.RemoteAddr())
 	if !ok {
@@ -600,6 +700,12 @@ func (b *binding) handleTCP(c net.Conn) {
 	if e != nil {
 		return
 	}
+	if v.Transport == "direct" && business != nil {
+		target, e = business.connect(ctx, target)
+		if e != nil {
+			return
+		}
+	}
 	defer target.Close()
 	if !b.track(target) {
 		return
@@ -607,6 +713,21 @@ func (b *binding) handleTCP(c net.Conn) {
 	defer b.untrack(target)
 	if e := sendProxy(target, client, v.ProxyProtocol); e != nil {
 		return
+	}
+	if v.Business != nil && v.Business.WebSocket {
+		client, target = tunnel.WebSocketBusinessInspection(client, target, inspectionLayers, plan, v.Business, func() { b.policyRejected(v.ID) }, func(d detect.Detection) { b.recordInspection(v.ID, d, "ws-payload") })
+	}
+	b.mu.Lock()
+	controlBindings := b.associations[v.ID]
+	b.mu.Unlock()
+	if len(controlBindings) > 0 {
+		observedClient, observedTarget, cleanup, observeErr := b.runtime.Associations.Observe(client, target, controlBindings...)
+		if observeErr == nil {
+			client, target = observedClient, observedTarget
+			defer cleanup()
+		} else {
+			b.recordInspection(v.ID, detect.Detection{Status: detect.Unavailable, Reason: "socks5_association_observer_unavailable"}, "raw")
+		}
 	}
 	flowCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -641,17 +762,5 @@ func (c *readConn) CloseWrite() error {
 	return c.Conn.Close()
 }
 func blocked(p []byte, policies []string) bool {
-	for _, policy := range policies {
-		if policy == "socks" && len(p) > 0 && (p[0] == 4 || p[0] == 5) {
-			return true
-		}
-		if policy == "http" {
-			for _, method := range []string{"GET ", "POST ", "HEAD ", "PUT ", "DELETE ", "OPTIONS ", "CONNECT ", "TRACE ", "PATCH ", "PRI "} {
-				if strings.HasPrefix(string(p), method) {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	return policy.BlockedDatagram(p, policies)
 }

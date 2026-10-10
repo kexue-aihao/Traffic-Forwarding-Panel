@@ -90,10 +90,10 @@ func relationGrants(e, h contract.Exit, g contract.Group, rule contract.Rule) co
 	return grant
 }
 func ruleTargets(r contract.Rule) []contract.ServiceTarget {
-	out := []contract.ServiceTarget{{RuleID: r.ID, Network: r.Network, Target: r.Target}}
+	out := []contract.ServiceTarget{{RuleID: r.ID, Network: r.Network, Target: r.Target, Business: r.Business}}
 	for _, b := range r.Backends {
 		if !b.Disabled {
-			out = append(out, contract.ServiceTarget{RuleID: r.ID, Network: r.Network, Target: b.Target})
+			out = append(out, contract.ServiceTarget{RuleID: r.ID, Network: r.Network, Target: b.Target, Business: r.Business})
 		}
 	}
 	return out
@@ -123,17 +123,39 @@ func (t managedTopology) reverseHub(rule contract.Rule, e contract.Exit) (contra
 }
 func (t managedTopology) route(rule contract.Rule, e contract.Exit, ready bool) (contract.Exit, error) {
 	g := t.groups[e.GroupID]
+	business, err := routeBusiness(rule, t.groups)
+	if err != nil {
+		return e, err
+	}
+	staged := stagedHopRequired(rule, g, business)
 	if !e.Managed {
-		if activeAdvanced(g) {
+		if activeAdvanced(g) || business != nil {
 			return e, errors.New("advanced_exit_requires_managed_service")
 		}
 		return e, nil
+	}
+	if staged {
+		if err := stagedCapabilities(t.nodes[rule.NodeID], t.nodes[e.NodeID]); err != nil {
+			return e, err
+		}
 	}
 	if err := serviceCapabilities(t.nodes[e.NodeID], g); err != nil {
 		return e, err
 	}
 	layer := groupLayer(g)
-	e.Tunnel.Inspect = rule.Network == "tcp" && policy.NeedsInspect([]contract.InboundPolicy{layer})
+	if layer.Inspection == nil && business != nil {
+		layer.Inspection = &contract.InspectionPolicy{Version: contract.InspectionVersion, Business: business}
+	}
+	if layer.Inspection != nil && layer.Inspection.Business == nil {
+		copy := *layer.Inspection
+		copy.Business = business
+		layer.Inspection = &copy
+	}
+	if err := inspectionCapabilitiesAt(layer, t.nodes[e.NodeID], rule.Network, false); err != nil {
+		return e, err
+	}
+	e.Tunnel.Inspect = rule.Network == "tcp" && (policy.NeedsInspect([]contract.InboundPolicy{layer}) || staged)
+	e.Tunnel.StagedInspection = staged
 	if activeAdvanced(g) && len(g.Advanced.ReverseGroup) > 0 {
 		h, ok := t.reverseHub(rule, e)
 		if !ok {
@@ -149,6 +171,14 @@ func (t managedTopology) route(rule contract.Rule, e contract.Exit, ready bool) 
 		if err := serviceCapabilities(t.nodes[h.NodeID], g); err != nil {
 			return e, err
 		}
+		if staged {
+			if err := stagedCapabilities(t.nodes[h.NodeID]); err != nil {
+				return e, err
+			}
+		}
+		if err := inspectionCapabilitiesAt(layer, t.nodes[h.NodeID], rule.Network, false); err != nil {
+			return e, err
+		}
 		carrier := g.Advanced.Protocol
 		if carrier == "" {
 			carrier = "tls"
@@ -162,7 +192,7 @@ func (t managedTopology) route(rule contract.Rule, e contract.Exit, ready bool) 
 		}
 		grant := relationGrants(e, h, g, rule)
 		e.Transport = carrier
-		e.Tunnel = contract.Tunnel{ServiceID: h.ID, Endpoint: h.Tunnel.Endpoint, ServerName: tc.ServerName, Token: grant.StreamToken, Reverse: i, Inspect: e.Tunnel.Inspect}
+		e.Tunnel = contract.Tunnel{ServiceID: h.ID, Endpoint: h.Tunnel.Endpoint, ServerName: tc.ServerName, Token: grant.StreamToken, Reverse: i, Inspect: e.Tunnel.Inspect, StagedInspection: staged}
 		if e.Tunnel.ServerName == "" {
 			e.Tunnel.ServerName = h.Tunnel.ServerName
 		}
@@ -229,6 +259,56 @@ func serviceCapabilities(n contract.Node, g contract.Group) error {
 	return nil
 }
 
+func (t managedTopology) refreshRouteInspection(rule *contract.Rule) error {
+	if rule.Network != "tcp" || rule.Tunnel == nil || rule.ExitGroupID == "" {
+		return nil
+	}
+	ids := []string{rule.ExitGroupID}
+	if g := t.groups[rule.ExitGroupID]; g.Type == contract.GroupChainExit {
+		ids = g.ChainGroupIDs
+	}
+	if len(ids) != len(rule.Tunnel.Chain)+1 {
+		return errors.New("inspection_route_topology_changed")
+	}
+	copy := *rule.Tunnel
+	copy.Chain = append([]contract.TunnelHop{}, copy.Chain...)
+	previous := rule.NodeID
+	for i, groupID := range ids {
+		endpoint := copy.Endpoint
+		if i > 0 {
+			endpoint = copy.Chain[i-1].Endpoint
+		}
+		var selected *contract.Exit
+		for _, x := range t.exits {
+			if x.GroupID == groupID && x.Enabled && !x.ReverseHub && (i == 0 && rule.SelectedExitID != "" && x.ID == rule.SelectedExitID || (i > 0 || rule.SelectedExitID == "") && x.Tunnel.Endpoint == endpoint) {
+				value := x
+				selected = &value
+				break
+			}
+		}
+		if selected == nil {
+			return errors.New("inspection_route_exit_missing")
+		}
+		current, err := t.route(*rule, *selected, false)
+		if err != nil {
+			return err
+		}
+		if current.Tunnel.StagedInspection {
+			if err := stagedCapabilities(t.nodes[previous], t.nodes[selected.NodeID]); err != nil {
+				return err
+			}
+		}
+		if i == 0 {
+			copy.Inspect, copy.StagedInspection = current.Tunnel.Inspect, current.Tunnel.StagedInspection
+		} else {
+			copy.Chain[i-1].Inspect, copy.Chain[i-1].StagedInspection = current.Tunnel.Inspect, current.Tunnel.StagedInspection
+		}
+		previous = selected.NodeID
+	}
+	rule.Tunnel = &copy
+	return nil
+}
+
 func (s *Server) compileManagedServices(ctx context.Context, tx *sql.Tx, cfg *contract.Config, top managedTopology) error {
 	// Scope grants to funded, enabled, authorized business rules. Merely knowing
 	// a relationship credential never authorizes arbitrary targets or tenants.
@@ -261,7 +341,12 @@ func (s *Server) compileManagedServices(ctx context.Context, tx *sql.Tx, cfg *co
 		if entryPolicyDenied(entry, r) {
 			continue
 		}
-		if compileGroupPolicy(&r, role, top.groups, n.Capabilities) != nil {
+		if compileGroupPolicy(&r, role, top.groups, n.Capabilities, n.InspectionProfiles) != nil {
+			continue
+		}
+		// The exit can pull its service configuration before the entry refreshes
+		// persisted route flags after a group policy update.
+		if top.refreshRouteInspection(&r) != nil {
 			continue
 		}
 		rules = append(rules, r)
@@ -390,7 +475,7 @@ func (s *Server) compileManagedServices(ctx context.Context, tx *sql.Tx, cfg *co
 					continue
 				}
 				if contains(top.groups[r.ExitGroupID].ChainGroupIDs, x.GroupID) && r.Tunnel != nil {
-					hops := append([]contract.TunnelHop{{Transport: r.Transport, Endpoint: r.Tunnel.Endpoint, ServerName: r.Tunnel.ServerName, Token: r.Tunnel.Token, Inspect: r.Tunnel.Inspect}}, r.Tunnel.Chain...)
+					hops := append([]contract.TunnelHop{{Transport: r.Transport, Endpoint: r.Tunnel.Endpoint, ServerName: r.Tunnel.ServerName, Token: r.Tunnel.Token, Inspect: r.Tunnel.Inspect, StagedInspection: r.Tunnel.StagedInspection}}, r.Tunnel.Chain...)
 					for i, hop := range hops {
 						if hop.Endpoint == x.Tunnel.Endpoint && i+1 < len(hops) {
 							next := hops[i+1]

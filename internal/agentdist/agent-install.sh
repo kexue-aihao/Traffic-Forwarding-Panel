@@ -36,6 +36,8 @@ MODE="agent"
 UNINSTALL="no"
 WAIT_SECONDS=30
 SERVICE_PROFILES=""
+INSPECTION_PROFILES=""
+BUSINESS_PROFILES=""
 MIGRATE_SERVICES="no"
 
 # 出口模式
@@ -297,6 +299,8 @@ usage() {
 
 托管隧道服务
   -F <本地JSON>    安装证书、CA 标签与监听地址许可 profile（仅 agent 模式）
+  -I <本地JSON>    安装私有协议检测凭据 profile（仅 agent 模式，0600）
+  -B <本地JSON>    安装受控业务 TLS/上游身份 profile（仅 agent 模式，0600）
   -M              配合 -F 停用旧 tfp-exit 服务，迁移到普通 Agent 托管
 
 其它
@@ -307,7 +311,7 @@ usage() {
 USAGE
 }
 
-while getopts ":t:u:n:a:c:s:m:S:e:C:K:q:w:l:D:p:O:P:F:Mxh" opt; do
+while getopts ":t:u:n:a:c:s:m:S:e:C:K:q:w:l:D:p:O:P:F:I:B:Mxh" opt; do
   case "$opt" in
     t) TOKEN="$OPTARG" ;;
     u) PANEL_URL="$OPTARG" ;;
@@ -328,6 +332,8 @@ while getopts ":t:u:n:a:c:s:m:S:e:C:K:q:w:l:D:p:O:P:F:Mxh" opt; do
     O) EXIT_OBFUSCATION="$OPTARG" ;;
     P) EXIT_OBFUSCATION_PARAMS="$OPTARG" ;;
     F) SERVICE_PROFILES="$OPTARG" ;;
+    I) INSPECTION_PROFILES="$OPTARG" ;;
+    B) BUSINESS_PROFILES="$OPTARG" ;;
     M) MIGRATE_SERVICES="yes" ;;
     x) UNINSTALL="yes" ;;
     h) usage; exit 0 ;;
@@ -394,6 +400,12 @@ if [ -n "$SERVICE_PROFILES" ]; then
   [ -r "$SERVICE_PROFILES" ] || die "无法读取本地 service profile"
 fi
 [ "$MIGRATE_SERVICES" != "yes" ] || [ -n "$SERVICE_PROFILES" ] || die "-M 需要同时指定 -F"
+for LOCAL_PROFILE in "$INSPECTION_PROFILES" "$BUSINESS_PROFILES"; do
+  [ -n "$LOCAL_PROFILE" ] || continue
+  [ "$MODE" = "agent" ] || die "协议检测与业务 profile 仅用于 agent 模式"
+  case "$LOCAL_PROFILE" in /*) ;; *) die "profile 必须使用本地绝对路径" ;; esac
+  [ -r "$LOCAL_PROFILE" ] || die "无法读取本地协议检测或业务 profile"
+done
 
 [ "$(id -u)" -eq 0 ] || die "需要 root 权限：请用 sudo 重新执行"
 [ "$(uname -s)" = "Linux" ] || die "本脚本只支持 Linux 设备"
@@ -540,6 +552,18 @@ fi
 if [ -f "$ENV_DIR/service-profiles.json" ]; then
   PROFILE_ARG=" -service-profiles $ENV_DIR/service-profiles.json"
 fi
+for PROFILE_KIND in inspection business; do
+  if [ "$PROFILE_KIND" = inspection ]; then LOCAL_PROFILE="$INSPECTION_PROFILES"; else LOCAL_PROFILE="$BUSINESS_PROFILES"; fi
+  PROFILE_TARGET="$ENV_DIR/$PROFILE_KIND-profiles.json"
+  if [ -n "$LOCAL_PROFILE" ]; then
+    if [ "$LOCAL_PROFILE" != "$PROFILE_TARGET" ]; then install -m 0600 "$LOCAL_PROFILE" "$PROFILE_TARGET"; else chmod 0600 "$PROFILE_TARGET"; fi
+    restore_contexts "$PROFILE_TARGET"
+  fi
+  if [ -f "$PROFILE_TARGET" ]; then
+    chmod 0600 "$PROFILE_TARGET"
+    PROFILE_ARG="$PROFILE_ARG -$PROFILE_KIND-profiles $PROFILE_TARGET"
+  fi
+done
 # 令牌只落在这一个 0600 文件里，不进 unit、不进命令行（命令行对同机其他用户可见）
 umask 077
 printf 'TFP_ENROLLMENT_TOKEN=%s\n' "$TOKEN" > "$ENV_DIR/agent.env"

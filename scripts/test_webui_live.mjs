@@ -256,6 +256,133 @@ function seedHistory(nodeID) {
   }
 }
 const historyNodeIDs = [];
+async function checkInspectionEditor(page, browserName) {
+  const name = `inspection-${browserName}`;
+  const headers = { Origin: base, "X-Requested-With": "fetch" };
+  const created = await page.request.post(base + "/api/v1/groups", {
+    headers,
+    data: { name, type: "entry", port_min: 21000, port_max: 22000 },
+  });
+  assert.equal(created.status(), 201, await created.text());
+  const group = await created.json();
+  const enrollment = await page.request.post(
+    base + "/api/v1/nodes/enrollment",
+    {
+      headers,
+      data: { name: `inspection-node-${browserName}`, group_ids: [group.id] },
+    },
+  );
+  assert.equal(enrollment.status(), 201, await enrollment.text());
+  const token = (await enrollment.json()).token;
+  // Metadata is deliberately simulated; this verifies the control/UI contract.
+  const registered = await page.request.post(base + "/api/v1/agent/register", {
+    data: {
+      token,
+      name: `inspection-node-${browserName}`,
+      capabilities: ["application-inspection-v1"],
+      inspection_profiles: [
+        {
+          label: "known-ss",
+          protocol: "shadowsocks",
+          variants: ["aead2017"],
+          networks: ["tcp", "udp"],
+          ready: true,
+        },
+      ],
+    },
+  });
+  assert.equal(registered.status(), 201, await registered.text());
+  await page.getByRole("link", { name: "设备组", exact: true }).click();
+  const row = page.getByRole("row").filter({ hasText: name });
+  await row.getByRole("button", { name: "高级设置", exact: true }).click();
+  await pickOption(page, "添加额外参数", "blocked_protocol");
+  await page.getByRole("button", { name: "添加参数", exact: true }).click();
+  const choices = page.getByRole("group", {
+    name: "应用协议屏蔽",
+    exact: true,
+  });
+  for (const protocol of ["Shadowsocks", "Trojan", "VMess", "SOCKS5"])
+    await choices.getByLabel(protocol, { exact: true }).check();
+  assert.equal(
+    await page.getByLabel("协议检测方式", { exact: true }).inputValue(),
+    "strict",
+  );
+  assert.equal(
+    await page.getByLabel("未知应用处理", { exact: true }).inputValue(),
+    "allow",
+  );
+  await page
+    .getByLabel("本地检测 profile 标签", { exact: true })
+    .fill("known-ss\nknown-vmess\nknown-trojan");
+  await page
+    .getByLabel("业务 TLS profile 标签", { exact: true })
+    .fill("owned-service");
+  await page
+    .getByLabel("业务上游 TLS profile 标签", { exact: true })
+    .fill("trusted-origin");
+  await page.getByLabel("受控 WebSocket 内层检测", { exact: true }).check();
+  await page
+    .getByLabel("受控 Xray WebSocket early-data", { exact: true })
+    .check();
+  await pickOption(page, "未知应用处理", "deny");
+  await pickOption(page, "协议检测方式", "observe");
+  assert.equal(
+    await page.getByLabel("未知应用处理", { exact: true }).inputValue(),
+    "allow",
+  );
+  assert.equal(
+    await page.getByLabel("未知应用处理", { exact: true }).isDisabled(),
+    true,
+  );
+  await page.getByRole("button", { name: "预览策略影响", exact: true }).click();
+  const preview = page.getByLabel("策略影响预览", { exact: true });
+  await preview.getByText(/known-ss.*shadowsocks.*aead2017.*就绪/).waitFor();
+  await preview.getByText(/Shadowsocks\/VMess 只确认/).waitFor();
+  await page.getByRole("button", { name: "保存高级设置", exact: true }).click();
+  await page.locator("dialog").waitFor({ state: "detached" });
+  const groups = await (
+    await page.request.get(base + "/api/v1/groups?page_size=100")
+  ).json();
+  const saved = groups.items.find((g) => g.id === group.id);
+  assert.deepEqual(saved.advanced.blocked_protocol.sort(), [
+    "shadowsocks",
+    "socks5",
+    "trojan",
+    "vmess",
+  ]);
+  assert.deepEqual(saved.advanced.inspection, {
+    version: 1,
+    mode: "observe",
+    unknown: "allow",
+    profiles: ["known-ss", "known-trojan", "known-vmess"],
+    business: {
+      tls_profile: "owned-service",
+      upstream_tls_profile: "trusted-origin",
+      websocket: true,
+      websocket_early_data: true,
+    },
+  });
+  await row.getByRole("button", { name: "高级设置", exact: true }).click();
+  assert.equal(
+    await page.getByLabel("协议检测方式", { exact: true }).inputValue(),
+    "observe",
+  );
+  await page.locator(".advanced-raw summary").click();
+  await page
+    .getByLabel("设备组高级设置 JSON", { exact: true })
+    .fill('{"inspection":{"version":1,"password":"must-not-persist"}}');
+  await page.getByRole("button", { name: "应用 JSONC", exact: true }).click();
+  await page
+    .getByRole("alert")
+    .filter({ hasText: "凭据只配置在 Agent 本地" })
+    .waitFor();
+  await page.locator(".advanced-raw summary").click();
+  await page.getByRole("button", { name: "关闭对话框", exact: true }).click();
+  await page.getByRole("button", { name: "关闭对话框", exact: true }).click();
+  console.log(
+    `${browserName}: protocol inspection choices, scope/profile readiness, observe/unknown and secret rejection PASS`,
+  );
+}
 try {
   for (const [browserName, engine] of Object.entries({
     chromium,
@@ -268,6 +395,11 @@ try {
       const exceptions = [];
       admin.on("pageerror", (e) => exceptions.push(e.message));
       await login(admin, "ui-admin", password, "/admin");
+      if (process.argv.includes("--inspection-only")) {
+        await checkInspectionEditor(admin, browserName);
+        assert.deepEqual(exceptions, []);
+        continue;
+      }
       await checkSiteLogo(admin, browserName);
       if (process.argv.includes("--site-logo-only")) {
         assert.deepEqual(exceptions, []);
@@ -2590,6 +2722,7 @@ try {
       await admin.locator("dialog").waitFor({ state: "detached" });
       await user.getByRole("link", { name: "转发规则", exact: true }).click();
       await user.getByRole("button", { name: "登录控制台" }).waitFor();
+      await checkInspectionEditor(admin, browserName);
       assert.deepEqual(exceptions, []);
       console.log(
         `${browserName}: REAL Go/SQLite/embedded UI PASS (login, user/group/enrollment, simulated Agent/probe privacy, persisted history fixture API/permissions/chart, zero wallet + insufficient funds, redeem credit, webhook CRUD/mute/enable + alert policy/events, export task result, auto-renew toggle, plan limits/edit/add-on purchase, site/invitation registration, managed exits + Proxy Protocol editor, import preview/port update, purchase refund funding, legacy three-hop preservation, Token isolation/revocation, admin-issued token issue/reset/revoke, device address API permission, password, disable + session revoke)`,

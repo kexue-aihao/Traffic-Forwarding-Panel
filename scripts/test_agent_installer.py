@@ -19,6 +19,38 @@ touch "$TFP_TEST_ROOT/dependencies-installed"
 
 
 class InstallerCompatibilityTests(InstallerSandbox):
+    def test_private_inspection_and_business_profiles_across_distro_families(self):
+        inspection = self.root / "private-inspection.json"
+        business = self.root / "private-business.json"
+        inspection_text = '{"local-ss":{"protocol":"shadowsocks","password":"installer-fixture-secret"}}'
+        business_text = '{"owned":{"certificate":"/etc/ssl/owned.crt","private_key":"/etc/ssl/owned.key"}}'
+        inspection.write_text(inspection_text, encoding="utf-8")
+        business.write_text(business_text, encoding="utf-8")
+        for distro_id, related in (("debian", ""), ("ubuntu", "debian"), ("rocky", "rhel"), ("arch", "")):
+            with self.subTest(distro=distro_id):
+                self.distro(distro_id, related)
+                result = self.run_script(args=AGENT_ARGS + ["-I", shell_path(inspection), "-B", shell_path(business)])
+                self.success(result)
+                self.assertEqual((self.root / "etc/tfp-agent/inspection-profiles.json").read_text(encoding="utf-8"), inspection_text)
+                self.assertEqual((self.root / "etc/tfp-agent/business-profiles.json").read_text(encoding="utf-8"), business_text)
+                unit = (self.root / "etc/systemd/system/tfp-agent.service").read_text(encoding="utf-8")
+                self.assertIn("-inspection-profiles ", unit)
+                self.assertIn("-business-profiles ", unit)
+                self.assertNotIn("installer-fixture-secret", unit + result.stdout + result.stderr)
+                # Reinstall preserves local private files and their flag wiring.
+                self.success(self.run_script(args=AGENT_ARGS))
+                unit = (self.root / "etc/systemd/system/tfp-agent.service").read_text(encoding="utf-8")
+                self.assertIn("-inspection-profiles ", unit)
+                self.assertIn("-business-profiles ", unit)
+
+    def test_inspection_profile_inputs_fail_before_install(self):
+        for args, message in ((["-I", "relative.json"], "本地绝对路径"), (["-B", shell_path(self.root / "missing.json")], "无法读取本地协议检测或业务 profile")):
+            with self.subTest(args=args):
+                result = self.run_script(args=AGENT_ARGS + args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((self.root / "usr/local/bin/tfp-agent").exists())
+
     def test_managed_profiles_install_and_explicit_legacy_migration(self):
         source = self.root / "local-profiles.json"
         content = '{"local":{"allowed_listen":["0.0.0.0:9443"]}}'

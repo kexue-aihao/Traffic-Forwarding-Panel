@@ -6,21 +6,36 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
 
 type policyPreviewRule struct {
-	RuleID string `json:"rule_id"`
-	NodeID string `json:"node_id"`
-	Hash   string `json:"policy_hash,omitempty"`
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
+	RuleID     string                    `json:"rule_id"`
+	NodeID     string                    `json:"node_id"`
+	Hash       string                    `json:"policy_hash,omitempty"`
+	Status     string                    `json:"status"`
+	Reason     string                    `json:"reason,omitempty"`
+	Inspection []policyPreviewInspection `json:"inspection,omitempty"`
+}
+type policyPreviewInspection struct {
+	Protocol string `json:"protocol"`
+	Network  string `json:"network"`
+	Mode     string `json:"mode"`
+	Status   string `json:"status"`
+	Reason   string `json:"reason,omitempty"`
+}
+type policyPreviewProfiles struct {
+	NodeID   string                             `json:"node_id"`
+	Name     string                             `json:"name"`
+	Profiles []contract.InspectionProfileStatus `json:"profiles"`
 }
 type policyPreview struct {
-	Version int                 `json:"policy_version"`
-	Rules   []policyPreviewRule `json:"rules"`
-	Notes   []string            `json:"notes"`
+	Version  int                     `json:"policy_version"`
+	Rules    []policyPreviewRule     `json:"rules"`
+	Notes    []string                `json:"notes"`
+	Profiles []policyPreviewProfiles `json:"inspection_profiles"`
 }
 
 func (s *Server) groupPolicyPreview(w http.ResponseWriter, r *http.Request) {
@@ -51,8 +66,17 @@ func (s *Server) groupPolicyPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.Advanced = in.Advanced
+	g = splitGroupPolicy(g)
 	top.groups[g.ID] = g
 	out := policyPreview{Rules: []policyPreviewRule{}, Notes: []string{"Host/SNI 和逐请求 Path 作用于 TCP；HTTPS 的 Path 无法通过 TLS 透传读取。", "UDP over TCP 需要出口；直连 UDP 保持原生传输。", "IPv6 优先仅影响已授权组对端；单目标故障转移无法创造备用地址。", "反向路线需要本地证书 profile、托管 hub 和两端服务就绪。"}}
+	out.Profiles = []policyPreviewProfiles{}
+	for _, node := range top.nodes {
+		if slices.Contains(node.GroupIDs, g.ID) {
+			out.Profiles = append(out.Profiles, policyPreviewProfiles{NodeID: node.ID, Name: node.Name, Profiles: append([]contract.InspectionProfileStatus{}, node.InspectionProfiles...)})
+		}
+	}
+	slices.SortFunc(out.Profiles, func(a, b policyPreviewProfiles) int { return strings.Compare(a.NodeID, b.NodeID) })
+	out.Notes = append(out.Notes, "Shadowsocks/VMess 只确认所选本地凭据及支持版本；Trojan 需受控业务 TLS 终止，透传 TLS 内层不可见。", "strict 要求已声明范围的能力/profile 就绪，否则规则停止；observe 只观测，不承诺阻断。", "未知应用默认允许；unknown=deny 是独立的未知流量拒绝策略，会影响普通未知业务。", "SOCKS5 UDP 需受控 TCP UDP ASSOCIATE 关联或显式选择本地结构模式；结构首部不能当作认证确认，出口不能证明原客户端控制关联。", "手工或未托管出口只能确认入口检测；出口独立检测需托管服务与双方能力/profile 就绪。")
 	if in.Advanced != nil {
 		out.Version = in.Advanced.PolicyVersion
 	}
@@ -79,7 +103,28 @@ func (s *Server) groupPolicyPreview(w http.ResponseWriter, r *http.Request) {
 		}
 		n := top.nodes[rule.NodeID]
 		p := policyPreviewRule{RuleID: rule.ID, NodeID: rule.NodeID, Status: "preview"}
-		if err := compileGroupPolicy(&rule, role, top.groups, n.Capabilities); err != nil {
+		if layer := groupLayer(g); layer.Inspection != nil {
+			for _, app := range layer.BlockedApps {
+				v := policyPreviewInspection{Protocol: app, Network: rule.Network, Mode: layer.Inspection.Mode, Status: "declared_scope"}
+				if v.Mode == "" {
+					v.Mode = "strict"
+				}
+				copy := *layer.Inspection
+				copy.Mode = "strict"
+				probe := layer
+				probe.BlockedApps = []string{app}
+				probe.Inspection = &copy
+				if err := inspectionCapabilities(probe, n, rule.Network); err != nil {
+					v.Status = "unavailable"
+					v.Reason = err.Error()
+				}
+				if v.Mode == "observe" {
+					v.Status = "observe"
+				}
+				p.Inspection = append(p.Inspection, v)
+			}
+		}
+		if err := compileGroupPolicy(&rule, role, top.groups, n.Capabilities, n.InspectionProfiles); err != nil {
 			p.Status = "blocked"
 			p.Reason = err.Error()
 		} else if rule.EffectivePolicy != nil {

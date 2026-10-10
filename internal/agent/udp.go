@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy/detect"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/tunnel"
 )
 
@@ -172,7 +174,22 @@ func (b *binding) udpWorker(queue <-chan *udpPacket) {
 			b.freePacket(p)
 			continue
 		}
-		if blocked(p.payload, v.BlockedProtocols) {
+		b.mu.Lock()
+		plan := b.plans[v.ID]
+		b.mu.Unlock()
+		var detection detect.Detection
+		var blockedPacket bool
+		if plan.HasAssociation() {
+			proof := b.runtime.Associations.Admission(v.ID, plan.Generation(), p.peer.AddrPort(), v.Target, p.payload)
+			detection, blockedPacket = associatedDatagramDecision(p.payload, ruleLayers(v), plan, proof)
+		} else {
+			detection, blockedPacket = policy.DatagramDecision(p.payload, ruleLayers(v), plan)
+		}
+		if plan != nil && !plan.Empty() {
+			b.recordInspection(v.ID, detection, "raw")
+		}
+		if blockedPacket {
+			b.policyRejected(v.ID)
 			b.freePacket(p)
 			b.udpStats.policyDrops.Add(1)
 			continue
@@ -223,7 +240,7 @@ func (b *binding) udpWorker(queue <-chan *udpPacket) {
 			poolRelease := release
 			release = func() { poolRelease(); <-b.runtime.udpSessionSlots }
 			sctx, cancel := context.WithCancel(ctx)
-			s = &udpSession{ctx: sctx, cancel: cancel, pool: pool, release: release, peer: p.peer, rule: v, out: make(chan *udpPacket, 64)}
+			s = &udpSession{ctx: sctx, cancel: cancel, pool: pool, release: release, peer: p.peer, rule: v, plan: plan, out: make(chan *udpPacket, 64)}
 			s.activity.Store(time.Now().UnixNano())
 			b.sessions[k] = s
 			go b.openUDP(k, s)

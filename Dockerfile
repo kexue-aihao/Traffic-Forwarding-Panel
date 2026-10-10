@@ -21,6 +21,7 @@ LABEL org.opencontainers.image.title="Traffic Forwarding Panel" \
       org.opencontainers.image.revision=$REVISION
 COPY --from=build /panel /panel
 COPY --from=build /agent /agent
+COPY --from=build /src/docs/protocol-dependency-notices.txt /licenses/protocol-dependency-notices.txt
 # 再放一份带平台后缀的副本：面板默认从这个目录（可执行文件所在目录）发布
 # Agent，裸 agent 只服务面板自身平台。要给别的架构的设备接入，把对应产物
 # 放进挂载目录并设置 TFP_AGENT_DIR。

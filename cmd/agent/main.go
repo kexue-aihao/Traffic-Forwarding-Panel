@@ -22,6 +22,7 @@ import (
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/agent"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy/detect"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/probe"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/tunnel"
 )
@@ -54,6 +55,8 @@ func main() {
 func run() error {
 	mode := flag.String("mode", "agent", "agent, exit, secure-direct or reverse-exit")
 	serviceProfiles := flag.String("service-profiles", "", "private local JSON service profiles")
+	inspectionProfiles := flag.String("inspection-profiles", "", "private local JSON application detection profiles")
+	businessProfiles := flag.String("business-profiles", "", "private local JSON business TLS identity profiles")
 	showVersion := flag.Bool("version", false, "print Agent release version")
 	enableUninstall := flag.Bool("enable-uninstall", false, "enable remote uninstall of an official systemd installation")
 	enableTerminal := flag.Bool("enable-terminal", false, "enable audited Linux remote commands as the Agent service account")
@@ -209,6 +212,15 @@ func run() error {
 	}
 	runtime := agent.NewRuntime(store, tunnel.Client{TLS: tc})
 	runtime.Services.Profiles = profiles
+	runtime.InspectionProfilePath, runtime.BusinessProfilePath = *inspectionProfiles, *businessProfiles
+	runtime.InspectionProfiles, e = detect.LoadProfiles(*inspectionProfiles)
+	if e != nil {
+		return errors.New("inspection profiles cannot be loaded")
+	}
+	runtime.BusinessProfiles, e = agent.LoadBusinessProfiles(*businessProfiles)
+	if e != nil {
+		return e
+	}
 	collector := &probe.Collector{DiskPath: *disk}
 	if *echo != "" {
 		collector.EchoURLs = strings.Split(*echo, ",")

@@ -23,6 +23,7 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/netx"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy/detect"
 )
 
 const maxFrame = 65535
@@ -191,8 +192,10 @@ func (s *Session) ReadPacket() ([]byte, error) {
 }
 
 type openRequest struct {
-	RuleID           string `json:"rule_id,omitempty"`
-	Inspect          bool   `json:"inspect,omitempty"`
+	StagedInspection bool                      `json:"staged_inspection,omitempty"`
+	Business         *contract.BusinessInbound `json:"business,omitempty"`
+	RuleID           string                    `json:"rule_id,omitempty"`
+	Inspect          bool                      `json:"inspect,omitempty"`
 	inspectionPrefix []byte
 	Version          int                  `json:"version"`
 	Token            string               `json:"token"`
@@ -203,6 +206,8 @@ type openRequest struct {
 	Reverse          string               `json:"reverse,omitempty"`
 }
 type Client struct {
+	StagedInspection  bool
+	Business          *contract.BusinessInbound
 	PreferIPv6        bool
 	InspectionPrefix  []byte
 	InspectionEnabled bool
@@ -413,13 +418,19 @@ func (c *wsConn) SetDeadline(t time.Time) error {
 }
 
 type Server struct {
-	targets        map[string]*targetState
-	Managed        bool
-	Grants         []contract.ServiceGrant
-	Policy         *contract.EffectivePolicy
-	OnReverseState func(bool, error)
-	TLS            *tls.Config
-	Token          string
+	inspectionStatuses map[string]contract.RuleRuntimeStatus
+	InspectionLocation string
+	rejections         map[string]uint64
+	InspectionPlans    map[string]*detect.Plan
+	OriginTLS          map[string]*tls.Config
+	OnPolicyReject     func(string)
+	targets            map[string]*targetState
+	Managed            bool
+	Grants             []contract.ServiceGrant
+	Policy             *contract.EffectivePolicy
+	OnReverseState     func(bool, error)
+	TLS                *tls.Config
+	Token              string
 	// ReverseAllowed authorizes reverse carrier identities, not destinations.
 	ReverseAllowed map[string]bool
 	// NextHops is an operator-owned allowlist, including local outbound secrets.
@@ -629,7 +640,7 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 	var req openRequest
 	dec := json.NewDecoder(strings.NewReader(string(p)))
 	dec.DisallowUnknownFields()
-	if e = dec.Decode(&req); e != nil || (req.Version != 1 && req.Version != 2 && req.Version != 3) || !s.authorized(req) {
+	if e = dec.Decode(&req); e != nil || (req.Version != 1 && req.Version != 2 && req.Version != 3 && req.Version != 4) || !s.authorized(req) {
 		return
 	}
 	if dec.Decode(new(any)) != io.EOF {
@@ -645,6 +656,12 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 	if req.Network != "tcp" && req.Network != "udp" {
 		return
 	}
+	if req.Business != nil && (req.Version != 4 || req.Network != "tcp" || !req.Inspect) {
+		return
+	}
+	if req.StagedInspection && (req.Version != 4 || req.Network != "tcp" || !req.Inspect) {
+		return
+	}
 	if _, _, e := net.SplitHostPort(req.Target); e != nil {
 		return
 	}
@@ -656,11 +673,12 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 	if s.Policy != nil {
 		layers = s.Policy.InboundLayers
 	}
-	if req.Network == "tcp" && policy.NeedsInspect(layers) && (req.Version != 3 || !req.Inspect) {
+	plan := s.InspectionPlans[InspectionKey(req.RuleID, req.Network, req.Target)]
+	if req.Network == "tcp" && policy.NeedsInspect(layers) && ((req.Version != 3 && req.Version != 4) || !req.Inspect) {
 		return
 	}
 	if req.Inspect {
-		if req.Version != 3 || req.Network != "tcp" {
+		if (req.Version != 3 && req.Version != 4) || req.Network != "tcp" {
 			return
 		}
 		if writeFrame(conn, acceptedFrame, []byte("inspect")) != nil {
@@ -670,8 +688,28 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 		if e != nil || kind != inspectionFrame {
 			return
 		}
-		inspected, e = inspectPrefix(p, layers)
+		prefixPlan := plan
+		if req.Business != nil && req.Business.WebSocket {
+			prefixPlan = nil
+		}
+		if req.StagedInspection && (req.Business == nil || !req.Business.WebSocket) {
+			if len(p) == 0 {
+				return
+			}
+		} else {
+			inspected, e = inspectPrefixWithPlan(p, layers, prefixPlan)
+		}
+		if prefixPlan != nil && !prefixPlan.Empty() {
+			visibility := "raw"
+			if req.Business != nil && req.Business.TLSProfile != "" {
+				visibility = "tls-plaintext"
+			}
+			s.recordInspection(req.RuleID, inspected.Detection, visibility)
+		}
 		if e != nil {
+			if errors.Is(e, policy.ErrDenied) || errors.Is(e, detect.ErrDenied) {
+				s.policyRejected(req.RuleID)
+			}
 			return
 		}
 		req.inspectionPrefix = p
@@ -687,6 +725,40 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 	if req.Reverse != "" && len(req.Chain) > 0 {
 		return
 	}
+	session := &Session{Conn: conn}
+	var stagedBusiness net.Conn
+	stagedReady := req.StagedInspection && (req.Business == nil || !req.Business.WebSocket)
+	if stagedReady {
+		if writeFrame(conn, readyFrame, []byte("inspect-stream")) != nil {
+			return
+		}
+		conn.SetDeadline(time.Time{})
+		actual, err := policy.InspectWithPlan(&verifiedConn{Conn: session, prefix: req.inspectionPrefix}, plan)
+		if err != nil {
+			if actual.Detection.Reason != "" {
+				visibility := "raw"
+				if req.Business != nil && req.Business.TLSProfile != "" {
+					visibility = "tls-plaintext"
+				}
+				s.recordInspection(req.RuleID, actual.Detection, visibility)
+			}
+			session.Close()
+			return
+		}
+		visibility := "raw"
+		if req.Business != nil && req.Business.TLSProfile != "" {
+			visibility = "tls-plaintext"
+		}
+		s.recordInspection(req.RuleID, actual.Detection, visibility)
+		if err = actual.Check(layers); err != nil {
+			s.policyRejected(req.RuleID)
+			session.Close()
+			return
+		}
+		stagedBusiness = actual.Conn
+		inspected = actual
+		req.inspectionPrefix = actual.Prefix
+	}
 	finishAttempt, err := s.targetAttempt(req)
 	if err != nil {
 		return
@@ -701,30 +773,53 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 		client := s.Client
 		client.PreferIPv6 = hop.PreferIPv6
 		client.InspectionEnabled = hop.Inspect
+		client.StagedInspection = hop.StagedInspection
 		client.InspectionPrefix = req.inspectionPrefix
 		client.RuleID = req.RuleID
+		client.Business = req.Business
 		next, e = client.dial(s.ctx, hop.Transport, hop.Endpoint, hop.ServerName, hop.Token, req.Network, req.Target, req.Chain[1:], visited)
 		target = next
 	} else {
 		target, e = (&net.Dialer{Timeout: 10 * time.Second}).DialContext(s.ctx, req.Network, req.Target)
+		if e == nil && req.Network == "tcp" {
+			if tc := s.OriginTLS[InspectionKey(req.RuleID, req.Network, req.Target)]; tc != nil {
+				secured := tls.Client(target, tc.Clone())
+				handshakeCtx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+				e = secured.HandshakeContext(handshakeCtx)
+				cancel()
+				if e != nil {
+					target.Close()
+				} else {
+					target = secured
+				}
+			}
+		}
 	}
 	finishAttempt(e)
 	if e != nil {
 		return
 	}
 	defer target.Close()
-	if e = writeFrame(conn, readyFrame, []byte("ok")); e != nil {
-		return
+	if !stagedReady {
+		if e = writeFrame(conn, readyFrame, []byte("ok")); e != nil {
+			return
+		}
 	}
 	conn.SetDeadline(time.Time{})
-	session := &Session{Conn: conn}
 	idle := s.IdleTimeout
 	if idle == 0 {
 		idle = 2 * time.Minute
 	}
 	if req.Network == "udp" {
 		if next != nil {
-			relayPacketsWithPolicy(session, next, idle, layers)
+			relayPacketsWithPolicyPlan(session, next, idle, layers, plan, func(d detect.Detection, blocked bool) {
+				if plan != nil && !plan.Empty() {
+					s.recordInspection(req.RuleID, d, "raw")
+				}
+				if blocked {
+					s.policyRejected(req.RuleID)
+				}
+			})
 			return
 		}
 		done := make(chan struct{})
@@ -736,10 +831,13 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 				if e != nil {
 					return
 				}
-				for _, layer := range layers {
-					if policy.BlockedDatagram(p, layer.BlockedApps) {
-						return
-					}
+				detection, blockedPacket := policy.DatagramDecision(p, layers, plan)
+				if plan != nil && !plan.Empty() {
+					s.recordInspection(req.RuleID, detection, "raw")
+				}
+				if blockedPacket {
+					s.policyRejected(req.RuleID)
+					return
 				}
 				target.SetWriteDeadline(time.Now().Add(idle))
 				if _, e = target.Write(p); e != nil {
@@ -764,11 +862,117 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 		return
 	}
 	var business net.Conn = session
-	if req.Inspect {
+	if stagedBusiness != nil {
+		business = stagedBusiness
+	} else if req.Inspect {
 		business = &verifiedConn{Conn: session, prefix: req.inspectionPrefix}
-		business = policy.Filter(business, inspected, layers)
+	}
+	// A peer's metadata prefix can be shorter than this exit's authenticated
+	// detector needs. Inspect the actual, verified stream as well, after ready
+	// permits the entry to send its data, before any business bytes reach origin.
+	// The exit's authorized TCP/TLS connection may already be established.
+	if stagedBusiness == nil && plan != nil && !plan.Empty() && (req.Business == nil || !req.Business.WebSocket) {
+		actual, err := policy.InspectWithPlan(business, plan)
+		if err != nil {
+			if actual.Detection.Reason != "" {
+				visibility := "raw"
+				if req.Business != nil && req.Business.TLSProfile != "" {
+					visibility = "tls-plaintext"
+				}
+				s.recordInspection(req.RuleID, actual.Detection, visibility)
+			}
+			session.Close()
+			return
+		}
+		visibility := "raw"
+		if req.Business != nil && req.Business.TLSProfile != "" {
+			visibility = "tls-plaintext"
+		}
+		s.recordInspection(req.RuleID, actual.Detection, visibility)
+		if err = actual.Check(layers); err != nil {
+			s.policyRejected(req.RuleID)
+			session.Close()
+			return
+		}
+		business = actual.Conn
+		inspected = actual
+	}
+	if req.Inspect && (req.Business == nil || !req.Business.WebSocket) {
+		business = policy.FilterWithRejection(business, inspected, layers, func() { s.policyRejected(req.RuleID) })
+	}
+	if req.Business != nil && req.Business.WebSocket {
+		business, target = WebSocketBusinessInspection(business, target, layers, plan, req.Business, func() { s.policyRejected(req.RuleID) }, func(d detect.Detection) { s.recordInspection(req.RuleID, d, "ws-payload") })
 	}
 	Relay(business, target, idle, nil)
+}
+
+func (s *Server) policyRejected(ruleID string) {
+	s.mu.Lock()
+	if s.rejections == nil {
+		s.rejections = map[string]uint64{}
+	}
+	if len(s.rejections) < 8192 || s.rejections[ruleID] > 0 {
+		s.rejections[ruleID]++
+	}
+	s.mu.Unlock()
+	if s.OnPolicyReject != nil {
+		s.OnPolicyReject(ruleID)
+	}
+}
+func (s *Server) RejectPolicy(ruleID string) { s.policyRejected(ruleID) }
+func (s *Server) PolicyStatuses() []contract.RuleRuntimeStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	all := map[string]contract.RuleRuntimeStatus{}
+	for id, v := range s.inspectionStatuses {
+		all[id] = v
+	}
+	for id, n := range s.rejections {
+		v := all[id]
+		v.RuleID = id
+		v.Rejected = n
+		all[id] = v
+	}
+	out := make([]contract.RuleRuntimeStatus, 0, len(all))
+	for _, v := range all {
+		v.InspectionLocation = s.InspectionLocation
+		if v.InspectionLocation == "" {
+			v.InspectionLocation = "exit"
+		}
+		if s.Policy != nil {
+			v.PolicyHash = s.Policy.Hash
+		}
+		out = append(out, v)
+	}
+	return out
+}
+func (s *Server) recordInspection(id string, d detect.Detection, visibility string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inspectionStatuses == nil {
+		s.inspectionStatuses = map[string]contract.RuleRuntimeStatus{}
+	}
+	if len(s.inspectionStatuses) >= 8192 {
+		if _, ok := s.inspectionStatuses[id]; !ok {
+			return
+		}
+	}
+	v := s.inspectionStatuses[id]
+	v.RuleID = id
+	v.DetectedProtocol = d.Protocol
+	v.DetectedVariant = d.Variant
+	v.Evidence = string(d.Evidence)
+	v.Visibility = visibility
+	v.InspectionReason = d.Reason
+	if d.Status == detect.Unavailable {
+		v.Unavailable++
+	} else if d.Status == detect.NoMatch {
+		v.Unknown++
+	}
+	s.inspectionStatuses[id] = v
+}
+func (s *Server) RecordInspection(id string, d detect.Detection, visibility string) {
+	s.recordInspection(id, d, visibility)
 }
 
 // Relay forwards TCP streams with bounded buffers and half-close propagation.
