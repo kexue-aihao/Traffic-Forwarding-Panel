@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -35,17 +36,37 @@ func managedProfile(t *testing.T, pair tls.Certificate, listens []string) agent.
 	return agent.ServiceProfile{Certificate: cp, PrivateKey: kp, CA: cp, AllowedListen: listens}
 }
 
+func restorableUDPAddress(t *testing.T) string {
+	t.Helper()
+	// These listeners are deliberately closed and reopened. Keep their ports
+	// outside the host's default ephemeral range so the co-located Agents'
+	// outbound UDP/QUIC sockets cannot claim them while forwarding is disabled.
+	var err error
+	for range 100 {
+		var conn *net.UDPConn
+		conn, err = net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 20000 + rand.IntN(10000)})
+		if err != nil {
+			continue
+		}
+		address := conn.LocalAddr().String()
+		conn.Close()
+		return address
+	}
+	t.Fatalf("reserve restorable UDP listener: %v", err)
+	return ""
+}
+
 func TestManagedUDPOverTCPDisableAndRestoreRealAgents(t *testing.T) {
 	pair, roots := certificate(t)
 	f := newFixture(t, tunnel.Client{TLS: &tls.Config{RootCAs: roots}})
 	g := decode[contract.Group](t, f.request("POST", "/groups", contract.Group{Name: "managed-UDP", Type: contract.GroupExit, IdentityGroupIDs: []string{f.owner.IdentityGroupID}, Advanced: &contract.GroupAdvanced{PolicyVersion: 2}, Multiplier: "1"}, f.admin, 201))
-	listen, udpListen := freeAddress(t, "tcp"), freeAddress(t, "udp")
+	listen, udpListen := freeAddress(t, "tcp"), restorableUDPAddress(t)
 	profile := managedProfile(t, pair, []string{listen, udpListen})
 	exit := additionalAgent(t, f, g, tunnel.Client{TLS: &tls.Config{RootCAs: roots}}, profile)
 	x := decode[contract.Exit](t, f.request("POST", "/exits", contract.Exit{Name: "managed-native-UDP", GroupID: g.ID, NodeID: exit.Store.Identity().NodeID, Managed: true, LocalProfile: "local", Listen: listen, Transport: "tls", Tunnel: contract.Tunnel{Endpoint: listen, ServerName: "localhost", Token: "managed-UDP-base-token-long-123456"}, UDP: &contract.UDPExit{Endpoint: udpListen, ServerName: "localhost", Token: "managed-QUIC-base-token-long-123456"}, Weight: 1, Enabled: true}, f.admin, 201))
 	convergeManaged(t, f, exit, func() bool { v := exit.Runtime.Services.Statuses(); return len(v) > 0 && v[0].Ready })
 	_, target := targets(t)
-	r := decode[contract.Rule](t, f.request("POST", "/rules", contract.Rule{Name: "managed-UDP-rule", GroupID: f.group.ID, NodeID: f.store.Identity().NodeID, ExitGroupID: g.ID, ExitID: x.ID, Network: "udp", Transport: "direct", Listen: freeAddress(t, "udp"), Target: target, Enabled: true}, f.user, 201))
+	r := decode[contract.Rule](t, f.request("POST", "/rules", contract.Rule{Name: "managed-UDP-rule", GroupID: f.group.ID, NodeID: f.store.Identity().NodeID, ExitGroupID: g.ID, ExitID: x.ID, Network: "udp", Transport: "direct", Listen: restorableUDPAddress(t), Target: target, Enabled: true}, f.user, 201))
 	convergeManaged(t, f, exit, func() bool { return len(f.store.Config().Rules) > 0 })
 	rule := f.store.Config().Rules[0]
 	granted := false
