@@ -60,11 +60,15 @@ jobs:
       - name: Repeat interactive terminal checks under the race detector
         run: go test -race ./internal/agent -run '^TestInteractiveShellRetainsDirectoryResizesAndInterrupts$' -count=50 -timeout=5m
       - run: go test -race ./...
-      - run: go test ./internal/commerce ./internal/platform ./internal/storage ./internal/app ./internal/integration -count=1
+      - run: |
+          go test ./internal/commerce ./internal/platform ./internal/storage ./internal/app ./internal/integration -count=1
+          go test ./internal/platform -run '^TestAccountRuleLimitAcrossNodesAndImport$' -count=10
         env:
           TFP_TEST_DRIVER: postgres
           TFP_TEST_DSN: postgres://tfp:test-only@localhost:5432/tfp_test?sslmode=disable
-      - run: go test ./internal/commerce ./internal/platform ./internal/storage ./internal/app ./internal/integration -count=1
+      - run: |
+          go test ./internal/commerce ./internal/platform ./internal/storage ./internal/app ./internal/integration -count=1
+          go test ./internal/platform -run '^TestAccountRuleLimitAcrossNodesAndImport$' -count=10
         env:
           TFP_TEST_DRIVER: mysql
           TFP_TEST_DSN: root:test-only@tcp(localhost:3306)/tfp_test?parseTime=true

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -18,7 +19,11 @@ func TestAccountRuleLimitAcrossNodesAndImport(t *testing.T) {
 		return contract.ResourceLimits{MaxRules: 2}, nil
 	}
 	var wg sync.WaitGroup
-	codes := make(chan int, 8)
+	type result struct {
+		code int
+		body string
+	}
+	results := make(chan result, 8)
 	for i := range 8 {
 		wg.Go(func() {
 			g, n := g1, n1
@@ -28,17 +33,18 @@ func TestAccountRuleLimitAcrossNodesAndImport(t *testing.T) {
 			rule := ruleFor(g, n)
 			rule.Enabled = false
 			rule.Listen = fmt.Sprintf(":%d", 20010+i)
-			codes <- f.req("POST", "/rules", rule, "").Code
+			response := f.req("POST", "/rules", rule, "")
+			results <- result{response.Code, response.Body.String()}
 		})
 	}
 	wg.Wait()
-	close(codes)
+	close(results)
 	success := 0
-	for code := range codes {
-		if code == 201 {
+	for response := range results {
+		if response.code == 201 {
 			success++
-		} else if code != 409 {
-			t.Fatal(code)
+		} else if response.code != 409 || !strings.Contains(response.body, "plan rule limit reached") {
+			t.Fatalf("unexpected concurrent rule response: %d %s", response.code, response.body)
 		}
 	}
 	if success != 2 {

@@ -82,20 +82,8 @@ func (s *Server) prefetchLease(w http.ResponseWriter, r *http.Request) {
 	node := r.Context().Value(nodeKey{}).(string)
 	var leaseID string
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
-		var nodeRaw string
-		nodeQuery := "SELECT payload FROM cp_nodes WHERE id=?"
-		if s.Store.Dialect != "sqlite" {
-			nodeQuery += " FOR UPDATE"
-		}
-		if e := tx.QueryRowContext(r.Context(), s.q(nodeQuery), node).Scan(&nodeRaw); e != nil {
-			return e
-		}
-		var info contract.Node
-		if json.Unmarshal([]byte(nodeRaw), &info) != nil || !contains(info.Capabilities, "lease-set-v1") {
-			return errPrefetchForbidden
-		}
 		query := "SELECT payload FROM cp_rules WHERE id=? AND node_id=? AND deleted=0"
-		// Match rule-save lock order: lock the owner before the rule row. The
+		// Match rule-save lock order: owner, node, then rule. The
 		// second read below detects an owner/config change during acquisition.
 		var initialRaw string
 		if e := tx.QueryRowContext(r.Context(), s.q(query), in.RuleID, node).Scan(&initialRaw); e != nil {
@@ -110,6 +98,18 @@ func (s *Server) prefetchLease(w http.ResponseWriter, r *http.Request) {
 		}
 		if e := s.lockRuleOwner(r.Context(), tx, initial.UserID); e != nil {
 			return e
+		}
+		var nodeRaw string
+		nodeQuery := "SELECT payload FROM cp_nodes WHERE id=?"
+		if s.Store.Dialect != "sqlite" {
+			nodeQuery += " FOR UPDATE"
+		}
+		if e := tx.QueryRowContext(r.Context(), s.q(nodeQuery), node).Scan(&nodeRaw); e != nil {
+			return e
+		}
+		var info contract.Node
+		if json.Unmarshal([]byte(nodeRaw), &info) != nil || !contains(info.Capabilities, "lease-set-v1") {
+			return errPrefetchForbidden
 		}
 		if s.Store.Dialect != "sqlite" {
 			query += " FOR UPDATE"

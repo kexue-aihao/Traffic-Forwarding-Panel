@@ -807,6 +807,12 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 			}
 		}
 	}
+	// Serialize account-wide rule limits before taking a node lock. Holding
+	// different nodes while waiting for the same owner would deadlock against
+	// the dependency-wide configuration publication at the end of this write.
+	if err := s.lockRuleOwner(ctx, tx, rule.UserID); err != nil {
+		return err
+	}
 	query := "SELECT id FROM cp_nodes WHERE id=?"
 	if s.Store.Dialect != "sqlite" {
 		query += " FOR UPDATE"
@@ -821,9 +827,6 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 	oldVersion := rule.Version
 	// 分类存在列里，不进 payload —— 那是发给 Agent 的配置，归类和它无关。
 	rule.Category = ""
-	if err := s.lockRuleOwner(ctx, tx, rule.UserID); err != nil {
-		return err
-	}
 	var old contract.Rule
 	if !create {
 		var payload string
