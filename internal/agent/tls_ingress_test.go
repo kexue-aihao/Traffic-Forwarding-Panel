@@ -449,6 +449,7 @@ func TestTLSIngressFragmentedHelloAndCapacity(t *testing.T) {
 	for i := 0; i < 64; i++ {
 		v := testRule(target)
 		v.ID, v.GroupID, v.UserID, v.Listen = fmt.Sprintf("route%d", i), "group", "owner", ingress.Listen
+		v.Lease.ID = fmt.Sprintf("lease%d", i)
 		v.SharedTLS = &contract.SharedTLS{IngressID: "shared", ServerName: fmt.Sprintf("route%d.example.com", i)}
 		if i == 0 {
 			v.SharedTLS.ServerName = "a.example.com"
@@ -467,7 +468,7 @@ func TestTLSIngressFragmentedHelloAndCapacity(t *testing.T) {
 	c := tls.Client(fragmentIngressConn{raw}, &tls.Config{RootCAs: roots, ServerName: "a.example.com"})
 	defer c.Close()
 	if e = c.Handshake(); e != nil {
-		t.Fatal("fragmented ClientHello failed", e)
+		t.Fatalf("fragmented ClientHello failed: %v; ingress: %+v", e, r.TLSIngressStatuses())
 	}
 	if _, e = io.ReadFull(c, make([]byte, 1)); e != nil {
 		t.Fatal(e)
