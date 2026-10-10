@@ -119,7 +119,7 @@ func TestTLSIngressConcurrentRoutes(t *testing.T) {
 	}
 	type connected struct {
 		index int
-		conn  net.Conn
+		conn  *tls.Conn
 		err   error
 	}
 	ready := make(chan connected, 64)
@@ -144,7 +144,7 @@ func TestTLSIngressConcurrentRoutes(t *testing.T) {
 			t.Cleanup(func() { v.conn.Close() })
 		}
 		if v.err != nil {
-			t.Error(v.err)
+			t.Errorf("route %d: %v; ingress status: %+v", v.index, v.err, r.TLSIngressStatuses())
 		}
 		clients[v.index] = v.conn
 	}

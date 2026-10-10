@@ -62,14 +62,13 @@ func (s *Store) creditLiabilityLocked(lease string) int64 {
 // A reservation becomes visible here only after its WAL sync has succeeded.
 // TCP waits for a refill in the caller; UDP drops an unreserved datagram.
 func (s *Store) TryCreditCharge(r contract.Rule, until time.Time, up bool, n int) error {
-	now := time.Now()
 	if n < 0 {
 		return errors.New("negative charge")
 	}
 	if s.fastFailed.Load() {
 		return errors.New("durable storage unavailable")
 	}
-	if r.Lease == nil || !now.Before(until) {
+	if r.Lease == nil {
 		return errLeaseUnavailable
 	}
 	if r.Network == "tcp" {
@@ -85,6 +84,14 @@ func (s *Store) TryCreditCharge(r contract.Rule, until time.Time, up bool, n int
 	}
 	k := creditKey(r.ID, up)
 	s.creditMu.Lock()
+	// A new window can be published while this debit waits for creditMu.
+	// Timestamp the debit after acquiring the lock so usage cannot predate
+	// its reservation, and expiry is checked at the point of admission.
+	now := time.Now()
+	if !now.Before(until) {
+		s.creditMu.Unlock()
+		return errLeaseUnavailable
+	}
 	var remaining int64
 	var candidates [2]*liveCredit
 	eligible := candidates[:0]

@@ -59,6 +59,8 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: Repeat interactive terminal checks under the race detector
         run: go test -race ./internal/agent -run '^TestInteractiveShellRetainsDirectoryResizesAndInterrupts$' -count=50 -timeout=5m
+      - name: Repeat concurrent TLS routing with two CPUs
+        run: GOMAXPROCS=2 go test -race ./internal/agent -run '^TestTLSIngressConcurrentRoutes$' -count=100 -timeout=3m
       - run: go test -race ./...
       - name: Verify independent Xray protocol clients
         run: |
