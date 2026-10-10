@@ -6,6 +6,8 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/netx"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
 	"net"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 )
 
 type Runtime struct {
+	Services        *ServiceManager
 	mu              sync.Mutex
 	Store           *Store
 	Client          tunnel.Client
@@ -30,23 +33,24 @@ type Runtime struct {
 	udpQueued       atomic.Int64
 }
 type binding struct {
-	changed  chan struct{}
-	ctx      context.Context
-	cancel   context.CancelFunc
-	pool     *resourcePool
-	mu       sync.Mutex
-	rule     contract.Rule
-	until    time.Time
-	tcp      net.Listener
-	udp      *net.UDPConn
-	conns    map[net.Conn]struct{}
-	sessions map[string]*udpSession
-	closed   bool
-	runtime  *Runtime
-	slots    chan struct{}
-	routes   map[string]route
-	backends map[string]*backendState
-	udpStats udpCounters
+	policyStatus map[string]contract.RuleRuntimeStatus
+	changed      chan struct{}
+	ctx          context.Context
+	cancel       context.CancelFunc
+	pool         *resourcePool
+	mu           sync.Mutex
+	rule         contract.Rule
+	until        time.Time
+	tcp          net.Listener
+	udp          *net.UDPConn
+	conns        map[net.Conn]struct{}
+	sessions     map[string]*udpSession
+	closed       bool
+	runtime      *Runtime
+	slots        chan struct{}
+	routes       map[string]route
+	backends     map[string]*backendState
+	udpStats     udpCounters
 }
 type udpSession struct {
 	ctx        context.Context
@@ -67,11 +71,40 @@ func NewRuntime(store *Store, client tunnel.Client) *Runtime {
 	if client.Pool == nil {
 		client.Pool = &tunnel.MuxPool{}
 	}
-	return &Runtime{Store: store, Client: client, Datagrams: &tunnel.DatagramPool{}, listeners: map[string]*binding{}, pools: map[string]*resourcePool{}, udpDialSlots: make(chan struct{}, 32), udpSessionSlots: make(chan struct{}, 4096)}
+	return &Runtime{Services: &ServiceManager{BaseTLS: client.TLS}, Store: store, Client: client, Datagrams: &tunnel.DatagramPool{}, listeners: map[string]*binding{}, pools: map[string]*resourcePool{}, udpDialSlots: make(chan struct{}, 32), udpSessionSlots: make(chan struct{}, 4096)}
 }
 func (r *Runtime) Version() int64 { r.mu.Lock(); defer r.mu.Unlock(); return r.version }
 func key(v contract.Rule) string  { return v.Network + "|" + v.Listen }
 func validate(v contract.Rule) error {
+	if v.EffectivePolicy != nil {
+		h := v.EffectivePolicy.Hash
+		if err := policy.Seal(v.EffectivePolicy); err != nil {
+			return err
+		}
+		if h != v.EffectivePolicy.Hash {
+			return errors.New("policy hash mismatch")
+		}
+	}
+	if len(v.RouteCandidates) > 16 {
+		return errors.New("at most 16 route candidates")
+	}
+	seenCandidates := map[string]bool{}
+	for _, c := range v.RouteCandidates {
+		if c.ID == "" || seenCandidates[c.ID] || c.Weight < 1 || c.Weight > 100 || c.ExitGroupID != v.ExitGroupID || c.BillingMultiplier != v.BillingMultiplier {
+			return errors.New("invalid route candidate scope")
+		}
+		seenCandidates[c.ID] = true
+		if (c.EffectivePolicy == nil) != (v.EffectivePolicy == nil) || c.EffectivePolicy != nil && c.EffectivePolicy.Hash != v.EffectivePolicy.Hash {
+			return errors.New("candidate policy must match the compiled authorized group path")
+		}
+		next := v
+		next.RouteCandidates = nil
+		next.Backends = nil
+		next.Target, next.Transport, next.Tunnel, next.EffectivePolicy = c.Target, c.Transport, c.Tunnel, c.EffectivePolicy
+		if e := validate(next); e != nil {
+			return e
+		}
+	}
 	if err := v.ValidateAdvanced(); err != nil {
 		return err
 	}
@@ -109,7 +142,7 @@ func validate(v contract.Rule) error {
 		if v.Network != "tcp" {
 			return errors.New("direct-tls supports tcp only")
 		}
-	case "tls", "ws", "wss", "http", "secure-direct":
+	case "tls", "tls_simple", "ws", "wss", "http", "secure-direct":
 		if v.Tunnel == nil || v.Tunnel.Endpoint == "" || v.Tunnel.Token == "" {
 			return errors.New("tunnel credentials missing")
 		}
@@ -252,6 +285,16 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 		next[k] = b
 		staged = append(staged, b)
 	}
+	commitServices, abortServices, e := r.Services.Prepare(c.Services, c.ValidUntil)
+	if e != nil {
+		return fail(e)
+	}
+	committedServices := false
+	defer func() {
+		if !committedServices {
+			abortServices()
+		}
+	}()
 	if persist {
 		if e := r.Store.SetConfig(c); e != nil {
 			return fail(e)
@@ -294,11 +337,21 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 			b.routes[name] = v
 		}
 		b.rule = rules[k]
+		statusIDs := map[string]bool{b.rule.ID: true}
+		for _, route := range b.routes {
+			statusIDs[route.rule.ID] = true
+		}
+		for id := range b.policyStatus {
+			if !statusIDs[id] {
+				delete(b.policyStatus, id)
+			}
+		}
 		b.until = c.ValidUntil
 		b.pool = r.pools[limitOwner(b.rule)]
 		close(b.changed)
 		b.changed = make(chan struct{})
 		if changed {
+			b.backends = map[string]*backendState{}
 			b.cancel()
 			b.ctx, b.cancel = context.WithCancel(context.Background())
 			for conn := range b.conns {
@@ -310,6 +363,8 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 		}
 		b.mu.Unlock()
 	}
+	commitServices()
+	committedServices = true
 	r.listeners = next
 	r.version = c.Version
 	for _, b := range staged {
@@ -329,6 +384,7 @@ func (r *Runtime) Close() {
 	for _, b := range r.listeners {
 		b.close()
 	}
+	r.Services.Close()
 	r.Client.Pool.Close()
 	r.Datagrams.Close()
 }
@@ -388,24 +444,41 @@ func (b *binding) track(c net.Conn) bool {
 }
 func (b *binding) untrack(c net.Conn) { b.mu.Lock(); delete(b.conns, c); b.mu.Unlock(); c.Close() }
 func (b *binding) dial(ctx context.Context, v contract.Rule) (net.Conn, *tunnel.Session, error) {
-	if len(v.Backends) > 0 {
+	if len(v.Backends) > 0 || len(v.RouteCandidates) > 0 || v.EffectivePolicy != nil && v.EffectivePolicy.Failover != nil {
 		return b.dialBackends(ctx, v)
 	}
-	return b.dialTarget(ctx, v)
+	c, s, e := b.dialTarget(ctx, v)
+	if e == nil {
+		b.recordDial(v, "direct", c)
+	}
+	return c, s, e
 }
 func (b *binding) dialTarget(ctx context.Context, v contract.Rule) (net.Conn, *tunnel.Session, error) {
 	if v.Transport == "quic" {
-		c, e := b.runtime.Datagrams.Dial(ctx, b.runtime.Client.TLS, v.Tunnel.Endpoint, v.Tunnel.ServerName, v.Tunnel.Token, v.Target)
+		c, e := b.runtime.Datagrams.DialPolicy(ctx, b.runtime.Client.TLS, v.Tunnel.Endpoint, v.Tunnel.ServerName, v.Tunnel.Token, v.Target, v.EffectivePolicy != nil && v.EffectivePolicy.PreferIPv6)
 		return c, nil, e
 	}
 	if v.Transport == "direct" {
-		c, e := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, v.Network, v.Target)
+		c, e := netx.Dial(ctx, v.Network, v.Target, v.EffectivePolicy != nil && v.EffectivePolicy.PreferIPv6)
 		return c, nil, e
 	}
 	if v.Transport == "direct-tls" {
 		return b.dialTargetTLS(ctx, v)
 	}
-	s, e := b.runtime.Client.DialRoute(ctx, v.Transport, v.Network, v.Target, *v.Tunnel)
+	tc := b.runtime.Client
+	if v.Tunnel.ServiceID != "" {
+		var err error
+		tc.TLS, err = b.runtime.Services.RouteTLS(*v.Tunnel)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	tc.RuleID = v.ID
+	if p, ok := ctx.Value(inspectionContextKey{}).([]byte); ok {
+		tc.InspectionPrefix = p
+	}
+	tc.PreferIPv6 = v.EffectivePolicy != nil && v.EffectivePolicy.PreferIPv6
+	s, e := tc.DialRoute(ctx, v.Transport, v.Network, v.Target, *v.Tunnel)
 	if e != nil {
 		return nil, nil, e
 	}
@@ -421,7 +494,7 @@ func (b *binding) dialTarget(ctx context.Context, v contract.Rule) (net.Conn, *t
 //
 // 计费口径不变：经过这条连接的仍是业务有效载荷，TLS 记录头不额外计入。
 func (b *binding) dialTargetTLS(ctx context.Context, v contract.Rule) (net.Conn, *tunnel.Session, error) {
-	raw, e := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", v.Target)
+	raw, e := netx.Dial(ctx, "tcp", v.Target, v.EffectivePolicy != nil && v.EffectivePolicy.PreferIPv6)
 	if e != nil {
 		return nil, nil, e
 	}
@@ -471,20 +544,46 @@ func (b *binding) handleTCP(c net.Conn) {
 	if err != nil {
 		return
 	}
-	if v.SharedTLS != nil {
-		name, replay, err := readServerName(c)
+	var inspected policy.Inspection
+	layers := []contract.InboundPolicy{}
+	if v.EffectivePolicy != nil {
+		layers = v.EffectivePolicy.InboundLayers
+	}
+	if len(v.BlockedProtocols) > 0 {
+		layers = append(layers, contract.InboundPolicy{GroupID: "rule", BlockedApps: v.BlockedProtocols})
+	}
+	if v.SharedTLS != nil || policy.NeedsInspect(layers) {
+		inspected, err = policy.Inspect(client)
 		if err != nil {
 			return
 		}
-		b.mu.Lock()
-		selected, ok := b.routes[name]
-		ctx = b.ctx
-		b.mu.Unlock()
-		if !ok {
+		client = inspected.Conn
+		if v.SharedTLS != nil {
+			name, e := policy.Host(inspected.Host)
+			if e != nil || inspected.Kind != "tls" {
+				return
+			}
+			b.mu.Lock()
+			selected, ok := b.routes[name]
+			ctx = b.ctx
+			b.mu.Unlock()
+			if !ok {
+				return
+			}
+			v, pool = selected.rule, selected.pool
+			layers = nil
+			if v.EffectivePolicy != nil {
+				layers = v.EffectivePolicy.InboundLayers
+			}
+			if len(v.BlockedProtocols) > 0 {
+				layers = append(layers, contract.InboundPolicy{GroupID: "rule", BlockedApps: v.BlockedProtocols})
+			}
+		}
+		if err = inspected.Check(layers); err != nil {
+			b.policyRejected(v.ID)
 			return
 		}
-		v, pool = selected.rule, selected.pool
-		client = replay
+		client = policy.FilterWithRejection(client, inspected, layers, func() { b.policyRejected(v.ID) })
 	}
 	release, ok := pool.acquire(client.RemoteAddr())
 	if !ok {
@@ -494,25 +593,8 @@ func (b *binding) handleTCP(c net.Conn) {
 	if e := b.awaitAvailable(ctx, v.ID); e != nil {
 		return
 	}
-	if len(v.BlockedProtocols) > 0 {
-		c.SetReadDeadline(time.Now().Add(10 * time.Second))
-		reader := bufio.NewReader(client)
-		first, e := reader.Peek(1)
-		if e != nil {
-			return
-		}
-		n := 1
-		if strings.ContainsRune("GHPDOC T", rune(first[0])) {
-			n = 8
-		}
-		prefix, e := reader.Peek(n)
-		if e != nil && len(prefix) == 0 {
-			return
-		}
-		if blocked(prefix, v.BlockedProtocols) {
-			return
-		}
-		client = &readConn{Conn: client, reader: reader}
+	if len(inspected.Prefix) > 0 {
+		ctx = context.WithValue(ctx, inspectionContextKey{}, inspected.Prefix)
 	}
 	target, _, e := b.dial(ctx, v)
 	if e != nil {
@@ -530,6 +612,8 @@ func (b *binding) handleTCP(c net.Conn) {
 	defer cancel()
 	tunnel.Relay(&cancelConn{Conn: client, cancel: cancel}, &cancelConn{Conn: target, cancel: cancel}, 2*time.Minute, func(up bool, n int) error { return b.charge(flowCtx, pool, v, up, n) })
 }
+
+type inspectionContextKey struct{}
 
 type cancelConn struct {
 	net.Conn
@@ -562,7 +646,7 @@ func blocked(p []byte, policies []string) bool {
 			return true
 		}
 		if policy == "http" {
-			for _, method := range []string{"GET ", "POST ", "HEAD ", "PUT ", "DELETE ", "OPTIONS ", "CONNECT ", "TRACE ", "PATCH "} {
+			for _, method := range []string{"GET ", "POST ", "HEAD ", "PUT ", "DELETE ", "OPTIONS ", "CONNECT ", "TRACE ", "PATCH ", "PRI "} {
 				if strings.HasPrefix(string(p), method) {
 					return true
 				}

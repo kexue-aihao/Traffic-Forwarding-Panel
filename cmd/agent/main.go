@@ -53,6 +53,7 @@ func main() {
 }
 func run() error {
 	mode := flag.String("mode", "agent", "agent, exit, secure-direct or reverse-exit")
+	serviceProfiles := flag.String("service-profiles", "", "private local JSON service profiles")
 	showVersion := flag.Bool("version", false, "print Agent release version")
 	enableUninstall := flag.Bool("enable-uninstall", false, "enable remote uninstall of an official systemd installation")
 	enableTerminal := flag.Bool("enable-terminal", false, "enable audited Linux remote commands as the Agent service account")
@@ -202,7 +203,12 @@ func run() error {
 		return e
 	}
 	defer store.Close()
+	profiles, e := agent.LoadServiceProfiles(*serviceProfiles)
+	if e != nil {
+		return e
+	}
 	runtime := agent.NewRuntime(store, tunnel.Client{TLS: tc})
+	runtime.Services.Profiles = profiles
 	collector := &probe.Collector{DiskPath: *disk}
 	if *echo != "" {
 		collector.EchoURLs = strings.Split(*echo, ",")

@@ -72,6 +72,7 @@ type Group struct {
 // GroupAdvanced mirrors the optional device-group settings exposed by the
 // reference panel. The UI edits JSONC; the API validates structured JSON.
 type GroupAdvanced struct {
+	PolicyVersion     int            `json:"policy_version,omitempty"`
 	AllowedHost       []string       `json:"allowed_host,omitempty"`
 	BlockedHost       []string       `json:"blocked_host,omitempty"`
 	BlockedPath       []string       `json:"blocked_path,omitempty"`
@@ -89,21 +90,25 @@ type GroupAdvanced struct {
 }
 
 type Node struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	GroupIDs       []string   `json:"group_ids"`
-	Version        string     `json:"agent_version"`
-	OS             string     `json:"os"`
-	Arch           string     `json:"arch"`
-	Capabilities   []string   `json:"capabilities"`
-	LastSeen       *time.Time `json:"last_seen"`
-	DesiredVersion int64      `json:"desired_version"`
-	AppliedVersion int64      `json:"applied_version"`
-	ApplyError     string     `json:"apply_error"`
+	RuleStatuses   []RuleRuntimeStatus `json:"rule_statuses,omitempty"`
+	Services       []ServiceStatus     `json:"services,omitempty"`
+	ID             string              `json:"id"`
+	Name           string              `json:"name"`
+	GroupIDs       []string            `json:"group_ids"`
+	Version        string              `json:"agent_version"`
+	OS             string              `json:"os"`
+	Arch           string              `json:"arch"`
+	Capabilities   []string            `json:"capabilities"`
+	LastSeen       *time.Time          `json:"last_seen"`
+	DesiredVersion int64               `json:"desired_version"`
+	AppliedVersion int64               `json:"applied_version"`
+	ApplyError     string              `json:"apply_error"`
 }
 
 // Tunnel credentials are distributed only to the assigned Agent, never user lists.
 type Tunnel struct {
+	ServiceID  string `json:"service_id,omitempty"`
+	Inspect    bool   `json:"inspect,omitempty"`
 	Endpoint   string `json:"endpoint"`
 	ServerName string `json:"server_name"`
 	Token      string `json:"token,omitempty"`
@@ -121,6 +126,8 @@ type ObfuscationConfig struct {
 
 // TunnelHop is one authenticated, encrypted exit in an ordered tunnel chain.
 type TunnelHop struct {
+	PreferIPv6 bool   `json:"prefer_ipv6,omitempty"`
+	Inspect    bool   `json:"inspect,omitempty"`
 	Transport  string `json:"transport"`
 	Endpoint   string `json:"endpoint"`
 	ServerName string `json:"server_name"`
@@ -128,14 +135,16 @@ type TunnelHop struct {
 }
 
 type Rule struct {
-	ExitGroupID       string         `json:"exit_group_id,omitempty"`
-	ExitID            string         `json:"exit_id,omitempty"`
-	SelectedExitID    string         `json:"selected_exit_id,omitempty"`
-	BillingMultiplier string         `json:"billing_multiplier,omitempty"`
-	ExitUnavailable   bool           `json:"exit_unavailable,omitempty"`
-	ProxyProtocol     *ProxyProtocol `json:"proxy_protocol,omitempty"`
-	ID                string         `json:"id"`
-	UserID            string         `json:"user_id"`
+	EffectivePolicy   *EffectivePolicy `json:"effective_policy,omitempty"`
+	RouteCandidates   []RouteCandidate `json:"route_candidates,omitempty"`
+	ExitGroupID       string           `json:"exit_group_id,omitempty"`
+	ExitID            string           `json:"exit_id,omitempty"`
+	SelectedExitID    string           `json:"selected_exit_id,omitempty"`
+	BillingMultiplier string           `json:"billing_multiplier,omitempty"`
+	ExitUnavailable   bool             `json:"exit_unavailable,omitempty"`
+	ProxyProtocol     *ProxyProtocol   `json:"proxy_protocol,omitempty"`
+	ID                string           `json:"id"`
+	UserID            string           `json:"user_id"`
 	// Category 是运营方自己定的规则分类（「日本线路」「测试」之类）。它存在
 	// cp_rules.category 这一列里，不进发给 Agent 的配置，改动也不需要 Agent 重新应用。
 	Category         string      `json:"category,omitempty"`
@@ -174,19 +183,23 @@ type Lease struct {
 }
 
 type Config struct {
-	ContractVersion int       `json:"contract_version"`
-	NodeID          string    `json:"node_id"`
-	Version         int64     `json:"version"`
-	ValidUntil      time.Time `json:"valid_until"`
-	Rules           []Rule    `json:"rules"`
+	BlockedRules    []BlockedRule   `json:"blocked_rules,omitempty"`
+	Services        []ServiceConfig `json:"services,omitempty"`
+	ContractVersion int             `json:"contract_version"`
+	NodeID          string          `json:"node_id"`
+	Version         int64           `json:"version"`
+	ValidUntil      time.Time       `json:"valid_until"`
+	Rules           []Rule          `json:"rules"`
 }
 
 type Ack struct {
-	AgentVersion   string   `json:"agent_version,omitempty"`
-	Capabilities   []string `json:"capabilities,omitempty"`
-	Version        int64    `json:"version"`
-	AppliedVersion int64    `json:"applied_version"`
-	Error          string   `json:"error"`
+	RuleStatuses   []RuleRuntimeStatus `json:"rule_statuses,omitempty"`
+	Services       []ServiceStatus     `json:"services,omitempty"`
+	AgentVersion   string              `json:"agent_version,omitempty"`
+	Capabilities   []string            `json:"capabilities,omitempty"`
+	Version        int64               `json:"version"`
+	AppliedVersion int64               `json:"applied_version"`
+	Error          string              `json:"error"`
 }
 
 type Registration struct {

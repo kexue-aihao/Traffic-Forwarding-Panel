@@ -297,7 +297,7 @@ func (s *Server) disableUser(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if _, e := tx.ExecContext(r.Context(), s.q(`UPDATE cp_nodes SET desired_version=desired_version+1 WHERE id IN(SELECT node_id FROM cp_rules WHERE user_id=?)`), target); e != nil {
+		if e := s.publishGroupDependencies(r.Context(), tx); e != nil {
 			return e
 		}
 		return s.AuditTx(r.Context(), tx, actor.ID, "user.status", target)

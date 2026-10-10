@@ -12,12 +12,13 @@ import (
 	"time"
 
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
 )
 
 func hopAddress(h contract.TunnelHop) (string, error) {
 	address := h.Endpoint
 	switch h.Transport {
-	case "tls", "http", "secure-direct":
+	case "tls", "tls_simple", "http", "secure-direct":
 	case "ws", "wss":
 		u, e := url.Parse(address)
 		if e != nil || u.Scheme != h.Transport || u.User != nil || u.Host == "" || u.Fragment != "" {
@@ -109,10 +110,11 @@ func (s *Server) authorizedNext(requested contract.TunnelHop) (contract.TunnelHo
 	}
 	return contract.TunnelHop{}, false
 }
-func relayPackets(a, b *Session, idle time.Duration) {
+func relayPackets(a, b *Session, idle time.Duration) { relayPacketsWithPolicy(a, b, idle, nil) }
+func relayPacketsWithPolicy(a, b *Session, idle time.Duration, layers []contract.InboundPolicy) {
 	var wg sync.WaitGroup
 	wg.Add(2)
-	copyOne := func(dst, src *Session) {
+	copyOne := func(dst, src *Session, up bool) {
 		defer wg.Done()
 		defer a.Close()
 		defer b.Close()
@@ -122,13 +124,20 @@ func relayPackets(a, b *Session, idle time.Duration) {
 			if e != nil {
 				return
 			}
+			if up {
+				for _, layer := range layers {
+					if policy.BlockedDatagram(p, layer.BlockedApps) {
+						return
+					}
+				}
+			}
 			dst.SetWriteDeadline(time.Now().Add(idle))
 			if e = dst.WritePacket(p); e != nil {
 				return
 			}
 		}
 	}
-	go copyOne(a, b)
-	go copyOne(b, a)
+	go copyOne(a, b, false)
+	go copyOne(b, a, true)
 	wg.Wait()
 }

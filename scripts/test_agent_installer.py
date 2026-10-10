@@ -19,6 +19,35 @@ touch "$TFP_TEST_ROOT/dependencies-installed"
 
 
 class InstallerCompatibilityTests(InstallerSandbox):
+    def test_managed_profiles_install_and_explicit_legacy_migration(self):
+        source = self.root / "local-profiles.json"
+        content = '{"local":{"allowed_listen":["0.0.0.0:9443"]}}'
+        source.write_text(content, encoding="utf-8")
+        for distro_id, related in (("debian", ""), ("ubuntu", "debian"), ("rocky", "rhel"), ("arch", "")):
+            with self.subTest(distro=distro_id):
+                self.distro(distro_id, related)
+                self.success(self.run_script(args=AGENT_ARGS + ["-M", "-F", shell_path(source)]))
+                installed = self.root / "etc/tfp-agent/service-profiles.json"
+                self.assertEqual(installed.read_text(encoding="utf-8"), content)
+                service = (self.root / "etc/systemd/system/tfp-agent.service").read_text(encoding="utf-8")
+                self.assertIn("-service-profiles ", service)
+                calls = (self.root / "systemctl.log").read_text(encoding="utf-8")
+                self.assertIn("disable --now tfp-exit.service", calls)
+
+    def test_managed_profiles_reject_implicit_migration_and_missing_file(self):
+        source = self.root / "local-profiles.json"
+        source.write_text("{}", encoding="utf-8")
+        result = self.run_script(args=AGENT_ARGS + ["-F", shell_path(source)])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("旧出口服务仍占用端口", result.stderr)
+        self.assertFalse((self.root / "usr/local/bin/tfp-agent").exists())
+        result = self.run_script(args=AGENT_ARGS + ["-M"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("-M 需要同时指定 -F", result.stderr)
+        result = self.run_script(args=AGENT_ARGS + ["-F", shell_path(self.root / "missing.json")])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("无法读取本地 service profile", result.stderr)
+
     def distro(self, distro_id, related=""):
         (self.root / "etc/os-release").write_text(
             f'ID={distro_id}\nID_LIKE="{related}"\nPRETTY_NAME="{distro_id} fixture"\n',

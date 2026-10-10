@@ -453,6 +453,9 @@ func (s *Server) agentControlResult(w http.ResponseWriter, r *http.Request) {
 			if _, e = tx.ExecContext(r.Context(), s.q("DELETE FROM cp_exits WHERE node_id=?"), node); e != nil {
 				return e
 			}
+			if e = s.publishGroupDependencies(r.Context(), tx); e != nil {
+				return e
+			}
 		}
 		// The wire error is a short category; do not persist raw host paths or output.
 		message := ""

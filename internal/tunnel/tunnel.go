@@ -5,7 +5,6 @@ package tunnel
 import (
 	"bufio"
 	"context"
-	"crypto/subtle"
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
@@ -22,6 +21,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/netx"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
 )
 
 const maxFrame = 65535
@@ -190,21 +191,28 @@ func (s *Session) ReadPacket() ([]byte, error) {
 }
 
 type openRequest struct {
-	Version int                  `json:"version"`
-	Token   string               `json:"token"`
-	Network string               `json:"network"`
-	Target  string               `json:"target"`
-	Chain   []contract.TunnelHop `json:"chain,omitempty"`
-	Visited []string             `json:"visited,omitempty"`
-	Reverse string               `json:"reverse,omitempty"`
+	RuleID           string `json:"rule_id,omitempty"`
+	Inspect          bool   `json:"inspect,omitempty"`
+	inspectionPrefix []byte
+	Version          int                  `json:"version"`
+	Token            string               `json:"token"`
+	Network          string               `json:"network"`
+	Target           string               `json:"target"`
+	Chain            []contract.TunnelHop `json:"chain,omitempty"`
+	Visited          []string             `json:"visited,omitempty"`
+	Reverse          string               `json:"reverse,omitempty"`
 }
 type Client struct {
-	TLS         *tls.Config
-	Timeout     time.Duration
-	Pool        *MuxPool
-	useMux      bool
-	reverse     string
-	obfuscation *contract.ObfuscationConfig
+	PreferIPv6        bool
+	InspectionPrefix  []byte
+	InspectionEnabled bool
+	RuleID            string
+	TLS               *tls.Config
+	Timeout           time.Duration
+	Pool              *MuxPool
+	useMux            bool
+	reverse           string
+	obfuscation       *contract.ObfuscationConfig
 }
 
 func (c Client) Dial(ctx context.Context, transport, endpoint, serverName, token, network, target string) (*Session, error) {
@@ -231,6 +239,9 @@ func (c Client) DialChain(ctx context.Context, transport, endpoint, serverName, 
 	return c.dial(ctx, transport, endpoint, serverName, token, network, target, chain, nil)
 }
 func (c Client) dial(ctx context.Context, transport, endpoint, serverName, token, network, target string, chain []contract.TunnelHop, visited []string) (*Session, error) {
+	if transport == "tls_simple" {
+		transport = "tls"
+	}
 	if transport == "secure-direct" && (network != "tcp" || c.useMux || c.reverse != "" || len(chain) > 0 || len(visited) > 0) {
 		return nil, errors.New("secure-direct only supports direct TCP")
 	}
@@ -269,7 +280,7 @@ func (c Client) dial(ctx context.Context, transport, endpoint, serverName, token
 		if tc.ServerName == "" {
 			tc.ServerName = u.Hostname()
 		}
-		d := websocket.Dialer{TLSClientConfig: tc, HandshakeTimeout: timeout}
+		d := websocket.Dialer{TLSClientConfig: tc, HandshakeTimeout: timeout, NetDialContext: func(ctx context.Context, n, a string) (net.Conn, error) { return netx.Dial(ctx, n, a, c.PreferIPv6) }}
 		w, resp, e := d.DialContext(ctx, endpoint, nil)
 		if e != nil {
 			if resp != nil && resp.Body != nil {
@@ -287,7 +298,7 @@ func (c Client) dial(ctx context.Context, transport, endpoint, serverName, token
 		if tc.ServerName == "" {
 			tc.ServerName = host
 		}
-		conn, err = (&net.Dialer{}).DialContext(ctx, "tcp", endpoint)
+		conn, err = netx.Dial(ctx, "tcp", endpoint, c.PreferIPv6)
 		if err != nil {
 			return nil, err
 		}
@@ -402,8 +413,13 @@ func (c *wsConn) SetDeadline(t time.Time) error {
 }
 
 type Server struct {
-	TLS   *tls.Config
-	Token string
+	targets        map[string]*targetState
+	Managed        bool
+	Grants         []contract.ServiceGrant
+	Policy         *contract.EffectivePolicy
+	OnReverseState func(bool, error)
+	TLS            *tls.Config
+	Token          string
 	// ReverseAllowed authorizes reverse carrier identities, not destinations.
 	ReverseAllowed map[string]bool
 	// NextHops is an operator-owned allowlist, including local outbound secrets.
@@ -430,6 +446,9 @@ type Server struct {
 }
 
 func (s *Server) Serve(l net.Listener, transport string) error {
+	if transport == "tls_simple" {
+		transport = "tls"
+	}
 	if s.TLS == nil || (len(s.TLS.Certificates) == 0 && s.TLS.GetCertificate == nil) || len(s.Token) < 16 {
 		return errors.New("certificate and token (16+ chars) required")
 	}
@@ -453,8 +472,12 @@ func (s *Server) Serve(l net.Listener, transport string) error {
 	if (s.NodeID != "" && !validNodeID(s.NodeID)) || (len(s.NextHops) > 0 && !validNodeID(s.NodeID)) {
 		return errors.New("chaining requires a stable unique exit ID (1-128 characters)")
 	}
-	if len(s.NextHops) > 64 {
-		return errors.New("at most 64 next-hop entries")
+	maxNextHops := 64
+	if s.Managed {
+		maxNextHops = 2048 // per-rule credentials share the same physical peer
+	}
+	if len(s.NextHops) > maxNextHops {
+		return errors.New("next-hop capacity exceeded")
 	}
 	for _, hop := range s.NextHops {
 		if err := ValidateChain(hop, nil); err != nil {
@@ -606,7 +629,7 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 	var req openRequest
 	dec := json.NewDecoder(strings.NewReader(string(p)))
 	dec.DisallowUnknownFields()
-	if e = dec.Decode(&req); e != nil || (req.Version != 1 && req.Version != 2) || subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) != 1 {
+	if e = dec.Decode(&req); e != nil || (req.Version != 1 && req.Version != 2 && req.Version != 3) || !s.authorized(req) {
 		return
 	}
 	if dec.Decode(new(any)) != io.EOF {
@@ -628,25 +651,64 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 	if s.validateRoute(req) != nil {
 		return
 	}
-	var target net.Conn
-	var next *Session
-	if req.Reverse != "" {
-		if len(req.Chain) > 0 {
+	var inspected policy.Inspection
+	layers := []contract.InboundPolicy{}
+	if s.Policy != nil {
+		layers = s.Policy.InboundLayers
+	}
+	if req.Network == "tcp" && policy.NeedsInspect(layers) && (req.Version != 3 || !req.Inspect) {
+		return
+	}
+	if req.Inspect {
+		if req.Version != 3 || req.Network != "tcp" {
 			return
 		}
-		next, e = s.openReverse(req)
-		target = next
-	} else if len(req.Chain) > 0 {
-		hop, allowed := s.authorizedNext(req.Chain[0])
+		if writeFrame(conn, acceptedFrame, []byte("inspect")) != nil {
+			return
+		}
+		kind, p, e := readFrame(conn)
+		if e != nil || kind != inspectionFrame {
+			return
+		}
+		inspected, e = inspectPrefix(p, layers)
+		if e != nil {
+			return
+		}
+		req.inspectionPrefix = p
+	}
+	var hop contract.TunnelHop
+	if len(req.Chain) > 0 {
+		var allowed bool
+		hop, allowed = s.authorizedNext(req.Chain[0])
 		if !allowed {
 			return
 		}
+	}
+	if req.Reverse != "" && len(req.Chain) > 0 {
+		return
+	}
+	finishAttempt, err := s.targetAttempt(req)
+	if err != nil {
+		return
+	}
+	var target net.Conn
+	var next *Session
+	if req.Reverse != "" {
+		next, e = s.openReverse(req)
+		target = next
+	} else if len(req.Chain) > 0 {
 		visited := append(append([]string(nil), req.Visited...), s.NodeID)
-		next, e = s.Client.dial(s.ctx, hop.Transport, hop.Endpoint, hop.ServerName, hop.Token, req.Network, req.Target, req.Chain[1:], visited)
+		client := s.Client
+		client.PreferIPv6 = hop.PreferIPv6
+		client.InspectionEnabled = hop.Inspect
+		client.InspectionPrefix = req.inspectionPrefix
+		client.RuleID = req.RuleID
+		next, e = client.dial(s.ctx, hop.Transport, hop.Endpoint, hop.ServerName, hop.Token, req.Network, req.Target, req.Chain[1:], visited)
 		target = next
 	} else {
 		target, e = (&net.Dialer{Timeout: 10 * time.Second}).DialContext(s.ctx, req.Network, req.Target)
 	}
+	finishAttempt(e)
 	if e != nil {
 		return
 	}
@@ -662,7 +724,7 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 	}
 	if req.Network == "udp" {
 		if next != nil {
-			relayPackets(session, next, idle)
+			relayPacketsWithPolicy(session, next, idle, layers)
 			return
 		}
 		done := make(chan struct{})
@@ -673,6 +735,11 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 				p, e := session.ReadPacket()
 				if e != nil {
 					return
+				}
+				for _, layer := range layers {
+					if policy.BlockedDatagram(p, layer.BlockedApps) {
+						return
+					}
 				}
 				target.SetWriteDeadline(time.Now().Add(idle))
 				if _, e = target.Write(p); e != nil {
@@ -696,7 +763,12 @@ func (s *Server) serveRequest(conn net.Conn, special bool) {
 		<-done
 		return
 	}
-	Relay(session, target, idle, nil)
+	var business net.Conn = session
+	if req.Inspect {
+		business = &verifiedConn{Conn: session, prefix: req.inspectionPrefix}
+		business = policy.Filter(business, inspected, layers)
+	}
+	Relay(business, target, idle, nil)
 }
 
 // Relay forwards TCP streams with bounded buffers and half-close propagation.

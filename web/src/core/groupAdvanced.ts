@@ -12,19 +12,22 @@ export const advancedSections = [
         key: "blocked_host",
         label: "Host / SNI 黑名单",
         value: [],
-        description: "Host / SNI 黑名单。",
+        description:
+          "支持精确名称和 *.example.com；规范化大小写、端口和尾随点。",
       },
       {
         key: "blocked_path",
         label: "HTTP Path 黑名单",
         value: [],
-        description: "HTTP Path 黑名单。",
+        description:
+          "逐个检查明文 HTTP/1、HTTP/2 请求；支持 *、?，HTTPS 路径不可见。",
       },
       {
         key: "blocked_protocol",
         label: "应用协议屏蔽",
         value: [],
-        description: "应用协议黑名单，当前支持 http、socks。",
+        description:
+          "拦截 HTTP/1、明文 HTTP/2、SOCKS4/5；TLS 使用可见 HTTP ALPN，UDP 仅识别数据报首部。",
       },
     ],
   },
@@ -59,7 +62,8 @@ export const advancedSections = [
         key: "udp_over_tcp",
         label: "UDP over TCP",
         value: false,
-        description: "是否通过 TCP 承载 UDP；不能与 disable_udp 同时启用。",
+        description:
+          "带出口的 UDP 通过 TCP 承载；直连保持原生 UDP。不能与 disable_udp 同时启用。",
       },
     ],
   },
@@ -70,7 +74,8 @@ export const advancedSections = [
         key: "ipv6_group",
         label: "IPv6 对端优先设备组",
         value: [],
-        description: "对端地址优先度使用的设备组列表。",
+        description:
+          "连接所列授权设备组的双栈端点时优先 IPv6；失败回退，不改变出口权限或费用。",
       },
     ],
   },
@@ -82,13 +87,14 @@ export const advancedSections = [
         label: "最大连续失败次数",
         value: 3,
         description:
-          "入口连接隧道出口或入口直出时，开始转移前容忍的最大连续失败次数。",
+          "连续失败达到阈值后冷却；0 表示首次失败。单次连接可立即尝试健康备用，成功后清零。",
       },
       {
         key: "fail_timout_sec",
         label: "故障转移时长（秒）",
         value: 30,
-        description: "入口连接隧道出口或入口直出时的转移时长，单位为秒。",
+        description:
+          "失败候选的冷却秒数；0 仍保留最小 1 秒探测间隔。单目标没有可切换后端。",
       },
     ],
   },
@@ -99,7 +105,8 @@ export const advancedSections = [
         key: "reverse_group",
         label: "反向隧道设备组",
         value: [],
-        description: "反向隧道使用的设备组列表。",
+        description:
+          "在出口组指定接收主动连接的入口组；须先配置托管 reverse hub。",
       },
       {
         key: "protocol",
@@ -111,7 +118,8 @@ export const advancedSections = [
         key: "tls",
         label: "反向隧道 TLS 配置",
         value: {},
-        description: "反向隧道 TLS 配置对象。",
+        description:
+          "支持 enabled、server_name、min_version=1.3、alpn=[tfp-reverse-v1] 及本地 CA/证书 profile 标签。enabled=false 禁用反向服务。",
       },
     ],
   },

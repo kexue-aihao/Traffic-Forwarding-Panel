@@ -9,6 +9,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"net"
 	"net/http"
 	"reflect"
 	"strings"
@@ -35,7 +36,7 @@ func (s *Server) exits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args = append(args, n, o)
-	rows, err := s.Store.DB.QueryContext(r.Context(), s.q("SELECT e.payload,n.last_seen,g.owner_id FROM cp_exits e JOIN cp_nodes n ON n.id=e.node_id JOIN cp_groups g ON g.id=e.group_id"+where+" ORDER BY e.id LIMIT ? OFFSET ?"), args...)
+	rows, err := s.Store.DB.QueryContext(r.Context(), s.q("SELECT e.payload,n.last_seen,g.owner_id,n.payload FROM cp_exits e JOIN cp_nodes n ON n.id=e.node_id JOIN cp_groups g ON g.id=e.group_id"+where+" ORDER BY e.id LIMIT ? OFFSET ?"), args...)
 	if err != nil {
 		fail(w, 500, "exit query failed")
 		return
@@ -45,13 +46,28 @@ func (s *Server) exits(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var raw string
 		var seen int64
-		var owner string
+		var owner, nodeRaw string
 		var e contract.Exit
-		if rows.Scan(&raw, &seen, &owner) != nil || json.Unmarshal([]byte(raw), &e) != nil {
+		if rows.Scan(&raw, &seen, &owner, &nodeRaw) != nil || json.Unmarshal([]byte(raw), &e) != nil {
 			fail(w, 500, "exit query failed")
 			return
 		}
 		e.Online = seen > 0 && time.Now().Unix()-seen <= 90
+		if e.Managed {
+			ready := false
+			var n contract.Node
+			if json.Unmarshal([]byte(nodeRaw), &n) != nil {
+				fail(w, 500, "exit query failed")
+				return
+			}
+			for _, v := range n.Services {
+				if (v.ID == e.ID || strings.HasPrefix(v.ID, "reverse-"+e.ID+"-")) && v.Ready {
+					ready = true
+				}
+			}
+			ready = ready && e.Online
+			e.ServiceReady = &ready
+		}
 		e.Tunnel.Token = ""
 		if e.UDP != nil {
 			e.UDP.Token = ""
@@ -82,6 +98,10 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &e) {
 		return
 	}
+	if actor.Role != "admin" && (e.Managed || e.ReverseHub || e.LocalProfile != "" || e.Listen != "") {
+		fail(w, 403, "only administrators configure managed services")
+		return
+	}
 	if e.Name == "" || len(e.Name) > 190 || e.Weight < 1 || e.Weight > 100 {
 		fail(w, 400, "name and weight 1-100 required")
 		return
@@ -97,6 +117,7 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 		e.Version = 1
 	}
 	e.Online = false
+	e.ServiceReady = nil
 	err := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
 		group, err := s.groupTx(r.Context(), tx, e.GroupID)
 		if err != nil {
@@ -105,7 +126,7 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 		if err := s.nodeAvailableTx(r.Context(), tx, e.NodeID); err != nil {
 			return err
 		}
-		if !group.CanHostExit() {
+		if !(group.CanHostExit() && !e.ReverseHub || e.Managed && e.ReverseHub && group.CanEnter()) {
 			return errors.New("出口节点只能关联出口类型的设备组")
 		}
 		if actor.Role != "admin" {
@@ -171,6 +192,20 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 		if err := (contract.Rule{Network: "tcp", Tunnel: &e.Tunnel}).ValidateAdvanced(); err != nil {
 			return err
 		}
+		if e.Managed {
+			if e.LocalProfile == "" || strings.ContainsAny(e.LocalProfile, "/\\. \r\n") {
+				return errors.New("local profile label required")
+			}
+			if _, _, err := net.SplitHostPort(e.Listen); err != nil {
+				return errors.New("managed listen must be IP:port")
+			}
+			if e.ReverseHub && e.UDP != nil {
+				return errors.New("reverse hub has no UDP listener")
+			}
+			if e.Transport != "tls" && e.Transport != "tls_simple" && e.Transport != "ws" && e.Transport != "http" {
+				return errors.New("unsupported managed transport")
+			}
+		}
 		if err := s.reserveExitPorts(r.Context(), tx, e); err != nil {
 			return err
 		}
@@ -187,6 +222,9 @@ func (s *Server) saveExit(w http.ResponseWriter, r *http.Request) {
 			if count != 1 {
 				return errConflict
 			}
+		}
+		if err := s.publishGroupDependencies(r.Context(), tx); err != nil {
+			return err
 		}
 		return s.AuditTx(r.Context(), tx, actor.ID, "exit.save", e.ID)
 	})
@@ -286,7 +324,7 @@ func (s *Server) resolveExitWithUDP(ctx context.Context, tx *sql.Tx, rule *contr
 		resolved := *parts[0].Tunnel
 		resolved.Chain = nil
 		for _, part := range parts[1:] {
-			resolved.Chain = append(resolved.Chain, contract.TunnelHop{Transport: part.Transport, Endpoint: part.Tunnel.Endpoint, ServerName: part.Tunnel.ServerName, Token: part.Tunnel.Token})
+			resolved.Chain = append(resolved.Chain, contract.TunnelHop{Transport: part.Transport, Endpoint: part.Tunnel.Endpoint, ServerName: part.Tunnel.ServerName, Token: part.Tunnel.Token, Inspect: part.Tunnel.Inspect})
 		}
 		candidate := *rule
 		candidate.Transport, candidate.Tunnel = parts[0].Transport, &resolved
@@ -310,12 +348,17 @@ func (s *Server) resolveExitWithUDP(ctx context.Context, tx *sql.Tx, rule *contr
 	if err := json.Unmarshal([]byte(entryRaw), &entryNode); err != nil {
 		return "", err
 	}
+	top, err := s.managedTopology(ctx, tx)
+	if err != nil {
+		return "", err
+	}
 	rows, err := tx.QueryContext(ctx, s.q("SELECT e.payload,n.last_seen,n.payload FROM cp_exits e JOIN cp_nodes n ON n.id=e.node_id JOIN cp_node_groups ng ON ng.node_id=e.node_id AND ng.group_id=e.group_id WHERE e.group_id=? AND NOT EXISTS(SELECT 1 FROM cp_node_operations o WHERE o.node_id=n.id AND o.kind='uninstall' AND (o.status IN ('running','succeeded') OR (o.status='pending' AND o.expires_at>?))) ORDER BY e.id"), g.ID, time.Now().Unix())
 	if err != nil {
 		return "", err
 	}
 	defer rows.Close()
 	var best *contract.Exit
+	routeReason := "no authorized online exit"
 	score := math.Inf(1)
 	for rows.Next() {
 		var raw, nodeRaw string
@@ -328,7 +371,12 @@ func (s *Server) resolveExitWithUDP(ctx context.Context, tx *sql.Tx, rule *contr
 		if err = json.Unmarshal([]byte(raw), &e); err != nil {
 			return "", err
 		}
-		if !e.Enabled || e.NodeID == rule.NodeID || seen == 0 || time.Now().Unix()-seen > 90 || rule.ExitID != "" && rule.ExitID != "auto" && rule.ExitID != e.ID {
+		if e.ReverseHub || !e.Enabled || e.NodeID == rule.NodeID || seen == 0 || time.Now().Unix()-seen > 90 || rule.ExitID != "" && rule.ExitID != "auto" && rule.ExitID != e.ID {
+			continue
+		}
+		e, err = top.route(*rule, e, true)
+		if err != nil {
+			routeReason = err.Error()
 			continue
 		}
 		forcedTCP := entry.Advanced != nil && entry.Advanced.UDPOverTCP || g.Advanced != nil && g.Advanced.UDPOverTCP
@@ -339,7 +387,11 @@ func (s *Server) resolveExitWithUDP(ctx context.Context, tx *sql.Tx, rule *contr
 			}
 			if contains(entryNode.Capabilities, "udp-datagram-v1") && contains(exitNode.Capabilities, "udp-datagram-v1") {
 				e.Transport = "quic"
-				e.Tunnel = contract.Tunnel{Endpoint: e.UDP.Endpoint, ServerName: e.UDP.ServerName, Token: e.UDP.Token}
+				token := e.UDP.Token
+				if e.Managed {
+					token = e.Tunnel.Token
+				}
+				e.Tunnel = contract.Tunnel{Endpoint: e.UDP.Endpoint, ServerName: e.UDP.ServerName, Token: token}
 			} else if !e.UDP.AllowTCPFallback {
 				continue
 			}
@@ -363,7 +415,7 @@ func (s *Server) resolveExitWithUDP(ctx context.Context, tx *sql.Tx, rule *contr
 		return "", rows.Err()
 	}
 	if best == nil {
-		return "", errors.New("no authorized online exit")
+		return "", errors.New(routeReason)
 	}
 	if err := s.nodeAvailableTx(ctx, tx, best.NodeID); err != nil {
 		return "", err
@@ -438,8 +490,10 @@ func (s *Server) refreshExits(ctx context.Context, node string) error {
 			if reflect.DeepEqual(old, rule) {
 				continue
 			}
-			rule.Lease = nil
-			rule.StandbyLease = nil
+			if e != nil && !strings.Contains(e.Error(), "waiting_for") || e == nil && (old.BillingMultiplier != rule.BillingMultiplier || old.SelectedExitID != rule.SelectedExitID) {
+				rule.Lease = nil
+				rule.StandbyLease = nil
+			}
 			res, err := tx.ExecContext(ctx, s.q("UPDATE cp_rules SET payload=? WHERE id=? AND version=?"), strJSON(rule), rule.ID, rule.Version)
 			if err != nil {
 				return err

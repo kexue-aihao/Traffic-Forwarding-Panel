@@ -307,7 +307,7 @@ func (s *Server) setUserIdentityGroup(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.ExecContext(r.Context(), s.q(`UPDATE cp_users SET identity_group_id=? WHERE id=?`), in.IdentityGroupID, target); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(r.Context(), s.q(`UPDATE cp_nodes SET desired_version=desired_version+1 WHERE id IN(SELECT node_id FROM cp_rules WHERE user_id=? AND deleted=0)`), target); err != nil {
+		if err := s.publishGroupDependencies(r.Context(), tx); err != nil {
 			return err
 		}
 		return s.AuditTx(r.Context(), tx, actor.ID, "user.identity-group", target)

@@ -73,6 +73,7 @@ func (p *MuxPool) Close() {
 }
 
 func (c Client) DialRoute(ctx context.Context, transport, network, target string, t contract.Tunnel) (*Session, error) {
+	c.InspectionEnabled = t.Inspect
 	c.useMux = t.Mux
 	c.reverse = t.Reverse
 	c.obfuscation = t.Obfuscation
@@ -84,7 +85,10 @@ func (c Client) open(conn net.Conn, token, network, target string, chain []contr
 	if len(chain) > 0 || len(visited) > 0 {
 		version = 2
 	}
-	p, e := json.Marshal(openRequest{Version: version, Token: token, Network: network, Target: target, Chain: chain, Visited: visited, Reverse: c.reverse})
+	if c.InspectionEnabled && network == "tcp" {
+		version = 3
+	}
+	p, e := json.Marshal(openRequest{RuleID: c.RuleID, Inspect: c.InspectionEnabled && network == "tcp", Version: version, Token: token, Network: network, Target: target, Chain: chain, Visited: visited, Reverse: c.reverse})
 	if e != nil {
 		return e
 	}
@@ -94,6 +98,18 @@ func (c Client) open(conn net.Conn, token, network, target string, chain []contr
 	k, p, e := readFrame(conn)
 	if e != nil {
 		return e
+	}
+	if k == acceptedFrame && version == 3 {
+		if len(c.InspectionPrefix) == 0 {
+			return errors.New("missing inspection prefix")
+		}
+		if e = writeFrame(conn, inspectionFrame, c.InspectionPrefix); e != nil {
+			return e
+		}
+		k, p, e = readFrame(conn)
+		if e != nil {
+			return e
+		}
 	}
 	if k != readyFrame || string(p) != "ok" {
 		return errors.New("tunnel authorization or target rejected")
@@ -113,6 +129,9 @@ func (c Client) dialMux(ctx context.Context, transport, endpoint, serverName, to
 	defer cancel()
 	// A structured key prevents credentials or endpoint boundaries from colliding.
 	raw, _ := json.Marshal([]string{transport, endpoint, serverName, token})
+	if c.PreferIPv6 {
+		raw = append(raw, byte(1))
+	}
 	key := string(raw)
 	entry, e := c.muxCarrier(ctx, timeout, key, transport, endpoint, serverName, token)
 	if e != nil {
@@ -197,6 +216,8 @@ func (c Client) connectMux(ctx context.Context, key string, entry *muxEntry, tra
 	plain := c
 	plain.useMux = false
 	plain.reverse = ""
+	plain.InspectionEnabled = false
+	plain.InspectionPrefix = nil
 	conn, err := plain.dial(ctx, transport, endpoint, serverName, token, "mux", "", nil, nil)
 	var session *yamux.Session
 	if err == nil {
@@ -257,7 +278,7 @@ func (s *Server) serveMultiplex(conn net.Conn, req openRequest) {
 	if len(req.Chain) > 0 || len(req.Visited) > 0 || req.Reverse != "" {
 		return
 	}
-	if req.Network == "reverse" && (!validNodeID(req.Target) || !s.ReverseAllowed[req.Target]) {
+	if req.Network == "reverse" && (!validNodeID(req.Target) || !s.Managed && !s.ReverseAllowed[req.Target]) {
 		return
 	}
 	if req.Network == "mux" && req.Target != "" {
@@ -333,7 +354,11 @@ func (s *Server) openReverse(req openRequest) (*Session, error) {
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 	c := s.Client
 	c.reverse = ""
-	if e = c.open(conn, req.Token, req.Network, req.Target, nil, nil); e != nil {
+	c.RuleID = req.RuleID
+	c.InspectionEnabled = req.Inspect
+	c.InspectionPrefix = req.inspectionPrefix
+	token := req.Token
+	if e = c.open(conn, token, req.Network, req.Target, nil, nil); e != nil {
 		conn.Close()
 		return nil, e
 	}
@@ -351,19 +376,28 @@ func (s *Server) RunReverse(ctx context.Context, c Client, transport, endpoint, 
 	s.ctx = ctx
 	s.slots = make(chan struct{}, 256)
 	s.mu.Unlock()
+	backoff := time.Second
 	for ctx.Err() == nil {
 		conn, e := c.Dial(ctx, transport, endpoint, serverName, s.Token, "reverse", identity)
 		if e == nil {
 			session, err := yamux.Server(conn.Conn, muxConfig())
 			if err == nil {
 				stop := context.AfterFunc(ctx, func() { session.Close() })
+				if s.OnReverseState != nil {
+					s.OnReverseState(true, nil)
+				}
+				backoff = time.Second
 				s.serveStreams(session)
 				stop()
 				session.Close()
 			}
 			conn.Close()
 		}
-		timer := time.NewTimer(time.Second)
+		if s.OnReverseState != nil {
+			s.OnReverseState(false, e)
+		}
+		timer := time.NewTimer(backoff + time.Duration(time.Now().UnixNano()%int64(backoff/4+1)))
+		backoff = min(30*time.Second, backoff*2)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

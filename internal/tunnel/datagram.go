@@ -9,6 +9,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/netx"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
 	"io"
 	"net"
 	"os"
@@ -27,6 +29,14 @@ const maxDatagramMemory int64 = 8 << 20
 const fragmentTTL = time.Second
 
 var ErrDatagramQueueFull = errors.New("UDP datagram queue full")
+
+type datagramLifetimeKey struct{}
+
+// A candidate dial timeout ends after opening a flow; the business flow lives
+// until its owning UDP session is cancelled.
+func WithDatagramLifetime(dial, lifetime context.Context) context.Context {
+	return context.WithValue(dial, datagramLifetimeKey{}, lifetime)
+}
 
 func datagramConfig() *quic.Config {
 	return &quic.Config{EnableDatagrams: true, Allow0RTT: false, HandshakeIdleTimeout: 5 * time.Second, MaxIdleTimeout: 2 * time.Minute, MaxIncomingStreams: 1024, MaxIncomingUniStreams: -1, InitialStreamReceiveWindow: 8192, MaxStreamReceiveWindow: 8192, MaxConnectionReceiveWindow: 1 << 20}
@@ -508,6 +518,9 @@ func (p *DatagramPool) Stats() DatagramStatistics {
 }
 
 func (p *DatagramPool) Dial(ctx context.Context, base *tls.Config, endpoint, serverName, token, target string) (*DatagramSession, error) {
+	return p.DialPolicy(ctx, base, endpoint, serverName, token, target, false)
+}
+func (p *DatagramPool) DialPolicy(ctx context.Context, base *tls.Config, endpoint, serverName, token, target string, prefer bool) (*DatagramSession, error) {
 	if len(token) < 16 || len(token) > 128 {
 		return nil, errors.New("datagram token must contain 16-128 characters")
 	}
@@ -531,6 +544,9 @@ func (p *DatagramPool) Dial(ctx context.Context, base *tls.Config, endpoint, ser
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	k := endpoint + "\x00" + tc.ServerName + "\x00" + token
+	if prefer {
+		k += "\x00ipv6"
+	}
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -560,7 +576,22 @@ func (p *DatagramPool) Dial(ctx context.Context, base *tls.Config, endpoint, ser
 	}
 	p.mu.Unlock()
 	if owner {
-		q, e := quic.DialAddr(dialCtx, endpoint, tc, datagramConfig())
+		var q *quic.Conn
+		var e error
+		if !prefer {
+			q, e = quic.DialAddr(dialCtx, endpoint, tc, datagramConfig())
+		} else {
+			addresses, err := netx.Addresses(dialCtx, endpoint, true)
+			e = err
+			for _, a := range addresses {
+				attempt, stop := context.WithTimeout(dialCtx, 2*time.Second)
+				q, e = quic.DialAddr(attempt, a, tc, datagramConfig())
+				stop()
+				if e == nil {
+					break
+				}
+			}
+		}
 		if e == nil && !q.ConnectionState().SupportsDatagrams.Remote {
 			q.CloseWithError(1, "DATAGRAM required")
 			e = errors.New("exit did not negotiate DATAGRAM")
@@ -603,7 +634,11 @@ func (p *DatagramPool) Dial(ctx context.Context, base *tls.Config, endpoint, ser
 	if flow == 0 {
 		flow = 1
 	}
-	s, e := entry.link.add(ctx, flow, stream)
+	lifetime := ctx
+	if parent, ok := ctx.Value(datagramLifetimeKey{}).(context.Context); ok {
+		lifetime = parent
+	}
+	s, e := entry.link.add(lifetime, flow, stream)
 	if e != nil {
 		stream.CancelRead(1)
 		stream.CancelWrite(1)
@@ -632,7 +667,7 @@ func (p *DatagramPool) Dial(ctx context.Context, base *tls.Config, endpoint, ser
 	go func() { var b [1]byte; stream.Read(b[:]); s.Close() }()
 	go func() {
 		select {
-		case <-ctx.Done():
+		case <-lifetime.Done():
 			s.Close()
 		case <-s.ctx.Done():
 		}
@@ -651,17 +686,25 @@ func (p *DatagramPool) Close() {
 	}
 }
 
+type datagramAuthorization struct {
+	allow   func(string, string) bool
+	blocked []string
+}
+
 type DatagramServer struct {
-	TLS         *tls.Config
-	Token       string
-	IdleTimeout time.Duration
-	mu          sync.Mutex
-	listener    *quic.Listener
-	conns       map[*quic.Conn]struct{}
-	closed      bool
-	slots       chan struct{}
-	targets     chan struct{}
-	flows       chan struct{}
+	authorization atomic.Pointer[datagramAuthorization]
+	tlsMaterial   atomic.Pointer[tls.Config]
+	Authorize     func(token, target string) bool
+	TLS           *tls.Config
+	Token         string
+	IdleTimeout   time.Duration
+	mu            sync.Mutex
+	listener      *quic.Listener
+	conns         map[*quic.Conn]struct{}
+	closed        bool
+	slots         chan struct{}
+	targets       chan struct{}
+	flows         chan struct{}
 }
 
 // Listen binds synchronously so a combined TCP/UDP exit can fail startup before
@@ -678,7 +721,12 @@ func (s *DatagramServer) Listen(address string) error {
 	tc := s.TLS.Clone()
 	tc.MinVersion = tls.VersionTLS13
 	tc.NextProtos = []string{datagramALPN}
-	l, e := quic.ListenAddr(address, tc, datagramConfig())
+	s.tlsMaterial.Store(tc)
+	listenerTLS := tc.Clone()
+	listenerTLS.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		return s.tlsMaterial.Load(), nil
+	}
+	l, e := quic.ListenAddr(address, listenerTLS, datagramConfig())
 	if e != nil {
 		return e
 	}
@@ -688,6 +736,15 @@ func (s *DatagramServer) Listen(address string) error {
 	s.targets = make(chan struct{}, 32)
 	s.flows = make(chan struct{}, 1024)
 	return nil
+}
+
+// New QUIC handshakes use the committed certificate/trust generation without
+// rebinding the physical UDP socket. Authorization updates revoke old sessions.
+func (s *DatagramServer) UpdateTLS(config *tls.Config) {
+	tc := config.Clone()
+	tc.MinVersion = tls.VersionTLS13
+	tc.NextProtos = []string{datagramALPN}
+	s.tlsMaterial.Store(tc)
 }
 
 func (s *DatagramServer) Serve(address string) error {
@@ -787,10 +844,11 @@ func (s *DatagramServer) open(l *datagramLink, st *quic.Stream) {
 	if e != nil || kind != openFrame || len(p) > 4096 {
 		return
 	}
+	auth := s.authorization.Load()
 	var req datagramOpen
 	dec := json.NewDecoder(bytes.NewReader(p))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&req) != nil || dec.Decode(new(any)) != io.EOF || req.Version != 1 || req.Flow == 0 || subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) != 1 || !time.Now().Before(req.ExpiresAt) || req.ExpiresAt.After(time.Now().Add(time.Hour+time.Second)) {
+	if dec.Decode(&req) != nil || dec.Decode(new(any)) != io.EOF || req.Version != 1 || req.Flow == 0 || (auth == nil && s.Authorize == nil && subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.Token)) != 1 || auth == nil && s.Authorize != nil && !s.Authorize(req.Token, req.Target) || auth != nil && !auth.allow(req.Token, req.Target)) || !time.Now().Before(req.ExpiresAt) || req.ExpiresAt.After(time.Now().Add(time.Hour+time.Second)) {
 		return
 	}
 	host, port, e := net.SplitHostPort(req.Target)
@@ -841,6 +899,9 @@ func (s *DatagramServer) open(l *datagramLink, st *quic.Stream) {
 				}
 				return
 			}
+			if auth != nil && policy.BlockedDatagram(buf[:n], auth.blocked) {
+				return
+			}
 			target.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			if _, e = target.Write(buf[:n]); e != nil {
 				return
@@ -862,5 +923,18 @@ func (s *DatagramServer) open(l *datagramLink, st *quic.Stream) {
 		if _, e = flow.Write(buf[:n]); e != nil && !errors.Is(e, ErrDatagramQueueFull) {
 			return
 		}
+	}
+}
+
+func (s *DatagramServer) UpdateAuthorization(allow func(string, string) bool, blocked []string) {
+	s.authorization.Store(&datagramAuthorization{allow: allow, blocked: append([]string{}, blocked...)})
+	s.mu.Lock()
+	conns := make([]*quic.Conn, 0, len(s.conns))
+	for q := range s.conns {
+		conns = append(conns, q)
+	}
+	s.mu.Unlock()
+	for _, q := range conns {
+		q.CloseWithError(0, "authorization changed")
 	}
 }

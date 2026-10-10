@@ -23,7 +23,36 @@ func sameForwardingRule(a, b contract.Rule) bool {
 	a.Lease, b.Lease = nil, nil
 	a.StandbyLease, b.StandbyLease = nil, nil
 	a.LeasePipeline, b.LeasePipeline = false, false
+	if !sameExistingCandidates(a.RouteCandidates, b.RouteCandidates) {
+		return false
+	}
+	a.RouteCandidates, b.RouteCandidates = nil, nil
 	return reflect.DeepEqual(a, b)
+}
+
+// Adding candidates and changing weights affect new connections. Removing an
+// authorized route or changing its credentials/policy revokes existing flows.
+func sameExistingCandidates(a, b []contract.RouteCandidate) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return reflect.DeepEqual(a, b)
+	}
+	for _, old := range a {
+		found := false
+		for _, next := range b {
+			if old.ID == next.ID {
+				old.Weight, next.Weight = 0, 0
+				if !reflect.DeepEqual(old, next) {
+					return false
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 func transientMeterError(err error) bool {

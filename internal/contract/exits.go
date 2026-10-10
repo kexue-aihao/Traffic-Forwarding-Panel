@@ -9,17 +9,22 @@ import (
 )
 
 type Exit struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	GroupID   string   `json:"group_id"`
-	NodeID    string   `json:"node_id"`
-	Transport string   `json:"transport"`
-	Tunnel    Tunnel   `json:"tunnel"`
-	UDP       *UDPExit `json:"udp,omitempty"`
-	Weight    int      `json:"weight"`
-	Enabled   bool     `json:"enabled"`
-	Version   int64    `json:"version"`
-	Online    bool     `json:"online"`
+	ServiceReady *bool    `json:"service_ready,omitempty"`
+	Managed      bool     `json:"managed,omitempty"`
+	ReverseHub   bool     `json:"reverse_hub,omitempty"`
+	LocalProfile string   `json:"local_profile,omitempty"`
+	Listen       string   `json:"listen,omitempty"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	GroupID      string   `json:"group_id"`
+	NodeID       string   `json:"node_id"`
+	Transport    string   `json:"transport"`
+	Tunnel       Tunnel   `json:"tunnel"`
+	UDP          *UDPExit `json:"udp,omitempty"`
+	Weight       int      `json:"weight"`
+	Enabled      bool     `json:"enabled"`
+	Version      int64    `json:"version"`
+	Online       bool     `json:"online"`
 }
 
 // UDPExit enables an independent authenticated QUIC DATAGRAM listener.
@@ -48,7 +53,15 @@ func ExitListeningPorts(e Exit) (map[string]int, error) {
 	if e.Tunnel.Reverse != "" {
 		return map[string]int{}, nil
 	}
-	port, err := exitEndpointPort(e.Transport, e.Tunnel.Endpoint)
+	address := e.Tunnel.Endpoint
+	if e.Managed {
+		address = e.Listen
+	}
+	transport := e.Transport
+	if e.Managed {
+		transport = "tls"
+	}
+	port, err := exitEndpointPort(transport, address)
 	if err != nil {
 		return nil, err
 	}

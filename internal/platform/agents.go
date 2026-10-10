@@ -302,6 +302,8 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 			node.LastSeen = &at
 		}
 		if u.Role != "admin" {
+			node.RuleStatuses = nil
+			node.Services = nil
 			visible := []string{}
 			for _, id := range node.GroupIDs {
 				if authorized[id] {
@@ -346,6 +348,11 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "config unavailable")
 		return
 	}
+	policyGroups, e := loadPolicyGroups(r.Context(), tx)
+	if e != nil {
+		fail(w, 500, "config unavailable")
+		return
+	}
 	rows, e := tx.QueryContext(r.Context(), s.q(`SELECT r.payload,g.payload,u.disabled,u.role,CASE WHEN EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=u.id))) THEN 1 ELSE 0 END FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
 	if e != nil {
 		fail(w, 500, "config unavailable")
@@ -366,6 +373,12 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			fail(w, 500, "config unavailable")
 			return
 		}
+		if entryPolicyDenied(g, rule) {
+			cfg.BlockedRules = append(cfg.BlockedRules, contract.BlockedRule{RuleID: rule.ID, Reason: "entry_group_policy_denied"})
+		}
+		if rule.ExitUnavailable {
+			cfg.BlockedRules = append(cfg.BlockedRules, contract.BlockedRule{RuleID: rule.ID, Reason: "exit_unavailable_or_waiting_for_peer"})
+		}
 		if rule.ExitUnavailable || disabled != 0 || !rule.Enabled || rule.Lease == nil || !rule.Lease.ExpiresAt.After(time.Now()) || entryPolicyDenied(g, rule) || (role != "admin" && authorized == 0) {
 			continue
 		}
@@ -376,6 +389,10 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		rule.BlockedProtocols = applicationBlocks(rule.BlockedProtocols, g.BlockedProtocols)
+		if err := compileGroupPolicy(&rule, role, policyGroups, nodeInfo.Capabilities); err != nil {
+			cfg.BlockedRules = append(cfg.BlockedRules, contract.BlockedRule{RuleID: rule.ID, Reason: err.Error()})
+			continue
+		}
 		if rule.Network == "udp" && contains(nodeInfo.Capabilities, "udp-credit-v1") {
 			rule.UDP = &contract.UDPOptions{CreditWindows: true, MaxSessions: 1024}
 		} else {
@@ -403,6 +420,23 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows.Close()
+	top, e := s.managedTopology(r.Context(), tx)
+	if e != nil {
+		fail(w, 500, "service configuration unavailable")
+		return
+	}
+	for i := range cfg.Rules {
+		if e = compileRouteCandidates(&cfg.Rules[i], top, nodeInfo.Capabilities); e != nil {
+			fail(w, 500, "route configuration unavailable")
+			return
+		}
+	}
+	if contains(nodeInfo.Capabilities, "managed-services-v1") {
+		if e = s.compileManagedServices(r.Context(), tx, &cfg, top); e != nil {
+			fail(w, 500, "service configuration unavailable")
+			return
+		}
+	}
 	if tx.Commit() != nil {
 		fail(w, 500, "config unavailable")
 		return
@@ -447,6 +481,35 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 				return errConflict
 			}
 		}
+		if len(in.Services) > 2048 {
+			return errors.New("too many service reports")
+		}
+		var statusRaw string
+		if err := tx.QueryRowContext(r.Context(), s.q("SELECT payload FROM cp_nodes WHERE id=?"), node).Scan(&statusRaw); err != nil {
+			return err
+		}
+		var statusNode contract.Node
+		if err := json.Unmarshal([]byte(statusRaw), &statusNode); err != nil {
+			return err
+		}
+		statusNode.Services = in.Services
+		if len(in.RuleStatuses) > 4096 {
+			return errors.New("too many rule status reports")
+		}
+		for _, v := range in.RuleStatuses {
+			if len(v.RuleID) > 128 || len(v.PolicyHash) > 64 || len(v.CandidateID) > 512 || len(v.AddressFamily) > 16 || len(v.Carrier) > 32 {
+				return errors.New("invalid rule status")
+			}
+		}
+		statusNode.RuleStatuses = in.RuleStatuses
+		for _, v := range in.Services {
+			if len(v.ID) > 128 || len(v.Error) > 256 {
+				return errors.New("invalid service status")
+			}
+		}
+		if _, err := tx.ExecContext(r.Context(), s.q("UPDATE cp_nodes SET payload=? WHERE id=?"), strJSON(statusNode), node); err != nil {
+			return err
+		}
 		if in.Capabilities != nil {
 			var raw string
 			if err := tx.QueryRowContext(r.Context(), s.q("SELECT payload FROM cp_nodes WHERE id=?"), node).Scan(&raw); err != nil {
@@ -463,7 +526,10 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 				}
 				// Capability changes can add/remove eligible rules; publish a new
 				// configuration revision so the previous ACK cannot cover them.
-				if _, err := tx.ExecContext(r.Context(), s.q("UPDATE cp_nodes SET payload=?,desired_version=desired_version+1 WHERE id=?"), strJSON(info), node); err != nil {
+				if _, err := tx.ExecContext(r.Context(), s.q("UPDATE cp_nodes SET payload=? WHERE id=?"), strJSON(info), node); err != nil {
+					return err
+				}
+				if err := s.publishGroupDependencies(r.Context(), tx); err != nil {
 					return err
 				}
 			}

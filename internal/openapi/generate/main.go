@@ -174,8 +174,8 @@ func main() {
 	model("LeasePrefetched", schema{"lease_id": str}, "lease_id")
 	model("UsageAuditPage", schema{"items": array(ref("UsageRecord")), "total": num}, "items", "total")
 	model("UsageAccepted", schema{"accepted": ids}, "accepted")
-	model("DiagnosticCheck", schema{"name": str, "ok": flag, "detail": str}, "name", "ok", "detail")
-	model("Diagnostic", schema{"rule_id": str, "node_id": str, "desired_version": num, "applied_version": num, "generated_at": date, "checks": array(ref("DiagnosticCheck"))}, "rule_id", "node_id", "desired_version", "applied_version", "generated_at", "checks")
+	model("RuleDiagnosticCheck", schema{"name": str, "ok": flag, "detail": str}, "name", "ok", "detail")
+	model("RuleDiagnostic", schema{"rule_id": str, "node_id": str, "desired_version": num, "applied_version": num, "generated_at": date, "checks": array(ref("RuleDiagnosticCheck")), "effective_policy": nullable(ref("EffectivePolicy")), "runtime": nullable(ref("RuleRuntimeStatus"))}, "rule_id", "node_id", "desired_version", "applied_version", "generated_at", "checks")
 	groupFields := schemas["Group"].(schema)["properties"].(schema)
 	groupFields["type"] = schema{"type": "string", "enum": []string{"", "monitor", "entry", "exit", "chain_exit"}, "description": "Device group role; immutable after creation. Empty preserves legacy groups."}
 	groupFields["direct_policy"] = schema{"type": "string", "enum": []string{"", "forbid", "allow", "force"}, "description": "Entry-only direct forwarding policy."}
@@ -185,6 +185,8 @@ func main() {
 	// Every input setting is optional; responses still include numeric zeroes.
 	delete(advancedSchema, "required")
 	advancedFields := advancedSchema["properties"].(schema)
+	advancedFields["policy_version"] = schema{"type": "integer", "enum": []int{0, 2}, "description": "Explicit activation: 0 retains legacy behavior; 2 executes the complete advanced policy."}
+	advancedFields["fail_timeout_sec"] = schema{"type": "integer", "minimum": 0, "maximum": 86400, "description": "Input alias of fail_timout_sec; conflicting aliases are rejected."}
 	advancedFields["blocked_protocol"].(schema)["description"] = "Application protocol blacklist: http, socks. Responses use reference names without the legacy app: prefix."
 	advancedFields["tls_inbound_policy"] = schema{"type": "integer", "enum": []int{0, 1, 2}, "description": "0: allow ordinary rules; 1: TLS inbound rules only; 2: TLS inbound rules and administrator-owned independent ports only."}
 	advancedFields["max_fail"] = schema{"type": "integer", "minimum": 0, "maximum": 1000, "description": "Consecutive failures tolerated before failover for entry-to-exit or direct forwarding. New editor template uses 3; explicit zero is preserved."}
@@ -193,6 +195,8 @@ func main() {
 	groupFields["blocked_protocols"].(schema)["description"] = "Application traffic blocks: app:http, app:socks. Independent of forwarding methods. Legacy network:/transport: entries and bare carrier values are accepted on write and split into disabled_networks/disabled_transports; bare http historically means the HTTP tunnel."
 	groupFields["disabled_networks"].(schema)["description"] = "Disabled forwarding networks: tcp, udp. Empty means all networks are allowed."
 	groupFields["disabled_transports"].(schema)["description"] = "Disabled forwarding methods: direct, direct-tls, secure-direct, tls, ws, wss, http. Empty means all methods are allowed. Applies to every tunnel hop, not application traffic detection."
+	model("GroupPolicyPreviewRequest", schema{"advanced": ref("GroupAdvanced")}, "advanced")
+	model("GroupPolicyPreview", schema{"policy_version": schema{"type": "integer"}, "rules": array(schema{"type": "object"}), "notes": array(str)}, "policy_version", "rules", "notes")
 	requestFrom("GroupCreate", "Group", "name type? direct_policy? chain_group_ids? advanced? identity_group_ids? blocked_protocols? disabled_networks? disabled_transports? multiplier? port_min port_max max_rules?")
 	requestFrom("GroupUpdate", "Group", "name type? direct_policy? chain_group_ids? advanced? identity_group_ids? blocked_protocols? disabled_networks? disabled_transports? multiplier? port_min port_max max_rules? version")
 	requestFrom("RuleCreate", "Rule", "user_id? name node_id group_id network transport listen target enabled blocked_protocols? tunnel? backends? shared_tls? proxy_protocol? exit_group_id? exit_id?")
@@ -344,6 +348,7 @@ func main() {
 		{"DELETE", "/identity-groups/{id}", "", "", "204", "admin", "Delete an unreferenced identity group", false},
 		{"GET", "/groups", "", "GroupPage", "200", "user", "Device groups authorized through the current user's identity group", true},
 		{"POST", "/groups", "GroupCreate", "Group", "201", "admin", "Create device group", false},
+		{"POST", "/groups/{id}/advanced-preview", "GroupPolicyPreviewRequest", "GroupPolicyPreview", "200", "admin", "Preview normalized policy and affected rules without saving", false},
 		{"PUT", "/groups/{id}", "GroupUpdate", "Group", "200", "admin", "Update group with version check", false},
 		{"DELETE", "/groups/{id}", "", "", "204", "admin", "Delete an unused device group at the expected version; detach devices and grants, remove idle exits; 409 while rules or other groups reference it or removal awaits Agent ACK; 404 if missing. Devices, leases and usage history are retained", false},
 		{"GET", "/groups/{id}/join-key", "", "GroupJoinKey", "200", "admin", "Fixed per-group access key behind the device onboarding command; readable again at any time", false},
@@ -367,7 +372,7 @@ func main() {
 		{"POST", "/rules/category", "RuleCategory", "RuleCategoryResult", "200", "user", "Classify up to 500 rules at once; the category is control-plane only and never reaches the Agent", false},
 		{"PUT", "/rules/{id}", "RuleUpdate", "Rule", "200", "user", "Update rule with optimistic version; placement immutable", false},
 		{"DELETE", "/rules/{id}", "", "", "204", "user", "Delete at expected version; port held until Agent ACK", false},
-		{"GET", "/rules/{id}/diagnose", "", "Diagnostic", "200", "user", "Control-plane status checks; does not probe network targets", false},
+		{"GET", "/rules/{id}/diagnose", "", "RuleDiagnostic", "200", "user", "Control-plane and advanced policy runtime status; does not probe network targets", false},
 		{"GET", "/probes", "", "ProbeList", "200", "user", "Authorized probes; ordinary users never receive public_ips", false},
 		{"GET", "/probes/events", "", "ProbeList", "200", "user", "SSE event probes; recheck identity/access every 5 seconds", false},
 		{"GET", "/probes/{node_id}/history", "", "ProbeHistoryPointPage", "200", "user", "UTC range [from,to), minute 7 days/hour 180 days, absent metrics null", false},

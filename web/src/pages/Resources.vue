@@ -243,12 +243,15 @@ async function loadUserAccount() {
 }
 async function adjustUserBalance() {
   if (!accountUser.value || accountBusy.value) return;
-  const match = /^([+-]?)(\d+)(?:\.(\d{1,2}))?$/.exec(balanceDraft.value.trim());
+  const match = /^([+-]?)(\d+)(?:\.(\d{1,2}))?$/.exec(
+    balanceDraft.value.trim(),
+  );
   if (!match) {
     accountError.value = "请输入最多两位小数的正数或负数金额。";
     return;
   }
-  const cents = BigInt(match[2]) * 100n + BigInt((match[3] || "").padEnd(2, "0") || "0");
+  const cents =
+    BigInt(match[2]) * 100n + BigInt((match[3] || "").padEnd(2, "0") || "0");
   const delta = match[1] === "-" ? -cents : cents;
   if (delta === 0n) {
     accountError.value = "调整金额不能为 0。";
@@ -312,7 +315,10 @@ async function saveUserRuleLimit() {
   if (!accountUser.value || accountBusy.value) return;
   const raw = String(ruleLimitDraft.value).trim();
   const maximum = raw === "" ? null : Number(raw);
-  if (maximum !== null && (!Number.isInteger(maximum) || maximum < 0 || maximum > 100000)) {
+  if (
+    maximum !== null &&
+    (!Number.isInteger(maximum) || maximum < 0 || maximum > 100000)
+  ) {
     accountError.value = "规则上限须为 0–100000 的整数，0 表示不限。";
     return;
   }
@@ -325,7 +331,9 @@ async function saveUserRuleLimit() {
       { max_rules: maximum, reason: ruleLimitReason.value.trim() },
     );
     ruleLimitReason.value = "";
-    notice(maximum === null ? "规则上限已恢复为跟随套餐。" : "账号规则上限已更新。");
+    notice(
+      maximum === null ? "规则上限已恢复为跟随套餐。" : "账号规则上限已更新。",
+    );
   } catch (e) {
     accountError.value = errorText(e);
   } finally {
@@ -386,7 +394,9 @@ async function issueUserToken() {
       "POST",
       {
         name: issueTokenName.value,
-        ...(issueGroups.value.length ? { group_ids: [...issueGroups.value] } : {}),
+        ...(issueGroups.value.length
+          ? { group_ids: [...issueGroups.value] }
+          : {}),
         ...(issuePermanent.value
           ? { permanent: true }
           : {
@@ -455,6 +465,19 @@ onUnmounted(() => clearTimeout(highlightTimer));
 
 const diagnosis = ref<{
   checks: { name: string; ok: boolean; detail: string }[];
+  desired_version?: number;
+  applied_version?: number;
+  effective_policy?: {
+    hash: string;
+    inbound_layers: { group_id: string }[];
+  } | null;
+  runtime?: {
+    policy_hash?: string;
+    candidate_id?: string;
+    address_family?: string;
+    carrier?: string;
+    rejected?: number;
+  };
 } | null>(null);
 async function diagnose(row: Row) {
   error.value = "";
@@ -611,9 +634,7 @@ const entryOptions = computed(() => {
   for (const row of rows) {
     const group = names.get(row.groupID) || row.groupID;
     row.label =
-      (perGroup.get(row.groupID) || 0) > 1
-        ? `${group} · ${row.label}`
-        : group;
+      (perGroup.get(row.groupID) || 0) > 1 ? `${group} · ${row.label}` : group;
   }
   // 编辑一条入口已经不在组里的旧规则时，列表里没有对应选项，下拉会是空的。
   // 补一条只读的，让运营方看到这条规则实际落在哪里。
@@ -900,21 +921,21 @@ function payload(): Row {
                 ...(f.token ? { token: f.token } : {}),
               },
             }
-        : {
-            tunnel: {
-              endpoint: f.endpoint,
-              server_name: f.server_name,
-              mux: f.mux,
-              reverse: f.reverse,
-              ...(f.token ? { token: f.token } : {}),
-              chain: f.chain.map((h) => ({
-                transport: h.transport,
-                endpoint: h.endpoint,
-                server_name: h.server_name,
-                ...(h.token ? { token: h.token } : {}),
-              })),
-            },
-          }),
+          : {
+              tunnel: {
+                endpoint: f.endpoint,
+                server_name: f.server_name,
+                mux: f.mux,
+                reverse: f.reverse,
+                ...(f.token ? { token: f.token } : {}),
+                chain: f.chain.map((h) => ({
+                  transport: h.transport,
+                  endpoint: h.endpoint,
+                  server_name: h.server_name,
+                  ...(h.token ? { token: h.token } : {}),
+                })),
+              },
+            }),
   };
 }
 async function save() {
@@ -926,8 +947,8 @@ async function save() {
     if (selected.value) data.version = selected.value.version;
     const path =
       resource === "users" && selected.value
-          ? `/users/${encodeURIComponent(String(selected.value.id))}/identity-group`
-          : `/${resource}${selected.value ? "/" + encodeURIComponent(String(selected.value.id)) : ""}`;
+        ? `/users/${encodeURIComponent(String(selected.value.id))}/identity-group`
+        : `/${resource}${selected.value ? "/" + encodeURIComponent(String(selected.value.id)) : ""}`;
     const result = await api<{
       id?: string;
       token?: string;
@@ -1112,9 +1133,7 @@ async function applyCategory(category: string) {
       ids: checkedRules.value,
       category,
     });
-    notice(
-      `已把 ${result.updated} 条规则归到「${category || "未分类"}」。`,
-    );
+    notice(`已把 ${result.updated} 条规则归到「${category || "未分类"}」。`);
     categoryDraft.value = "";
     await load();
   } catch (e) {
@@ -1203,32 +1222,40 @@ function value(v: unknown, column: string) {
 }
 const columns = computed(() =>
   resource === "rules"
-    ? ["name", "category", "transport", "listen", "target", "enabled", "version"]
+    ? [
+        "name",
+        "category",
+        "transport",
+        "listen",
+        "target",
+        "enabled",
+        "version",
+      ]
     : resource === "groups"
-        ? [
-            "name",
-            "type",
-            "blocked_protocols",
-            "multiplier",
-            "port_min",
-            "port_max",
-          ]
-        : resource === "identity-groups"
-          ? ["name", "id", "user_count", "device_group_count"]
-          : resource === "users"
-            ? [
-                "username",
-                "role",
-                "identity_group_name",
-                "identity_group_id",
-                "disabled",
-              ]
-            : // 审计的列过去是从首行的对象键里取的，而 Go 的 JSON 编码会把 map 的键
-              // 按字典序排 —— 于是表头冒出 action / id / user_id 这些原始英文键，
-              // 顺序也随字段增删而变。这里写死，和时间一样只是展示口径。
-              resource === "audit"
-              ? ["created_at", "action", "target", "user_id"]
-              : Object.keys(rows.value[0] || {}).slice(0, 6),
+      ? [
+          "name",
+          "type",
+          "blocked_protocols",
+          "multiplier",
+          "port_min",
+          "port_max",
+        ]
+      : resource === "identity-groups"
+        ? ["name", "id", "user_count", "device_group_count"]
+        : resource === "users"
+          ? [
+              "username",
+              "role",
+              "identity_group_name",
+              "identity_group_id",
+              "disabled",
+            ]
+          : // 审计的列过去是从首行的对象键里取的，而 Go 的 JSON 编码会把 map 的键
+            // 按字典序排 —— 于是表头冒出 action / id / user_id 这些原始英文键，
+            // 顺序也随字段增删而变。这里写死，和时间一样只是展示口径。
+            resource === "audit"
+            ? ["created_at", "action", "target", "user_id"]
+            : Object.keys(rows.value[0] || {}).slice(0, 6),
 );
 const labels: Record<string, string> = {
   name: "名称",
@@ -1272,12 +1299,12 @@ const labels: Record<string, string> = {
         <p class="muted">
           {{
             resource === "identity-groups"
-                ? "新建身份用户组后，在用户管理中分配。同组用户共享已授权的设备组。"
-                : resource === "users"
-                  ? "通过身份用户组 ID 分配设备组访问权限，角色决定后台管理权限。"
-                  : resource === "groups"
-                    ? "将设备组授权给身份用户组，该身份组内的用户即可访问。"
-                    : "配置与权限由服务端统一校验。"
+              ? "新建身份用户组后，在用户管理中分配。同组用户共享已授权的设备组。"
+              : resource === "users"
+                ? "通过身份用户组 ID 分配设备组访问权限，角色决定后台管理权限。"
+                : resource === "groups"
+                  ? "将设备组授权给身份用户组，该身份组内的用户即可访问。"
+                  : "配置与权限由服务端统一校验。"
           }}
           <span v-if="resource === 'audit'"
             >时间使用{{ displayTimeZoneLabel }}。</span
@@ -1412,7 +1439,11 @@ const labels: Record<string, string> = {
               >
                 <div class="toolbar">
                   <button
-                    v-if="resource === 'groups' && row.type !== 'chain_exit' && (canManage || row.owner_id === state.user?.id)"
+                    v-if="
+                      resource === 'groups' &&
+                      row.type !== 'chain_exit' &&
+                      (canManage || row.owner_id === state.user?.id)
+                    "
                     @click="onboardGroup(row)"
                   >
                     接入设备
@@ -1439,12 +1470,18 @@ const labels: Record<string, string> = {
                     网络诊断
                   </button>
                   <button
-                    v-if="resource !== 'users' && (resource === 'rules' || canManage)"
+                    v-if="
+                      resource !== 'users' &&
+                      (resource === 'rules' || canManage)
+                    "
                     @click="open(row)"
                   >
                     编辑</button
                   ><button
-                    v-if="resource === 'rules' || (resource === 'groups' && canManage)"
+                    v-if="
+                      resource === 'rules' ||
+                      (resource === 'groups' && canManage)
+                    "
                     class="danger"
                     @click="
                       deleting = row;
@@ -1520,6 +1557,36 @@ const labels: Record<string, string> = {
           check.detail
         }}
       </p>
+      <template v-if="diagnosis.effective_policy">
+        <p>
+          高级策略：{{
+            diagnosis.checks.find((check) => check.name === "configuration_ack")
+              ?.ok
+              ? "节点配置已应用"
+              : "等待节点应用"
+          }}
+          ·
+          {{
+            diagnosis.runtime?.policy_hash === diagnosis.effective_policy.hash
+              ? "已观测到本策略的业务连接"
+              : "尚无本策略的业务连接记录"
+          }}
+        </p>
+        <p class="muted">
+          策略来源：{{
+            diagnosis.effective_policy.inbound_layers
+              .map((layer) => layer.group_id)
+              .join("、")
+          }}
+        </p>
+        <p v-if="diagnosis.runtime?.carrier">
+          最近载波：{{ diagnosis.runtime.carrier }} · 地址族：{{
+            diagnosis.runtime.address_family || "未观测"
+          }}
+          · 候选：{{ diagnosis.runtime.candidate_id || "未观测" }}
+        </p>
+        <p>策略拒绝连接：{{ diagnosis.runtime?.rejected || 0 }}</p>
+      </template>
       <button @click="diagnosis = null">关闭诊断</button>
     </section>
     <section v-if="networkResult" class="card">
@@ -1686,7 +1753,8 @@ const labels: Record<string, string> = {
               v-model="issuePermanent"
               type="checkbox"
             />永久有效（不过期）</label
-          ><fieldset v-if="issueGroupChoices.length">
+          >
+          <fieldset v-if="issueGroupChoices.length">
             <legend>限定设备组（可多选）</legend>
             <label
               v-for="item in issueGroupChoices"
@@ -1738,12 +1806,14 @@ const labels: Record<string, string> = {
       </p>
       <p v-if="userAccount" class="muted">
         余额 {{ accountMoney(userAccount.balance_cents) }} · 规则
-        {{ userAccount.rule_count }} / {{ ruleLimitLabel(userAccount.max_rules) }}
+        {{ userAccount.rule_count }} /
+        {{ ruleLimitLabel(userAccount.max_rules) }}
       </p>
       <p v-if="userAccount" class="small muted">
-        套餐规则上限：{{ ruleLimitLabel(userAccount.plan_max_rules) }}<span
-          v-if="userAccount.rule_limit_override !== null"
-        > · 当前账号使用自定义上限</span>
+        套餐规则上限：{{ ruleLimitLabel(userAccount.plan_max_rules)
+        }}<span v-if="userAccount.rule_limit_override !== null">
+          · 当前账号使用自定义上限</span
+        >
       </p>
       <form @submit.prevent="adjustUserBalance">
         <fieldset>
@@ -1757,12 +1827,11 @@ const labels: Record<string, string> = {
               placeholder="例如 20 或 -5.50"
               required
           /></label>
-          <p class="small muted">正数增加余额，负数扣减余额；扣减不能超过现有余额。</p>
+          <p class="small muted">
+            正数增加余额，负数扣减余额；扣减不能超过现有余额。
+          </p>
           <label
-            >调整原因<input
-              v-model="balanceReason"
-              maxlength="500"
-              required
+            >调整原因<input v-model="balanceReason" maxlength="500" required
           /></label>
           <div class="form-actions">
             <button class="primary" type="submit" :disabled="accountBusy">
@@ -1794,16 +1863,17 @@ const labels: Record<string, string> = {
           /></label>
           <p class="small muted">0 表示不限；留空会恢复为跟随套餐。</p>
           <label
-            >调整原因<input
-              v-model="ruleLimitReason"
-              maxlength="500"
-              required
+            >调整原因<input v-model="ruleLimitReason" maxlength="500" required
           /></label>
           <div class="form-actions">
             <button class="primary" type="submit" :disabled="accountBusy">
               保存规则上限
             </button>
-            <button type="button" :disabled="accountBusy" @click="accountUser = null">
+            <button
+              type="button"
+              :disabled="accountBusy"
+              @click="accountUser = null"
+            >
               关闭
             </button>
           </div>
@@ -1933,7 +2003,9 @@ const labels: Record<string, string> = {
               >
                 <option value="">
                   {{
-                    selected && !selected.exit_group_id && form.transport !== 'direct'
+                    selected &&
+                    !selected.exit_group_id &&
+                    form.transport !== "direct"
                       ? "保留现有隧道"
                       : "直接转发"
                   }}
@@ -1989,8 +2061,8 @@ const labels: Record<string, string> = {
               >目标地址<input
                 v-model="form.target"
                 required
-                placeholder="127.0.0.1:8080" /></label
-            >
+                placeholder="127.0.0.1:8080"
+            /></label>
             <fieldset v-if="form.network === 'tcp'">
               <legend>Proxy Protocol</legend>
               <div class="form-grid">

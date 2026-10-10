@@ -7,6 +7,11 @@ import { api, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
 import { isPhysicalExitGroup } from "../core/groups";
 interface Exit {
+  managed?: boolean;
+  reverse_hub?: boolean;
+  listen?: string;
+  local_profile?: string;
+  service_ready?: boolean;
   id: string;
   name: string;
   group_id: string;
@@ -53,6 +58,15 @@ const groupDialog = ref(false),
   groupError = ref(""),
   groupAccessKey = ref(""),
   groupID = ref("");
+const eligibleGroups = computed(() =>
+  groups.value.filter(
+    (g) =>
+      (form.value?.reverse_hub
+        ? ["entry", ""].includes(String(g.type || ""))
+        : isPhysicalExitGroup(g)) &&
+      (admin.value || g.owner_id === state.user?.id),
+  ),
+);
 async function all(path: string) {
   const out: Choice[] = [];
   for (let p = 1; ; p++) {
@@ -82,11 +96,6 @@ async function open(v?: Exit) {
       all("/groups"),
       all("/nodes"),
     ]);
-    groups.value = groups.value.filter(
-      (g) =>
-        isPhysicalExitGroup(g) &&
-        (admin.value || g.owner_id === state.user?.id),
-    );
     form.value = v
       ? (JSON.parse(JSON.stringify(v)) as Exit)
       : {
@@ -104,6 +113,14 @@ async function open(v?: Exit) {
   } catch (e) {
     error.value = errorText(e);
   }
+}
+function toggleManaged() {
+  if (!form.value || form.value.managed) return;
+  if (form.value.reverse_hub) form.value.group_id = "";
+  form.value.reverse_hub = false;
+  form.value.local_profile = "";
+  form.value.listen = "";
+  if (form.value.transport === "tls_simple") form.value.transport = "tls";
 }
 async function save() {
   if (!form.value) return;
@@ -183,7 +200,7 @@ onMounted(load);
     <section class="card">
       <p class="muted">
         规则可在授权出口组内按权重自动选择在线节点，也可指定出口。计费倍率为入口组
-        × 出口组；在线状态依据节点心跳。
+        × 出口组；托管服务的可用状态依据服务上报。
       </p>
       <p v-if="userExit" class="muted small">
         普通用户的出口只归自己使用，不计入额外费用。先创建出口设备组并执行接入命令，再绑定已上线的出口设备。
@@ -191,8 +208,18 @@ onMounted(load);
       <p v-if="!items.length">暂无授权出口。</p>
       <div v-for="v in items" :key="v.id" class="task-row">
         <span
-          >{{ v.name }} · {{ v.transport }} · 权重 {{ v.weight }} ·
-          {{ v.enabled ? (v.online ? "在线" : "离线") : "已停用"
+          >{{ v.name }}{{ v.reverse_hub ? " · 反向 hub" : "" }} ·
+          {{ v.transport }} · 权重 {{ v.weight }} ·
+          {{
+            v.enabled
+              ? v.managed
+                ? v.service_ready
+                  ? "服务就绪"
+                  : "等待服务就绪"
+                : v.online
+                  ? "在线"
+                  : "离线"
+              : "已停用"
           }}{{ v.udp ? " · 原生 UDP 已配置" : "" }}</span
         ><button @click="open(v)">编辑出口</button>
       </div>
@@ -212,6 +239,42 @@ onMounted(load);
       @close="form = null"
       ><form @submit.prevent="save">
         <p v-if="error" role="alert" class="error">{{ error }}</p>
+        <label v-if="admin" class="check"
+          ><input
+            v-model="form.managed"
+            type="checkbox"
+            @change="toggleManaged"
+          />由普通 Agent 托管服务</label
+        >
+        <template v-if="admin && form.managed">
+          <label class="check"
+            ><input
+              v-model="form.reverse_hub"
+              type="checkbox"
+              @change="
+                form.group_id = '';
+                form.udp = null;
+              "
+            />作为入口组的反向 hub</label
+          >
+          <label
+            >本地证书 profile<input
+              v-model="form.local_profile"
+              required
+              placeholder="reverse-listener"
+          /></label>
+          <label
+            >服务监听地址<input
+              v-model="form.listen"
+              required
+              placeholder="0.0.0.0:9443"
+          /></label>
+          <p class="muted small">
+            节点须加载同名证书 profile，并许可此监听地址。hub
+            配置在入口组，出口组通过高级设置指定
+            reverse_group；保存后查看服务就绪状态。
+          </p>
+        </template>
         <label
           >出口名称<input v-model="form.name" required maxlength="100" /></label
         ><label
@@ -221,7 +284,7 @@ onMounted(load);
             required
           >
             <option value="" disabled>选择设备组</option>
-            <option v-for="g in groups" :key="g.id" :value="g.id">
+            <option v-for="g in eligibleGroups" :key="g.id" :value="g.id">
               {{ g.name }}
             </option>
           </Select></label
@@ -239,7 +302,12 @@ onMounted(load);
         >
         <label
           >出口承载<Select v-model="form.transport" aria-label="出口承载">
-            <option v-for="t in ['tls', 'ws', 'wss', 'http']" :key="t">
+            <option
+              v-for="t in form.managed
+                ? ['tls', 'tls_simple', 'ws', 'http']
+                : ['tls', 'ws', 'wss', 'http']"
+              :key="t"
+            >
               {{ t }}
             </option>
           </Select></label
@@ -253,7 +321,7 @@ onMounted(load);
             :required="!form.id"
             placeholder="编辑时留空保留既有凭据"
         /></label>
-        <label v-if="admin" class="check"
+        <label v-if="admin && !form.reverse_hub" class="check"
           ><input
             type="checkbox"
             :checked="!!form.udp"
@@ -321,9 +389,7 @@ onMounted(load);
       <p v-if="groupError" class="error" role="alert">{{ groupError }}</p>
       <p class="muted small">
         设备组
-        {{
-          groupID
-        }}
+        {{ groupID }}
         已创建。把下面的命令复制到你的出口机器上，注册成功后回到本页绑定出口设备。
       </p>
       <OnboardPanel :access-key="groupAccessKey" />

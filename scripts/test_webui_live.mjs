@@ -63,18 +63,27 @@ async function save(page) {
 }
 async function savePaymentChannels(page) {
   // A previous success toast can still be visible while a new save is running.
-  const saved = page.waitForResponse(r =>
-    r.url() === base + "/api/v1/payment-settings" && r.request().method() === "PUT",
+  const saved = page.waitForResponse(
+    (r) =>
+      r.url() === base + "/api/v1/payment-settings" &&
+      r.request().method() === "PUT",
   );
   await page.getByRole("button", { name: "保存支付通道", exact: true }).click();
   const response = await saved;
   assert.equal(response.status(), 200, await response.text());
-  await page.locator('button[data-busy="false"]').filter({ hasText: "保存支付通道" }).waitFor();
+  await page
+    .locator('button[data-busy="false"]')
+    .filter({ hasText: "保存支付通道" })
+    .waitFor();
 }
 async function checkSiteLogo(page, browserName) {
   await page.getByRole("link", { name: "站点设置", exact: true }).click();
   const upload = page.getByLabel("上传站点 Logo", { exact: true });
-  await upload.setInputFiles({ name: "unsafe.svg", mimeType: "image/svg+xml", buffer: Buffer.from('<svg onload="alert(1)"/>') });
+  await upload.setInputFiles({
+    name: "unsafe.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from('<svg onload="alert(1)"/>'),
+  });
   await page.getByRole("alert").filter({ hasText: "Logo 仅支持" }).waitFor();
   const logo = await page.evaluate(() => {
     const canvas = document.createElement("canvas");
@@ -86,29 +95,54 @@ async function checkSiteLogo(page, browserName) {
     ctx.fillRect(8, 8, 16, 16);
     return canvas.toDataURL("image/png");
   });
-  await upload.setInputFiles({ name: "brand.png", mimeType: "image/png", buffer: Buffer.from(logo.split(",")[1], "base64") });
+  await upload.setInputFiles({
+    name: "brand.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(logo.split(",")[1], "base64"),
+  });
   await page.getByAltText("Logo 预览", { exact: true }).waitFor();
   const saveLogo = async () => {
-    const response = page.waitForResponse(r => r.url().endsWith("/api/v1/site") && r.request().method() === "PUT");
-    await page.getByRole("button", { name: "保存站点设置", exact: true }).click();
+    const response = page.waitForResponse(
+      (r) => r.url().endsWith("/api/v1/site") && r.request().method() === "PUT",
+    );
+    await page
+      .getByRole("button", { name: "保存站点设置", exact: true })
+      .click();
     const result = await response;
     assert.equal(result.status(), 200, await result.text());
-    await page.locator('button[data-busy="true"]').waitFor({ state: "detached" });
+    await page
+      .locator('button[data-busy="true"]')
+      .waitFor({ state: "detached" });
   };
   await saveLogo();
   await page.locator(".brand-logo").waitFor();
   assert.equal(await page.locator(".brand-logo").getAttribute("src"), logo);
-  assert.equal(await page.locator('link[rel="icon"]').getAttribute("href"), logo);
+  assert.equal(
+    await page.locator('link[rel="icon"]').getAttribute("href"),
+    logo,
+  );
   await page.reload();
   await page.locator(".brand-logo").waitFor();
   assert.equal(await page.locator(".brand-logo").getAttribute("src"), logo);
-  assert.ok(await page.locator(".brand-logo").evaluate(img => img.complete && img.naturalWidth === 32));
+  assert.ok(
+    await page
+      .locator(".brand-logo")
+      .evaluate((img) => img.complete && img.naturalWidth === 32),
+  );
   const visitor = await page.context().browser().newPage();
   try {
     await visitor.goto(base + "/");
-    await visitor.getByRole("button", { name: "登录控制台", exact: true }).waitFor();
-    assert.equal(await visitor.locator(".brand-logo").getAttribute("src"), logo);
-    assert.equal(await visitor.locator('link[rel="icon"]').getAttribute("href"), logo);
+    await visitor
+      .getByRole("button", { name: "登录控制台", exact: true })
+      .waitFor();
+    assert.equal(
+      await visitor.locator(".brand-logo").getAttribute("src"),
+      logo,
+    );
+    assert.equal(
+      await visitor.locator('link[rel="icon"]').getAttribute("href"),
+      logo,
+    );
   } finally {
     await visitor.close();
   }
@@ -118,14 +152,32 @@ async function checkSiteLogo(page, browserName) {
     const viewport = page.viewportSize();
     for (const width of [390, 1440]) {
       await page.setViewportSize({ width, height: 900 });
-      await page.screenshot({ path: resolve(directory, `site-logo-${width}.png`) });
-      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "logo settings overflow");
-      for (const button of await page.locator(".site-logo-editor button").all()) {
-        assert.ok(await button.evaluate(el => {
-          const button = el.getBoundingClientRect();
-          const icon = el.querySelector("svg").getBoundingClientRect();
-          return icon.width <= 24 && icon.height <= 24 && icon.top >= button.top && icon.bottom <= button.bottom && el.scrollWidth <= el.clientWidth;
-        }), "logo button icon or text overflows");
+      await page.screenshot({
+        path: resolve(directory, `site-logo-${width}.png`),
+      });
+      assert.ok(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+        "logo settings overflow",
+      );
+      for (const button of await page
+        .locator(".site-logo-editor button")
+        .all()) {
+        assert.ok(
+          await button.evaluate((el) => {
+            const button = el.getBoundingClientRect();
+            const icon = el.querySelector("svg").getBoundingClientRect();
+            return (
+              icon.width <= 24 &&
+              icon.height <= 24 &&
+              icon.top >= button.top &&
+              icon.bottom <= button.bottom &&
+              el.scrollWidth <= el.clientWidth
+            );
+          }),
+          "logo button icon or text overflows",
+        );
       }
     }
     await page.setViewportSize(viewport);
@@ -133,8 +185,13 @@ async function checkSiteLogo(page, browserName) {
   await page.getByRole("button", { name: "恢复默认", exact: true }).click();
   await saveLogo();
   assert.equal(await page.locator(".brand-logo").count(), 0);
-  assert.equal(await page.locator('link[rel="icon"]').getAttribute("href"), "/assets/favicon.svg");
-  console.log(`${browserName}: site logo upload, persistence, favicon and reset PASS`);
+  assert.equal(
+    await page.locator('link[rel="icon"]').getAttribute("href"),
+    "/assets/favicon.svg",
+  );
+  console.log(
+    `${browserName}: site logo upload, persistence, favicon and reset PASS`,
+  );
 }
 // 自绘下拉走真实点击：展开那层列表再点选项。selectOption 直接改原生 select
 // 的值，碰不到那层 <li>，测不出「选项点不中、下拉切不了」。
@@ -298,19 +355,26 @@ try {
       const managedUsers = await (
         await admin.request.get(base + "/api/v1/users?page_size=100")
       ).json();
-      const userID = managedUsers.items.find((item) => item.username === username).id;
+      const userID = managedUsers.items.find(
+        (item) => item.username === username,
+      ).id;
       assert.equal(
         await createdUserRow
-        .getByRole("button", { name: "网络诊断", exact: true })
+          .getByRole("button", { name: "网络诊断", exact: true })
           .count(),
         0,
       );
       await createdUserRow
         .getByRole("button", { name: "余额与规则", exact: true })
         .click();
-      await admin.getByText("余额 ¥0.00 · 规则 0 / 不限", { exact: true }).waitFor();
+      await admin
+        .getByText("余额 ¥0.00 · 规则 0 / 不限", { exact: true })
+        .waitFor();
       await admin.getByLabel("调整金额（元）", { exact: true }).fill("10.25");
-      await admin.getByLabel("调整原因", { exact: true }).first().fill("UI balance credit");
+      await admin
+        .getByLabel("调整原因", { exact: true })
+        .first()
+        .fill("UI balance credit");
       const balanceEndpoint = `**/api/v1/users/${userID}/balance-adjustments`;
       let failedCredit = false;
       let firstCreditBody;
@@ -326,8 +390,9 @@ try {
         const response = await fetch(route.request().url(), {
           method: "POST",
           headers: {
-            "Content-Type": requestHeaders["content-type"] || "application/json",
-            "Cookie": requestHeaders.cookie || "",
+            "Content-Type":
+              requestHeaders["content-type"] || "application/json",
+            Cookie: requestHeaders.cookie || "",
             "X-Requested-With": "fetch",
           },
           body: route.request().postData(),
@@ -335,20 +400,37 @@ try {
         await response.arrayBuffer();
         await route.abort("failed");
       });
-      await admin.getByRole("button", { name: "确认调整余额", exact: true }).click();
-      await admin.getByText("上次余额调整的结果未确认。", { exact: false }).waitFor();
+      await admin
+        .getByRole("button", { name: "确认调整余额", exact: true })
+        .click();
+      await admin
+        .getByText("上次余额调整的结果未确认。", { exact: false })
+        .waitFor();
       await admin.unroute(balanceEndpoint);
-      await admin.getByRole("button", { name: "关闭对话框", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "关闭对话框", exact: true })
+        .click();
       await admin.locator("dialog").waitFor({ state: "detached" });
       await createdUserRow
         .getByRole("button", { name: "余额与规则", exact: true })
         .click();
-      assert.equal(await admin.getByLabel("调整金额（元）", { exact: true }).inputValue(), "10.25");
-      assert.equal(await admin.getByLabel("调整原因", { exact: true }).first().inputValue(), "UI balance credit");
+      assert.equal(
+        await admin.getByLabel("调整金额（元）", { exact: true }).inputValue(),
+        "10.25",
+      );
+      assert.equal(
+        await admin
+          .getByLabel("调整原因", { exact: true })
+          .first()
+          .inputValue(),
+        "UI balance credit",
+      );
       let retryCreditBody;
       const retriedCredit = admin.waitForRequest((request) => {
         if (
-          request.url().includes(`/api/v1/users/${userID}/balance-adjustments`) &&
+          request
+            .url()
+            .includes(`/api/v1/users/${userID}/balance-adjustments`) &&
           request.method() === "POST"
         ) {
           retryCreditBody = request.postDataJSON();
@@ -356,7 +438,9 @@ try {
         }
         return false;
       });
-      await admin.getByRole("button", { name: "确认调整余额", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "确认调整余额", exact: true })
+        .click();
       await retriedCredit;
       assert.equal(
         retryCreditBody.idempotency_key,
@@ -365,35 +449,76 @@ try {
       );
       assert.equal(retryCreditBody.amount_cents, firstCreditBody.amount_cents);
       assert.equal(retryCreditBody.reason, firstCreditBody.reason);
-      await admin.getByText("余额 ¥10.25 · 规则 0 / 不限", { exact: true }).waitFor();
+      await admin
+        .getByText("余额 ¥10.25 · 规则 0 / 不限", { exact: true })
+        .waitFor();
       await admin.getByLabel("调整金额（元）", { exact: true }).fill("-10.25");
-      await admin.getByLabel("调整原因", { exact: true }).first().fill("UI balance correction");
-      await admin.getByRole("button", { name: "确认调整余额", exact: true }).click();
-      await admin.getByText("余额 ¥0.00 · 规则 0 / 不限", { exact: true }).waitFor();
+      await admin
+        .getByLabel("调整原因", { exact: true })
+        .first()
+        .fill("UI balance correction");
+      await admin
+        .getByRole("button", { name: "确认调整余额", exact: true })
+        .click();
+      await admin
+        .getByText("余额 ¥0.00 · 规则 0 / 不限", { exact: true })
+        .waitFor();
       await admin.getByLabel("最大规则总数", { exact: true }).fill("2");
-      await admin.getByLabel("调整原因", { exact: true }).nth(1).fill("UI rule allowance");
-      const accountLimitSaved = admin.waitForResponse((response) =>
-        response.url().includes(`/api/v1/users/${userID}/rule-limit`) &&
-        response.request().method() === "PUT",
+      await admin
+        .getByLabel("调整原因", { exact: true })
+        .nth(1)
+        .fill("UI rule allowance");
+      const accountLimitSaved = admin.waitForResponse(
+        (response) =>
+          response.url().includes(`/api/v1/users/${userID}/rule-limit`) &&
+          response.request().method() === "PUT",
       );
-      await admin.getByRole("button", { name: "保存规则上限", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "保存规则上限", exact: true })
+        .click();
       const savedAccount = await accountLimitSaved;
       const savedAccountBody = await savedAccount.json();
-      assert.equal(savedAccount.status(), 200, JSON.stringify(savedAccountBody));
-      assert.equal(savedAccountBody.max_rules, 2, JSON.stringify(savedAccountBody));
-      await admin.getByText("余额 ¥0.00 · 规则 0 / 2", { exact: true }).waitFor();
-      await admin.getByLabel("最大规则总数", { exact: true }).fill("");
-      await admin.getByLabel("调整原因", { exact: true }).nth(1).fill("Restore plan limit");
-      const accountLimitCleared = admin.waitForResponse((response) =>
-        response.url().includes(`/api/v1/users/${userID}/rule-limit`) &&
-        response.request().method() === "PUT",
+      assert.equal(
+        savedAccount.status(),
+        200,
+        JSON.stringify(savedAccountBody),
       );
-      await admin.getByRole("button", { name: "保存规则上限", exact: true }).click();
+      assert.equal(
+        savedAccountBody.max_rules,
+        2,
+        JSON.stringify(savedAccountBody),
+      );
+      await admin
+        .getByText("余额 ¥0.00 · 规则 0 / 2", { exact: true })
+        .waitFor();
+      await admin.getByLabel("最大规则总数", { exact: true }).fill("");
+      await admin
+        .getByLabel("调整原因", { exact: true })
+        .nth(1)
+        .fill("Restore plan limit");
+      const accountLimitCleared = admin.waitForResponse(
+        (response) =>
+          response.url().includes(`/api/v1/users/${userID}/rule-limit`) &&
+          response.request().method() === "PUT",
+      );
+      await admin
+        .getByRole("button", { name: "保存规则上限", exact: true })
+        .click();
       const clearedAccount = await accountLimitCleared;
       const clearedAccountBody = await clearedAccount.json();
-      assert.equal(clearedAccount.status(), 200, JSON.stringify(clearedAccountBody));
-      assert.equal(clearedAccountBody.rule_limit_override, null, JSON.stringify(clearedAccountBody));
-      await admin.getByText("余额 ¥0.00 · 规则 0 / 不限", { exact: true }).waitFor();
+      assert.equal(
+        clearedAccount.status(),
+        200,
+        JSON.stringify(clearedAccountBody),
+      );
+      assert.equal(
+        clearedAccountBody.rule_limit_override,
+        null,
+        JSON.stringify(clearedAccountBody),
+      );
+      await admin
+        .getByText("余额 ¥0.00 · 规则 0 / 不限", { exact: true })
+        .waitFor();
       await admin.getByRole("button", { name: "关闭", exact: true }).click();
       await admin.locator("dialog").waitFor({ state: "detached" });
       await createdUserRow
@@ -457,10 +582,16 @@ try {
         .getByRole("button", { name: "高级设置", exact: true })
         .click();
       await admin.getByText("尚未添加额外参数。", { exact: true }).waitFor();
+      // Preserve a saved legacy TLS object while testing explicit activation separately.
+      await admin.getByLabel("启用完整高级策略", { exact: true }).uncheck();
       await pickOption(admin, "添加额外参数", "max_fail");
-      await admin.getByRole("button", { name: "添加参数", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "添加参数", exact: true })
+        .click();
       assert.equal(
-        await admin.getByLabel("最大连续失败次数", { exact: true }).inputValue(),
+        await admin
+          .getByLabel("最大连续失败次数", { exact: true })
+          .inputValue(),
         "3",
       );
       const maxFail = admin.getByLabel("最大连续失败次数", { exact: true });
@@ -468,41 +599,84 @@ try {
       assert.equal(await maxFail.isVisible(), true, "清空数值时控件应保留");
       await maxFail.fill("0");
       for (const key of [
-        "fail_timout_sec", "tls_inbound_policy", "blocked_path",
-        "blocked_protocol", "disable_udp", "ipv6_group", "reverse_group", "tls",
+        "fail_timout_sec",
+        "tls_inbound_policy",
+        "blocked_path",
+        "blocked_protocol",
+        "disable_udp",
+        "ipv6_group",
+        "reverse_group",
+        "tls",
       ]) {
         await pickOption(admin, "添加额外参数", key);
-        await admin.getByRole("button", { name: "添加参数", exact: true }).click();
+        await admin
+          .getByRole("button", { name: "添加参数", exact: true })
+          .click();
       }
-      assert.equal(await admin.getByLabel("故障转移时长（秒）", { exact: true }).inputValue(), "30");
+      assert.equal(
+        await admin
+          .getByLabel("故障转移时长（秒）", { exact: true })
+          .inputValue(),
+        "30",
+      );
       await admin.getByLabel("故障转移时长（秒）", { exact: true }).fill("0");
-      const tlsPolicySelect = admin.locator('select[aria-label="TLS 入站策略"]');
-      assert.deepEqual(await tlsPolicySelect.locator("option").evaluateAll((options) => options.map((option) => option.value)), ["0", "1", "2"]);
+      const tlsPolicySelect = admin.locator(
+        'select[aria-label="TLS 入站策略"]',
+      );
+      assert.deepEqual(
+        await tlsPolicySelect
+          .locator("option")
+          .evaluateAll((options) => options.map((option) => option.value)),
+        ["0", "1", "2"],
+      );
       await tlsPolicySelect.click();
       await admin.locator(".select-list .select-option").nth(2).click();
       assert.equal(await tlsPolicySelect.inputValue(), "2");
-      const blockedPaths = admin.getByLabel("HTTP Path 黑名单", { exact: true });
+      const blockedPaths = admin.getByLabel("HTTP Path 黑名单", {
+        exact: true,
+      });
       await blockedPaths.pressSequentially("/first//path");
       await blockedPaths.press("Enter");
       await blockedPaths.pressSequentially("/second/*literal*/");
-      assert.equal(await blockedPaths.inputValue(), "/first//path\n/second/*literal*/");
-      await admin.getByRole("group", { name: "应用协议屏蔽", exact: true }).getByLabel("SOCKS", { exact: true }).check();
+      assert.equal(
+        await blockedPaths.inputValue(),
+        "/first//path\n/second/*literal*/",
+      );
+      await admin
+        .getByRole("group", { name: "应用协议屏蔽", exact: true })
+        .getByLabel("SOCKS", { exact: true })
+        .check();
       await admin.locator("#advanced-disable_udp").check();
       for (const name of ["IPv6 对端优先设备组", "反向隧道设备组"]) {
-        await admin.getByRole("group", { name, exact: true }).getByLabel(advancedPeer.name, { exact: true }).check();
+        await admin
+          .getByRole("group", { name, exact: true })
+          .getByLabel(advancedPeer.name, { exact: true })
+          .check();
       }
-      const tlsConfig = { server_name: "form.example.com", nested: { enabled: false } };
+      const tlsConfig = {
+        server_name: "form.example.com",
+        nested: { enabled: false },
+      };
       await admin.locator("#advanced-tls").fill("[]");
-      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
-      await admin.getByRole("alert").filter({ hasText: "tls 配置必须是 JSON 对象" }).waitFor();
-      await admin.locator("#advanced-tls").fill(JSON.stringify(tlsConfig, null, 2));
+      await admin
+        .getByRole("button", { name: "保存高级设置", exact: true })
+        .click();
+      await admin
+        .getByRole("alert")
+        .filter({ hasText: "tls 配置必须是 JSON 对象" })
+        .waitFor();
+      await admin
+        .locator("#advanced-tls")
+        .fill(JSON.stringify(tlsConfig, null, 2));
       await pickOption(admin, "添加额外参数", "protocol");
-      await admin.getByRole("button", { name: "添加参数", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "添加参数", exact: true })
+        .click();
       const protocolSelect = admin.locator('select[aria-label="反向隧道协议"]');
       assert.deepEqual(
-        await protocolSelect.locator("option").evaluateAll((options) =>
-          options.map((option) => option.value),
-        ),
+        await protocolSelect
+          .locator("option")
+          .evaluateAll((options) => options.map((option) => option.value)),
         ["tls", "tls_simple", "ws", "http"],
       );
       await protocolSelect.click();
@@ -515,34 +689,64 @@ try {
         .getByRole("button", { name: "移除反向隧道协议", exact: true })
         .click();
       await pickOption(admin, "添加额外参数", "protocol");
-      await admin.getByRole("button", { name: "添加参数", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "添加参数", exact: true })
+        .click();
       await admin.locator('select[aria-label="反向隧道协议"]').click();
       await admin.locator(".select-list .select-option").nth(2).click();
-      assert.equal(await admin.locator('select[aria-label="反向隧道协议"]').inputValue(), "ws");
+      assert.equal(
+        await admin.locator('select[aria-label="反向隧道协议"]').inputValue(),
+        "ws",
+      );
       await admin.locator(".advanced-raw summary").click();
       const advanced = admin.getByLabel("设备组高级设置 JSON", { exact: true });
-      assert.match(await advanced.inputValue(), /form\.example\.com/, "TLS 表单应同步到 JSONC");
+      assert.match(
+        await advanced.inputValue(),
+        /form\.example\.com/,
+        "TLS 表单应同步到 JSONC",
+      );
       await admin.locator(".advanced-raw summary").click();
-      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "保存高级设置", exact: true })
+        .click();
       await admin.locator("dialog").waitFor({ state: "detached" });
-      const formGroups = await (await admin.request.get(base + "/api/v1/groups?page_size=100")).json();
-      assert.deepEqual(formGroups.items.find((group) => group.id === savedGroup.id).advanced, {
-        max_fail: 0,
-        fail_timout_sec: 0,
-        tls_inbound_policy: 2,
-        blocked_path: ["/first//path", "/second/*literal*/"],
-        blocked_protocol: ["socks"],
-        disable_udp: true,
-        ipv6_group: [advancedPeer.id],
-        reverse_group: [advancedPeer.id],
-        protocol: "ws",
-        tls: tlsConfig,
-      });
-      await groupRow.getByRole("button", { name: "高级设置", exact: true }).click();
+      const formGroups = await (
+        await admin.request.get(base + "/api/v1/groups?page_size=100")
+      ).json();
+      assert.deepEqual(
+        formGroups.items.find((group) => group.id === savedGroup.id).advanced,
+        {
+          max_fail: 0,
+          fail_timout_sec: 0,
+          tls_inbound_policy: 2,
+          blocked_path: ["/first//path", "/second/*literal*/"],
+          blocked_protocol: ["socks"],
+          disable_udp: true,
+          ipv6_group: [advancedPeer.id],
+          reverse_group: [advancedPeer.id],
+          protocol: "ws",
+          tls: tlsConfig,
+        },
+      );
+      await groupRow
+        .getByRole("button", { name: "高级设置", exact: true })
+        .click();
       assert.equal(await maxFail.inputValue(), "0");
-      assert.equal(await admin.getByLabel("TLS 入站策略", { exact: true }).inputValue(), "2");
-      assert.equal(await blockedPaths.inputValue(), "/first//path\n/second/*literal*/");
-      assert.equal(await admin.getByRole("group", { name: "反向隧道设备组", exact: true }).getByLabel(advancedPeer.name, { exact: true }).isChecked(), true);
+      assert.equal(
+        await admin.getByLabel("TLS 入站策略", { exact: true }).inputValue(),
+        "2",
+      );
+      assert.equal(
+        await blockedPaths.inputValue(),
+        "/first//path\n/second/*literal*/",
+      );
+      assert.equal(
+        await admin
+          .getByRole("group", { name: "反向隧道设备组", exact: true })
+          .getByLabel(advancedPeer.name, { exact: true })
+          .isChecked(),
+        true,
+      );
       if (browserName === "chromium") {
         const screenshotDir = resolve(root, ".gocache/screens");
         await mkdir(screenshotDir, { recursive: true });
@@ -552,10 +756,20 @@ try {
           ["mobile", 320, 900],
         ]) {
           await admin.setViewportSize({ width, height });
-          await admin.locator("dialog").evaluate((el) => { el.scrollTop = 0; });
-          await admin.locator("dialog").evaluate((el) => el.getAnimations().length
-            ? Promise.all(el.getAnimations().map((animation) => animation.finished.catch(() => {})))
-            : Promise.resolve());
+          await admin.locator("dialog").evaluate((el) => {
+            el.scrollTop = 0;
+          });
+          await admin
+            .locator("dialog")
+            .evaluate((el) =>
+              el.getAnimations().length
+                ? Promise.all(
+                    el
+                      .getAnimations()
+                      .map((animation) => animation.finished.catch(() => {})),
+                  )
+                : Promise.resolve(),
+            );
           assert.ok(
             await admin
               .locator("dialog")
@@ -605,8 +819,13 @@ try {
         .filter({ hasText: "块注释未结束" })
         .waitFor();
       await advanced.fill('{"max_fail": 4}');
-      await admin.getByRole("button", { name: "保存高级设置", exact: true }).click();
-      await admin.getByRole("alert").filter({ hasText: "请先应用 JSONC" }).waitFor();
+      await admin
+        .getByRole("button", { name: "保存高级设置", exact: true })
+        .click();
+      await admin
+        .getByRole("alert")
+        .filter({ hasText: "请先应用 JSONC" })
+        .waitFor();
       await advanced.fill(
         '{"allowed_host":["example.com"],"blocked_path":["/private"]}',
       );
@@ -616,7 +835,10 @@ try {
       await admin
         .getByRole("button", { name: "保存高级设置", exact: true })
         .click();
-      await admin.getByRole("alert").filter({ hasText: "allowed_host" }).waitFor();
+      await admin
+        .getByRole("alert")
+        .filter({ hasText: "allowed_host" })
+        .waitFor();
       const extraSettings = {
         blocked_protocol: ["socks"],
         disable_udp: true,
@@ -706,6 +928,38 @@ try {
           .advanced,
         extraSettings,
       );
+      await groupRow
+        .getByRole("button", { name: "高级设置", exact: true })
+        .click();
+      await admin.getByLabel("启用完整高级策略", { exact: true }).check();
+      await admin.locator(".advanced-raw summary").click();
+      await advanced.fill(
+        '{"blocked_path":["/private*"],"max_fail":3,"fail_timeout_sec":30,"tls":{"min_version":"1.3","enabled":false}}',
+      );
+      await admin
+        .getByRole("button", { name: "应用 JSONC", exact: true })
+        .click();
+      await admin
+        .getByRole("button", { name: "预览策略影响", exact: true })
+        .click();
+      await admin.getByLabel("策略影响预览", { exact: true }).waitFor();
+      await admin
+        .getByRole("button", { name: "保存高级设置", exact: true })
+        .click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      const activatedGroups = await (
+        await admin.request.get(base + "/api/v1/groups?page_size=100")
+      ).json();
+      assert.equal(
+        activatedGroups.items.find((g) => g.id === savedGroup.id).advanced
+          .policy_version,
+        2,
+      );
+      assert.equal(
+        activatedGroups.items.find((g) => g.id === savedGroup.id).advanced
+          .fail_timout_sec,
+        30,
+      );
       // 面板托管接入脚本与 Agent 产物，两个路由都必须**免登录**可取 ——
       // 接入命令在目标设备上执行，那里没有会话。
       const installer = await fetch(base + "/download/agent-install.sh");
@@ -725,8 +979,12 @@ try {
       // 接入凭据从设备组页取。服务器页去掉之后，面板上只剩这一条接入路径：
       // 给的是这个组的固定接入密钥，设备名由设备自报 —— 所以命令里没有 -n。
       await admin.getByRole("link", { name: "设备组", exact: true }).click();
-      const enrollRow = admin.locator("tr", { hasText: `group-${browserName}` });
-      await enrollRow.getByRole("button", { name: "接入设备", exact: true }).click();
+      const enrollRow = admin.locator("tr", {
+        hasText: `group-${browserName}`,
+      });
+      await enrollRow
+        .getByRole("button", { name: "接入设备", exact: true })
+        .click();
       await admin.locator("dialog").waitFor();
       const onboardCommand = (
         await admin.getByLabel("设备接入命令").textContent()
@@ -885,7 +1143,10 @@ try {
       await admin.getByRole("button", { name: "新增套餐" }).click();
       // A weekly plan must persist weeks through the real API and editor.
       await pickOption(admin, "套餐类型", "week");
-      assert.equal(await admin.getByLabel("有效月数", { exact: true }).count(), 0);
+      assert.equal(
+        await admin.getByLabel("有效月数", { exact: true }).count(),
+        0,
+      );
       await admin.getByLabel("有效周数", { exact: true }).fill("2");
       await admin
         .getByLabel("名称", { exact: true })
@@ -894,32 +1155,61 @@ try {
       await admin.getByRole("button", { name: "确认提交" }).click();
       await admin.locator("dialog").waitFor({ state: "detached" });
       const periodCard = admin.locator("article").filter({
-        has: admin.getByRole("heading", { name: `plan-${browserName}`, exact: true }),
+        has: admin.getByRole("heading", {
+          name: `plan-${browserName}`,
+          exact: true,
+        }),
       });
       await periodCard.getByText("2 周", { exact: false }).waitFor();
-      const weeklyPlans = await (await admin.request.get(base + "/api/v1/plans")).json();
-      const weeklyPlan = weeklyPlans.items.find((plan) => plan.name === "plan-" + browserName);
+      const weeklyPlans = await (
+        await admin.request.get(base + "/api/v1/plans")
+      ).json();
+      const weeklyPlan = weeklyPlans.items.find(
+        (plan) => plan.name === "plan-" + browserName,
+      );
       assert.equal(weeklyPlan.price_cents, "1000");
       assert.equal(weeklyPlan.quota_bytes, "0", "空白 GB 配额必须表示不限流量");
       // Edit each unit, reload and verify both API data and the visible label.
-      let previousUnit = "week", previousCount = "2", previousLabel = "有效周数";
+      let previousUnit = "week",
+        previousCount = "2",
+        previousLabel = "有效周数";
       for (const [unit, label, count, suffix] of [
         ["day", "有效天数", "3", "天"],
         ["year", "有效年数", "2", "年"],
         ["month", "有效月数", "1", "个月"],
       ]) {
-        await periodCard.getByRole("button", { name: "编辑套餐", exact: true }).click();
-        assert.equal(await admin.getByLabel("套餐类型").inputValue(), previousUnit);
-        assert.equal(await admin.getByLabel(previousLabel, { exact: true }).inputValue(), previousCount);
+        await periodCard
+          .getByRole("button", { name: "编辑套餐", exact: true })
+          .click();
+        assert.equal(
+          await admin.getByLabel("套餐类型").inputValue(),
+          previousUnit,
+        );
+        assert.equal(
+          await admin.getByLabel(previousLabel, { exact: true }).inputValue(),
+          previousCount,
+        );
         await pickOption(admin, "套餐类型", unit);
         const duration = admin.getByLabel(label, { exact: true });
         await duration.fill(unit === "year" ? "11" : "0");
-        assert.equal(await duration.evaluate(el => el.checkValidity()), false);
+        assert.equal(
+          await duration.evaluate((el) => el.checkValidity()),
+          false,
+        );
         await duration.fill("1.5");
-        assert.equal(await duration.evaluate(el => el.checkValidity()), false);
+        assert.equal(
+          await duration.evaluate((el) => el.checkValidity()),
+          false,
+        );
         await duration.fill(count);
-        const saved = admin.waitForResponse(r => r.url().includes("/api/v1/plans/") && r.request().method() === "PUT");
-        await admin.getByRole("button", { name: "确认提交", exact: true }).click();
+        const saved = admin.waitForResponse(
+          (r) =>
+            r.url().includes("/api/v1/plans/") &&
+            r.request().method() === "PUT",
+        );
+        await admin
+          .getByRole("button", { name: "确认提交", exact: true })
+          .click();
         const response = await saved;
         assert.equal(response.status(), 200, await response.text());
         const plan = await response.json();
@@ -927,14 +1217,23 @@ try {
         assert.equal(plan.duration_value, Number(count));
         await admin.locator("dialog").waitFor({ state: "detached" });
         await admin.reload();
-        await periodCard.getByText(`${count} ${suffix}`, { exact: false }).waitFor();
+        await periodCard
+          .getByText(`${count} ${suffix}`, { exact: false })
+          .waitFor();
         [previousUnit, previousCount, previousLabel] = [unit, count, label];
       }
-      await periodCard.getByRole("button", { name: "编辑套餐", exact: true }).click();
+      await periodCard
+        .getByRole("button", { name: "编辑套餐", exact: true })
+        .click();
       assert.equal(await admin.getByLabel("套餐类型").inputValue(), "month");
-      assert.equal(await admin.getByLabel("有效月数", { exact: true }).inputValue(), "1");
+      assert.equal(
+        await admin.getByLabel("有效月数", { exact: true }).inputValue(),
+        "1",
+      );
       await admin.getByRole("button", { name: "关闭对话框" }).click();
-      await admin.getByText("尚有未保存内容。再次关闭将放弃修改。", { exact: true }).waitFor();
+      await admin
+        .getByText("尚有未保存内容。再次关闭将放弃修改。", { exact: true })
+        .waitFor();
       await admin.getByRole("button", { name: "关闭对话框" }).click();
       await admin.locator("dialog").waitFor({ state: "detached" });
       assert.equal(
@@ -1088,7 +1387,9 @@ try {
       );
       // 探针是付费能力：这个账号此时还没有有效权益，列表与历史都要拒。
       // 内容断言放在下面购买套餐之后。
-      await user.evaluate(() => { location.hash = "#/probes"; });
+      await user.evaluate(() => {
+        location.hash = "#/probes";
+      });
       await user
         .getByText("需要有效的套餐权益才能查看探针", { exact: false })
         .waitFor();
@@ -1105,10 +1406,15 @@ try {
         403,
       );
       // 探针是独立窗口，没有侧栏；先回外壳再点导航。
-      await user.evaluate(() => { location.hash = "#/overview"; });
+      await user.evaluate(() => {
+        location.hash = "#/overview";
+      });
       await user.getByRole("link", { name: "转发规则", exact: true }).click();
       await user.getByRole("button", { name: "新增", exact: true }).click();
-      assert.equal(await user.getByLabel("转发方式", { exact: true }).count(), 0);
+      assert.equal(
+        await user.getByLabel("转发方式", { exact: true }).count(),
+        0,
+      );
       await user
         .getByLabel("名称", { exact: true })
         .fill("disabled-integration-rule");
@@ -1138,9 +1444,7 @@ try {
       });
       await classifiedRow.getByRole("checkbox").check();
       await user.getByLabel("规则分类", { exact: true }).fill("日本线路");
-      await user
-        .getByRole("button", { name: "应用分类", exact: true })
-        .click();
+      await user.getByRole("button", { name: "应用分类", exact: true }).click();
       await user
         .getByText("已把 1 条规则归到「日本线路」。", { exact: false })
         .waitFor();
@@ -1199,7 +1503,10 @@ try {
       assert.equal(chainedRules.items[0].tunnel.chain.length, 2);
       assert.equal(chainedRules.items[0].tunnel.chain[0].token, undefined);
       await user.getByRole("button", { name: "编辑", exact: true }).click();
-      assert.equal(await user.getByLabel("转发方式", { exact: true }).count(), 0);
+      assert.equal(
+        await user.getByLabel("转发方式", { exact: true }).count(),
+        0,
+      );
       await user.getByLabel("目标地址", { exact: true }).fill("127.0.0.1:8082");
       await save(user);
       const preservedRules = await (
@@ -1352,17 +1659,29 @@ try {
       ).json();
       assert.deepEqual(beforeAddon.limits, { max_rules: 3 });
       // 有了权益，探针才可见：只包含本组设备，且对普通用户隐藏公网 IP。
-      await user.evaluate(() => { location.hash = "#/probes"; });
-      await user
-        .getByRole("heading", { name: savedGroup.name })
-        .waitFor();
+      await user.evaluate(() => {
+        location.hash = "#/probes";
+      });
+      await user.getByRole("heading", { name: savedGroup.name }).waitFor();
       assert.equal(
         (await user.locator("body").innerText()).includes("203.0.113.99"),
         false,
       );
-      assert.equal(await user.getByRole("button", { name: "WebSSH", exact: true }).count(), 0);
-      assert.equal(await user.getByRole("button", { name: "卸载设备", exact: true }).count(), 0);
-      assert.equal(await user.getByLabel("视角", { exact: true }).count(), 0, "普通账号没有视角开关");
+      assert.equal(
+        await user.getByRole("button", { name: "WebSSH", exact: true }).count(),
+        0,
+      );
+      assert.equal(
+        await user
+          .getByRole("button", { name: "卸载设备", exact: true })
+          .count(),
+        0,
+      );
+      assert.equal(
+        await user.getByLabel("视角", { exact: true }).count(),
+        0,
+        "普通账号没有视角开关",
+      );
       const history = user.getByRole("region", { name: "历史趋势" });
       // 图上的形状（几分钟一个点、缺测怎么断线）由 test_webui.mjs 用受控数据验：
       // 线上的样点是实时的，面板还要等聚合跑完才落桶，形状本身不稳定。这里确认
@@ -1466,7 +1785,9 @@ try {
       await admin.locator("dialog").waitFor({ state: "detached" });
       // 上面的探针断言把用户留在了独立窗口（没有侧栏），先回外壳，再去套餐与
       // 钱包 —— 下面几条断言都在这个页面上。
-      await user.evaluate(() => { location.hash = "#/overview"; });
+      await user.evaluate(() => {
+        location.hash = "#/overview";
+      });
       await user.getByRole("link", { name: "套餐与钱包", exact: true }).click();
       await user.getByRole("button", { name: "刷新状态", exact: true }).click();
       const userAddon = user.locator("article").filter({
@@ -1502,26 +1823,57 @@ try {
           response.url() === base + "/api/v1/site" &&
           response.request().method() === "PUT",
       );
-      await admin.getByRole("button", { name: "保存站点设置", exact: true }).click();
+      await admin
+        .getByRole("button", { name: "保存站点设置", exact: true })
+        .click();
       assert.equal((await openedSite).status(), 200);
-      await admin.locator('button[data-busy="true"]').waitFor({ state: "detached" });
+      await admin
+        .locator('button[data-busy="true"]')
+        .waitFor({ state: "detached" });
       await admin.getByRole("button", { name: "退出", exact: true }).click();
-      await admin.getByRole("link", { name: "注册账号", exact: true }).waitFor();
-      assert.equal(await admin.getByRole("button", { name: "创建账号", exact: true }).count(), 0);
+      await admin
+        .getByRole("link", { name: "注册账号", exact: true })
+        .waitFor();
+      assert.equal(
+        await admin
+          .getByRole("button", { name: "创建账号", exact: true })
+          .count(),
+        0,
+      );
       const openContext = await browser.newContext();
       const openVisitor = await openContext.newPage();
       await openVisitor.goto(base + "/");
-      await openVisitor.getByRole("button", { name: "注册账号", exact: true }).waitFor();
+      await openVisitor
+        .getByRole("button", { name: "注册账号", exact: true })
+        .waitFor();
       await openVisitor.goto(base + "/admin");
-      await openVisitor.getByRole("link", { name: "注册账号", exact: true }).click();
-      await openVisitor.getByRole("button", { name: "创建账号", exact: true }).waitFor();
+      await openVisitor
+        .getByRole("link", { name: "注册账号", exact: true })
+        .click();
+      await openVisitor
+        .getByRole("button", { name: "创建账号", exact: true })
+        .waitFor();
       assert.equal(new URL(openVisitor.url()).pathname, "/");
-      assert.equal(await openVisitor.getByLabel("注册邀请码", { exact: true }).count(), 0);
-      assert.equal(await openVisitor.getByLabel("密码", { exact: true }).getAttribute("autocomplete"), "new-password");
-      await openVisitor.getByLabel("用户名", { exact: true }).fill(`open-${browserName}`);
+      assert.equal(
+        await openVisitor.getByLabel("注册邀请码", { exact: true }).count(),
+        0,
+      );
+      assert.equal(
+        await openVisitor
+          .getByLabel("密码", { exact: true })
+          .getAttribute("autocomplete"),
+        "new-password",
+      );
+      await openVisitor
+        .getByLabel("用户名", { exact: true })
+        .fill(`open-${browserName}`);
       await openVisitor.getByLabel("密码", { exact: true }).fill(randomUUID());
-      await openVisitor.getByRole("button", { name: "创建账号", exact: true }).click();
-      await openVisitor.getByText("注册成功，请登录。", { exact: false }).waitFor();
+      await openVisitor
+        .getByRole("button", { name: "创建账号", exact: true })
+        .click();
+      await openVisitor
+        .getByText("注册成功，请登录。", { exact: false })
+        .waitFor();
       await openContext.close();
       await login(admin, "ui-admin", password, "/admin");
       await admin.getByRole("link", { name: "站点设置", exact: true }).click();
@@ -1574,17 +1926,38 @@ try {
       const closedVisitor = await closedContext.newPage();
       for (const path of ["/", "/admin", "/?register=1"]) {
         await closedVisitor.goto(base + path);
-        await closedVisitor.getByRole("button", { name: "登录控制台", exact: true }).waitFor();
-        assert.equal(await closedVisitor.getByRole("button", { name: "注册账号", exact: true }).count(), 0);
-        assert.equal(await closedVisitor.getByRole("link", { name: "注册账号", exact: true }).count(), 0);
-        assert.equal(await closedVisitor.getByRole("button", { name: "创建账号", exact: true }).count(), 0);
+        await closedVisitor
+          .getByRole("button", { name: "登录控制台", exact: true })
+          .waitFor();
+        assert.equal(
+          await closedVisitor
+            .getByRole("button", { name: "注册账号", exact: true })
+            .count(),
+          0,
+        );
+        assert.equal(
+          await closedVisitor
+            .getByRole("link", { name: "注册账号", exact: true })
+            .count(),
+          0,
+        );
+        assert.equal(
+          await closedVisitor
+            .getByRole("button", { name: "创建账号", exact: true })
+            .count(),
+          0,
+        );
       }
       await closedContext.close();
       // 支付通道：面板上填完就生效，商户密钥永远不回明文。
       const beforePayment = await (
         await admin.request.get(base + "/api/v1/payment-settings")
       ).json();
-      assert.equal(beforePayment.channels.epay.configured, false, "初始没有配置任何支付通道");
+      assert.equal(
+        beforePayment.channels.epay.configured,
+        false,
+        "初始没有配置任何支付通道",
+      );
       await pickOption(admin, "支付协议", "cryptomus");
       await pickOption(admin, "支付协议", "epay");
       const epayCard = admin
@@ -1616,7 +1989,10 @@ try {
       ).json();
       assert.equal(afterPayment.channels.epay.configured, true);
       assert.equal(afterPayment.channels.epay.key_set, true);
-      assert.equal(afterPayment.channels.epay.gateway, "https://pay.example.test");
+      assert.equal(
+        afterPayment.channels.epay.gateway,
+        "https://pay.example.test",
+      );
       assert.equal(afterPayment.channels.epay.fee_percent, "1.50");
       assert.equal(
         JSON.stringify(afterPayment).includes("merchant-secret-key"),
@@ -1660,7 +2036,11 @@ try {
       const clearedPayment = await (
         await admin.request.get(base + "/api/v1/payment-settings")
       ).json();
-      assert.equal(clearedPayment.channels.epay.configured, false, "清空网关应当停用这条通道");
+      assert.equal(
+        clearedPayment.channels.epay.configured,
+        false,
+        "清空网关应当停用这条通道",
+      );
       const clearedChannels = await (
         await admin.request.get(base + "/api/v1/payment-channels")
       ).json();
@@ -1775,6 +2155,63 @@ try {
         .getByRole("button", { name: "保存出口", exact: true })
         .click();
       await admin.locator("dialog").waitFor({ state: "detached" });
+      // A real persisted managed hub also exercises the entry-group picker,
+      // local profiles and dedicated TLS carrier without starting OS services.
+      await admin
+        .getByRole("button", { name: "新增出口", exact: true })
+        .click();
+      await admin.getByLabel("由普通 Agent 托管服务", { exact: true }).check();
+      await admin.getByLabel("作为入口组的反向 hub", { exact: true }).check();
+      assert.equal(
+        await admin
+          .getByLabel("出口设备组", { exact: true })
+          .locator(`option[value="${exitGroup.id}"]`)
+          .count(),
+        0,
+      );
+      await admin
+        .getByLabel("出口名称", { exact: true })
+        .fill(`reverse-hub-${browserName}`);
+      await admin
+        .getByLabel("出口设备组", { exact: true })
+        .selectOption(savedGroup.id);
+      await admin
+        .getByLabel("出口服务器", { exact: true })
+        .selectOption(registered.node_id);
+      await admin
+        .getByLabel("出口承载", { exact: true })
+        .selectOption("tls_simple");
+      await admin
+        .getByLabel("本地证书 profile", { exact: true })
+        .fill("reverse-local");
+      await admin
+        .getByLabel("服务监听地址", { exact: true })
+        .fill("0.0.0.0:10443");
+      await admin
+        .getByLabel("出口端点", { exact: true })
+        .fill("reverse.example.test:10443");
+      await admin
+        .getByLabel("TLS 服务器名称", { exact: true })
+        .fill("reverse.example.test");
+      await admin
+        .getByLabel("出口凭据", { exact: true })
+        .fill("fixture-reverse-hub-secret");
+      await admin.getByLabel("启用出口", { exact: true }).uncheck();
+      await admin
+        .getByRole("button", { name: "保存出口", exact: true })
+        .click();
+      await admin.locator("dialog").waitFor({ state: "detached" });
+      const managedHubPage = await (
+        await admin.request.get(base + "/api/v1/exits")
+      ).json();
+      const managedHub = managedHubPage.items.find(
+        (x) => x.name === `reverse-hub-${browserName}`,
+      );
+      assert.equal(managedHub.managed, true);
+      assert.equal(managedHub.reverse_hub, true);
+      assert.equal(managedHub.local_profile, "reverse-local");
+      assert.equal(managedHub.transport, "tls_simple");
+      assert.equal(managedHub.service_ready, false);
       await user.getByRole("link", { name: "转发规则", exact: true }).click();
       await user.getByRole("button", { name: "新增", exact: true }).click();
       await user.getByLabel("名称", { exact: true }).fill("managed draft");
@@ -1804,15 +2241,23 @@ try {
       assert.equal(managedRule.transport, "tls");
       assert.equal(managedRule.tunnel, undefined);
       assert.equal(managedRule.proxy_protocol.send, "v2");
-      await user.getByRole("row").filter({ hasText: "managed draft" })
-        .getByRole("button", { name: "编辑", exact: true }).click();
-      assert.equal(await user.getByLabel("转发方式", { exact: true }).count(), 0);
+      await user
+        .getByRole("row")
+        .filter({ hasText: "managed draft" })
+        .getByRole("button", { name: "编辑", exact: true })
+        .click();
+      assert.equal(
+        await user.getByLabel("转发方式", { exact: true }).count(),
+        0,
+      );
       await user.getByLabel("出口选择", { exact: true }).selectOption("");
       await save(user);
       const clearedRules = await (
         await user.request.get(base + "/api/v1/rules")
       ).json();
-      const clearedRule = clearedRules.items.find((rule) => rule.id === managedRule.id);
+      const clearedRule = clearedRules.items.find(
+        (rule) => rule.id === managedRule.id,
+      );
       assert.equal(clearedRule.transport, "direct");
       assert.equal(clearedRule.tunnel, undefined);
       assert.ok(!clearedRule.exit_group_id);
@@ -2092,9 +2537,13 @@ try {
           ]) {
             if (section === "probes") {
               // 探针是独立窗口，导航项会新开标签页；截图这里直接切过去。
-              await page.evaluate(() => { location.hash = "#/probes"; });
+              await page.evaluate(() => {
+                location.hash = "#/probes";
+              });
             } else {
-              await page.getByRole("link", { name: label, exact: true }).click();
+              await page
+                .getByRole("link", { name: label, exact: true })
+                .click();
             }
             await page.waitForTimeout(180);
             for (const [viewport, size] of [
@@ -2123,7 +2572,9 @@ try {
             }
             if (section === "probes") {
               // 探针是独立窗口，没有侧栏：截完图回外壳，后面的用例还要点导航。
-              await page.evaluate(() => { location.hash = "#/overview"; });
+              await page.evaluate(() => {
+                location.hash = "#/overview";
+              });
             }
           }
         }

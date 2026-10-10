@@ -113,7 +113,13 @@ Token 明文只在**创建或重置**的那一次响应里出现（库里只有 
 
 高级设置表单通过下拉菜单按需添加参数，按参数类型提供数值、开关、协议枚举、列表和设备组选择控件。新组默认不附加高级参数；添加 `max_fail`、`fail_timout_sec` 或 `protocol` 时分别预填 `3`、`30` 或 `tls`。已有配置按保存值载入，显式数值 `0` 在 API 响应中保留。折叠的 JSONC 兼容编辑器支持行注释、块注释、格式化与未知字段编辑；API 本身仅接受 JSON，注释由浏览器在提交前解析。浏览器将 `fail_timeout_sec` 兼容为文档原名 `fail_timout_sec`，若两者值冲突则拒绝提交。高级设置里的协议保存并回读为 `http`/`socks`，内部顶层策略仍使用 `app:http`/`app:socks`，首次编辑会带入旧组已有的应用屏蔽策略。
 
-上述字段说明描述参考配置的含义。当前组级运行时已接入应用协议屏蔽和 `disable_udp`；Host/Path、TLS 入站策略、UDP over TCP、IPv6 组、组级故障转移与反向隧道参数在此接口完成结构化保存及校验，尚未接入 Agent 执行。规则自身已有的 TLS、故障转移和反向隧道能力不代表这些组级字段已经生效。
+完整组策略通过 `advanced.policy_version=2` 显式激活；旧配置缺省为 `0`，保留兼容行为。新建组的高级编辑器默认选中激活，存量组必须显式开启。API 对省略的故障参数使用 `max_fail=3`、`fail_timout_sec=30`，显式零保留；同时接受 `fail_timeout_sec` 输入别名并拒绝冲突值。激活时拒绝未知字段、非法匹配器、无效设备组引用和 TLS 对象中的未知键。
+
+控制面编译 `Rule.effective_policy`、`route_candidates`、`Config.services` 和 `blocked_rules`；这些字段及隧道 `inspect`、`service_id`、逐跳 `prefer_ipv6` 都由控制面生成，规则写入 API 不接受用户注入。入口合并入口、出口和链式组策略；TCP Host/SNI 首包检查和 HTTP/1、明文 HTTP/2 逐请求过滤在计量前执行。出口解封装后独立检查业务侧，激活完整出口组策略要求 `Exit.managed=true` 和相应节点能力，否则撤销路线并显示原因。HTTPS Path、HTTP3、ECH 内层名称不在可见范围。
+
+`POST /groups/{id}/advanced-preview` 供管理员预览高级设置草稿，返回规则、策略摘要和阻断原因。`GET /rules/{id}/diagnose` 返回有效策略和上报的最近候选、地址族、载波、拒绝连接计数。ACK 的 `services` 与 `rule_statuses` 独立于心跳；`service_ready` 表示节点托管服务就绪，不能用在线心跳替代。参数语义、部署示例和验证范围见 [高级设置完整技术实现方案](advanced-settings-implementation-plan.md) 与 [实施交付说明](advanced-settings-implementation.md)。本地代码实现与上线发版状态分开记录。
+
+托管出口扩展字段为 `managed`、`reverse_hub`、`local_profile`、`listen`，仅管理员配置。反向关系由出口组的 `reverse_group` 指向入口组 hub，支持 `tls|tls_simple|ws|http`。节点使用 `-service-profiles` 加载本地证书、CA 和精确监听许可；控制面只下发标签，私钥不离开节点。服务授权限定规则 ID、TCP/UDP 和目标，区分载波与业务凭据。组、规则、出口和账号授权改变会发布新的依赖配置，失效授权关闭旧会话。
 
 兼容已有数据库和旧客户端的混合 `blocked_protocols`：读取/保存时把 `network:*`、`transport:*` 和历史裸值迁移到各自字段；历史裸 `http` 仍指 HTTP 隧道，裸 `socks` 转为 `app:socks`。保存后仅持久化拆分后的字段。规则仍只允许进一步收紧应用屏蔽；下发 Agent 时合并组与规则的应用拒绝项，转发限制不进入应用识别器。未知应用默认允许；不会检查未解密 HTTPS 路径。
 
@@ -137,7 +143,7 @@ Token 明文只在**创建或重置**的那一次响应里出现（库里只有 
 
 服务端保存前检查重复地址与跳数，实际连接再检查出口稳定身份和下一跳授权。列表与创建/修改返回都隐藏每跳 token；只在完整身份（承载/地址/证书名）不变时保留省略的旧 token。分配节点的配置接口才下发凭据。出口需配置证书、稳定唯一 ID 和下一跳白名单，业务目标由规则指定，无需在出口另设目标白名单，见 [Agent 文档](../examples/agent-README.md)。
 
-故障转移规则可附 `backends:[{target,weight,disabled}]`（TCP、最多16个、权重1–100）。Agent 使用加权调度；连接失败剔除，10秒健康检查恢复，只影响新连接。TLS 共享端口使用 `shared_tls:{parent_id,server_name}`；母子规则必须同账号/组/节点/监听地址，SNI 必须精确小写 DNS 名称，空/未匹配 SNI 关闭连接，客户端验证原始回源 TLS。
+故障转移规则可附 `backends:[{target,weight,disabled}]`（TCP、最多16个、权重1–100）。Agent 使用加权调度；旧配置首次失败后冷却10秒，完整策略使用入口组阈值与冷却，并通过新业务触发单次半开恢复。`max_fail=0` 首次失败摘除，冷却为0时保留1秒最小探测间隔。同出口组、同倍率、同策略候选可立即用于失败的新连接，已发送业务不会重播；单目标没有可创造的备用目标。TLS 共享端口使用 `shared_tls:{parent_id,server_name}`；母子规则必须同账号/组/节点/监听地址，SNI 必须精确小写 DNS 名称，空/未匹配 SNI 关闭连接，客户端验证原始回源 TLS。
 
 **历史探针**
 

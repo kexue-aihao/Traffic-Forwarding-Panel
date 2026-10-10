@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/policy"
 	"math/big"
 	"math/rand/v2"
 	"net"
@@ -96,6 +97,9 @@ func validateGroupAdvanced(a *contract.GroupAdvanced) error {
 	if a == nil {
 		return nil
 	}
+	if a.PolicyVersion != 0 && a.PolicyVersion != contract.GroupPolicyVersion {
+		return errors.New("unsupported group policy version")
+	}
 	a.AllowedHost = cleanGroupList(a.AllowedHost)
 	a.BlockedHost = cleanGroupList(a.BlockedHost)
 	a.BlockedPath = cleanGroupList(a.BlockedPath)
@@ -120,6 +124,19 @@ func validateGroupAdvanced(a *contract.GroupAdvanced) error {
 	for _, protocol := range a.BlockedProtocol {
 		if !contains([]string{"http", "socks", "app:http", "app:socks"}, protocol) {
 			return errors.New("不支持的屏蔽协议")
+		}
+	}
+	if a.PolicyVersion == contract.GroupPolicyVersion {
+		g := contract.Group{Advanced: a}
+		layer := groupLayer(g)
+		if err := policy.NormalizeLayers([]contract.InboundPolicy{layer}); err != nil {
+			return err
+		}
+		a.AllowedHost = layer.AllowedHosts
+		a.BlockedHost = layer.BlockedHosts
+		a.BlockedPath = layer.BlockedPaths
+		if _, err := policy.ParseTLS(a.TLS); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -387,7 +404,7 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, transport := range g.DisabledTransports {
-		if !contains([]string{"direct", "direct-tls", "secure-direct", "tls", "ws", "wss", "http", "quic"}, transport) {
+		if !contains([]string{"direct", "direct-tls", "secure-direct", "tls", "tls_simple", "ws", "wss", "http", "quic"}, transport) {
 			fail(w, 400, "unsupported disabled transport")
 			return
 		}
@@ -425,13 +442,23 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		if err := s.validateGroupTypeTx(r.Context(), tx, g, create); err != nil {
 			return err
 		}
+		if activeAdvanced(g) && len(g.Advanced.ReverseGroup) > 0 && !g.CanHostExit() {
+			return errors.New("reverse_group requires an exit group")
+		}
 		if g.Advanced != nil {
 			for _, groupID := range append(append([]string{}, g.Advanced.IPv6Group...), g.Advanced.ReverseGroup...) {
+				if groupID == g.ID && activeAdvanced(g) {
+					return errors.New("advanced group reference cannot point to itself")
+				}
 				if groupID != g.ID {
 					// Legacy advanced settings can contain unresolved IDs. Lock
 					// existing references without making those settings invalid.
-					if _, err := s.groupTx(r.Context(), tx, groupID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+					ref, err := s.groupTx(r.Context(), tx, groupID)
+					if err != nil && (activeAdvanced(g) || !errors.Is(err, sql.ErrNoRows)) {
 						return err
+					}
+					if activeAdvanced(g) && (ref.OwnerID != "" && ref.OwnerID != g.OwnerID || contains(g.Advanced.ReverseGroup, groupID) && !ref.CanEnter()) {
+						return errors.New("invalid advanced group reference")
 					}
 				}
 			}
@@ -465,7 +492,7 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 				return e
 			}
 		}
-		if _, e := tx.ExecContext(r.Context(), s.q(`UPDATE cp_nodes SET desired_version=desired_version+1 WHERE id IN(SELECT node_id FROM cp_node_groups WHERE group_id=?)`), g.ID); e != nil {
+		if e := s.publishGroupDependencies(r.Context(), tx); e != nil {
 			return e
 		}
 		return s.AuditTx(r.Context(), tx, actor.ID, "group.save", g.ID)
@@ -607,6 +634,8 @@ func redact(rule *contract.Rule) {
 	if rule.ExitGroupID != "" {
 		rule.Tunnel = nil
 	}
+	rule.EffectivePolicy = nil
+	rule.RouteCandidates = nil
 	rule.Lease = nil
 	rule.StandbyLease = nil
 	rule.UDP = nil
@@ -648,7 +677,7 @@ func (s *Server) allocateListen(ctx context.Context, tx *sql.Tx, groupPayload, n
 }
 
 func validateRule(rule contract.Rule) (int, error) {
-	if len(rule.Name) > 190 || strings.TrimSpace(rule.Name) == "" || !contains([]string{"tcp", "udp"}, rule.Network) || !contains([]string{"direct", "direct-tls", "secure-direct", "tls", "ws", "wss", "http", "quic"}, rule.Transport) {
+	if len(rule.Name) > 190 || strings.TrimSpace(rule.Name) == "" || !contains([]string{"tcp", "udp"}, rule.Network) || !contains([]string{"direct", "direct-tls", "secure-direct", "tls", "tls_simple", "ws", "wss", "http", "quic"}, rule.Transport) {
 		return 0, errors.New("invalid name, network or transport")
 	}
 	host, p, e := net.SplitHostPort(rule.Listen)
@@ -724,6 +753,22 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &rule) {
 		return
 	}
+	if rule.Tunnel != nil {
+		if rule.Tunnel.Inspect || rule.Tunnel.ServiceID != "" {
+			fail(w, 400, "runtime inspection fields are server-generated")
+			return
+		}
+		for _, h := range rule.Tunnel.Chain {
+			if h.Inspect || h.PreferIPv6 {
+				fail(w, 400, "runtime hop fields are server-generated")
+				return
+			}
+		}
+	}
+	if rule.EffectivePolicy != nil || len(rule.RouteCandidates) > 0 {
+		fail(w, 400, "runtime policy fields are server-generated")
+		return
+	}
 	actor, _ := UserFromContext(r.Context())
 	rule.ID = r.PathValue("id")
 	create := rule.ID == ""
@@ -749,6 +794,19 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 	reply(w, status, rule)
 }
 func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User, rule *contract.Rule, create bool) error {
+	if rule.EffectivePolicy != nil || len(rule.RouteCandidates) > 0 {
+		return errors.New("runtime fields are server-generated")
+	}
+	if rule.Tunnel != nil {
+		if rule.Tunnel.Inspect || rule.Tunnel.ServiceID != "" {
+			return errors.New("runtime inspection fields are server-generated")
+		}
+		for _, h := range rule.Tunnel.Chain {
+			if h.Inspect || h.PreferIPv6 {
+				return errors.New("runtime hop fields are server-generated")
+			}
+		}
+	}
 	query := "SELECT id FROM cp_nodes WHERE id=?"
 	if s.Store.Dialect != "sqlite" {
 		query += " FOR UPDATE"
@@ -860,6 +918,13 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 			return e
 		}
 	}
+	var ownerRole string
+	if e = tx.QueryRowContext(ctx, s.q("SELECT role FROM cp_users WHERE id=?"), rule.UserID).Scan(&ownerRole); e != nil {
+		return e
+	}
+	if activeAdvanced(g) && (g.Advanced.TLSInboundPolicy > 0 && rule.Network != "tcp" || g.Advanced.TLSInboundPolicy == 2 && ownerRole != "admin" && sharedParent(*rule) == "") {
+		return errors.New("TLS inbound group policy denied")
+	}
 	if port < g.PortMin || port > g.PortMax || entryPolicyDenied(g, *rule) {
 		return errors.New("group policy denied")
 	}
@@ -935,7 +1000,7 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 			return errConflict
 		}
 	}
-	if _, e = tx.ExecContext(ctx, s.q(`UPDATE cp_nodes SET desired_version=desired_version+1 WHERE id=?`), rule.NodeID); e != nil {
+	if _, e = tx.ExecContext(ctx, s.q(`UPDATE cp_nodes SET desired_version=desired_version+1`)); e != nil {
 		return e
 	}
 	return s.AuditTx(ctx, tx, actor.ID, "rule.save", rule.ID)
@@ -959,7 +1024,7 @@ func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 		if err := s.validateSharedTx(r.Context(), tx, contract.Rule{ID: r.PathValue("id"), NodeID: node}); err != nil {
 			return err
 		}
-		if _, e := tx.ExecContext(r.Context(), s.q(`UPDATE cp_nodes SET desired_version=desired_version+1 WHERE id=?`), node); e != nil {
+		if e := s.publishGroupDependencies(r.Context(), tx); e != nil {
 			return e
 		}
 		var revision int64
@@ -1018,8 +1083,39 @@ func (s *Server) diagnoseRule(w http.ResponseWriter, r *http.Request) {
 	add("group_authorization", membership > 0 || actor.Role == "admin", "current group membership")
 	add("enabled", rule.Enabled, "rule enabled")
 	var supported, withinLimit bool
+	var compiled *contract.EffectivePolicy
+	var runtimeStatus *contract.RuleRuntimeStatus
+	var policyError string
 	err := s.Store.Write(r.Context(), storage.Background, func(tx *sql.Tx) error {
 		var err error
+		var raw string
+		var node contract.Node
+		if err := tx.QueryRowContext(r.Context(), s.q("SELECT payload FROM cp_nodes WHERE id=?"), nodeID).Scan(&raw); err != nil {
+			return err
+		}
+		if err := json.Unmarshal([]byte(raw), &node); err != nil {
+			return err
+		}
+		groups, e := loadPolicyGroups(r.Context(), tx)
+		if e != nil {
+			return e
+		}
+		var role string
+		if e = tx.QueryRowContext(r.Context(), s.q("SELECT role FROM cp_users WHERE id=?"), owner).Scan(&role); e != nil {
+			return e
+		}
+		if e = compileGroupPolicy(&rule, role, groups, node.Capabilities); e != nil {
+			policyError = e.Error()
+		} else {
+			compiled = rule.EffectivePolicy
+		}
+		for _, status := range node.RuleStatuses {
+			if status.RuleID == rule.ID {
+				copy := status
+				runtimeStatus = &copy
+				break
+			}
+		}
 		supported, err = s.resourceCapabilities(r.Context(), tx, rule)
 		if err != nil {
 			return err
@@ -1035,6 +1131,7 @@ func (s *Server) diagnoseRule(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "diagnostic unavailable")
 		return
 	}
+	add("advanced_policy", policyError == "", policyError)
 	add("plan_rule_limit", withinLimit, "rule eligible within current plan limit")
 	add("agent_feature_capability", supported, "Agent must support the rule features in use")
 	lastSeenAt := time.Unix(lastSeen, 0).UTC()
@@ -1050,7 +1147,7 @@ func (s *Server) diagnoseRule(w http.ResponseWriter, r *http.Request) {
 		applyError = "node reported a configuration error"
 	}
 	add("agent_error", applyError == "", applyError)
-	reply(w, 200, map[string]any{"rule_id": rule.ID, "node_id": nodeID, "desired_version": desired, "applied_version": applied, "checks": checks, "generated_at": now})
+	reply(w, 200, map[string]any{"rule_id": rule.ID, "node_id": nodeID, "desired_version": desired, "applied_version": applied, "checks": checks, "generated_at": now, "effective_policy": compiled, "runtime": runtimeStatus})
 }
 
 // Callers hold the group row lock. A locking read avoids stale MySQL snapshots.

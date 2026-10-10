@@ -196,7 +196,7 @@ func (a *Agent) syncConfig(ctx context.Context) error {
 		return e
 	}
 	applyErr := a.Runtime.Apply(c, true)
-	ack := contract.Ack{Capabilities: a.capabilities(), AgentVersion: Version, Version: c.Version, AppliedVersion: a.Runtime.Version()}
+	ack := contract.Ack{RuleStatuses: a.Runtime.PolicyStatuses(), Services: a.Runtime.Services.Statuses(), Capabilities: a.capabilities(), AgentVersion: Version, Version: c.Version, AppliedVersion: a.Runtime.Version()}
 	if applyErr != nil {
 		ack.Error = applyErr.Error()
 	}
@@ -327,5 +327,5 @@ func (a *Agent) retire(ctx context.Context) error {
 }
 
 func capabilities() []string {
-	return []string{"tcp", "udp", "direct", "direct-tls", "secure-direct", "secure-direct-v1", "tls", "ws", "wss", "http", "chain:3", "resource-limits-v1", "advanced-routing-v1", "proxy-protocol-v1", "diagnostics-v1", "block:http", "block:socks", "looking-glass-v1", "probe", "obfuscation-v1", "obfuscation:random-padding", "obfuscation:timing-perturb", "obfuscation:tls-mimic", "udp-credit-v1", "udp-datagram-v1", "lease-set-v1"}
+	return []string{"tcp", "udp", "direct", "direct-tls", "secure-direct", "secure-direct-v1", "tls", "ws", "wss", "http", "chain:3", "resource-limits-v1", "advanced-routing-v1", "proxy-protocol-v1", "diagnostics-v1", "block:http", "block:socks", "looking-glass-v1", "probe", "obfuscation-v1", "obfuscation:random-padding", "obfuscation:timing-perturb", "obfuscation:tls-mimic", "udp-credit-v1", "udp-datagram-v1", "lease-set-v1", "group-policy-v2", "inbound-inspection-v1", "http-stream-filter-v1", "peer-address-policy-v1", "route-failover-v1", "managed-services-v1", "reverse-group-v1", "reverse:tls_simple", "tls_simple"}
 }

@@ -35,6 +35,8 @@ UNIT_PATH="/etc/systemd/system/tfp-agent.service"
 MODE="agent"
 UNINSTALL="no"
 WAIT_SECONDS=30
+SERVICE_PROFILES=""
+MIGRATE_SERVICES="no"
 
 # 出口模式
 EXIT_SERVER_NAME=""
@@ -293,6 +295,10 @@ usage() {
   -O <混淆策略>      secure-direct 必填：random-padding / timing-perturb / tls-mimic
   -P <JSON>          混淆参数 JSON（可选）
 
+托管隧道服务
+  -F <本地JSON>    安装证书、CA 标签与监听地址许可 profile（仅 agent 模式）
+  -M              配合 -F 停用旧 tfp-exit 服务，迁移到普通 Agent 托管
+
 其它
   系统            Debian / Ubuntu、RHEL / Rocky / AlmaLinux / Fedora、Arch / Manjaro
                   需要运行中的 systemd；缺少依赖时使用 apt、dnf、yum 或 pacman 安装
@@ -301,7 +307,7 @@ usage() {
 USAGE
 }
 
-while getopts ":t:u:n:a:c:s:m:S:e:C:K:q:w:l:D:p:O:P:xh" opt; do
+while getopts ":t:u:n:a:c:s:m:S:e:C:K:q:w:l:D:p:O:P:F:Mxh" opt; do
   case "$opt" in
     t) TOKEN="$OPTARG" ;;
     u) PANEL_URL="$OPTARG" ;;
@@ -321,6 +327,8 @@ while getopts ":t:u:n:a:c:s:m:S:e:C:K:q:w:l:D:p:O:P:xh" opt; do
     p) EXIT_TRANSPORT="$OPTARG" ;;
     O) EXIT_OBFUSCATION="$OPTARG" ;;
     P) EXIT_OBFUSCATION_PARAMS="$OPTARG" ;;
+    F) SERVICE_PROFILES="$OPTARG" ;;
+    M) MIGRATE_SERVICES="yes" ;;
     x) UNINSTALL="yes" ;;
     h) usage; exit 0 ;;
     \?) die "未知参数 -$OPTARG（用 -h 查看用法）" ;;
@@ -380,6 +388,13 @@ if [ "$UNINSTALL" != "yes" ]; then
   fi
 fi
 
+if [ -n "$SERVICE_PROFILES" ]; then
+  [ "$MODE" = "agent" ] || die "托管 profile 仅用于 agent 模式"
+  case "$SERVICE_PROFILES" in /*) ;; *) die "profile 必须使用本地绝对路径" ;; esac
+  [ -r "$SERVICE_PROFILES" ] || die "无法读取本地 service profile"
+fi
+[ "$MIGRATE_SERVICES" != "yes" ] || [ -n "$SERVICE_PROFILES" ] || die "-M 需要同时指定 -F"
+
 [ "$(id -u)" -eq 0 ] || die "需要 root 权限：请用 sudo 重新执行"
 [ "$(uname -s)" = "Linux" ] || die "本脚本只支持 Linux 设备"
 command -v systemctl >/dev/null 2>&1 || die "本机没有 systemd，无法安装为服务；请自行部署 Agent"
@@ -398,6 +413,11 @@ if [ "$UNINSTALL" = "yes" ]; then
   systemctl daemon-reload
   echo "已卸载。状态目录 $STATE_DIR 保留 —— 里面是节点身份，删除它等于让本机重新注册。"
   exit 0
+fi
+
+if [ -n "$SERVICE_PROFILES" ] && systemctl is-active --quiet tfp-exit.service; then
+  [ "$MIGRATE_SERVICES" = "yes" ] || die "旧出口服务仍占用端口；迁移时使用 -M -F，先配置相同端口的本地许可"
+  systemctl disable --now tfp-exit.service
 fi
 
 # ── 架构探测 ────────────────────────────────────────────────────────
@@ -508,6 +528,18 @@ fi
 
 install -d -m 0755 "$ENV_DIR"
 install -d -m 0700 "$STATE_DIR"
+PROFILE_ARG=""
+if [ -n "$SERVICE_PROFILES" ]; then
+  if [ "$SERVICE_PROFILES" != "$ENV_DIR/service-profiles.json" ]; then
+    install -m 0600 "$SERVICE_PROFILES" "$ENV_DIR/service-profiles.json"
+  else
+    chmod 0600 "$ENV_DIR/service-profiles.json"
+  fi
+  restore_contexts "$ENV_DIR/service-profiles.json"
+fi
+if [ -f "$ENV_DIR/service-profiles.json" ]; then
+  PROFILE_ARG=" -service-profiles $ENV_DIR/service-profiles.json"
+fi
 # 令牌只落在这一个 0600 文件里，不进 unit、不进命令行（命令行对同机其他用户可见）
 umask 077
 printf 'TFP_ENROLLMENT_TOKEN=%s\n' "$TOKEN" > "$ENV_DIR/agent.env"
@@ -537,7 +569,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$ENV_DIR/agent.env
-ExecStart=$BIN_PATH -panel $PANEL_URL -name $NODE_NAME -state $STATE_DIR/agent-state.json -disk / -enable-terminal -enable-uninstall$CA_ARG
+ExecStart=$BIN_PATH -panel $PANEL_URL -name $NODE_NAME -state $STATE_DIR/agent-state.json -disk / -enable-terminal -enable-uninstall$CA_ARG$PROFILE_ARG
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576

@@ -166,6 +166,9 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request) {
 		} else if count != 1 {
 			return errConflict
 		}
+		if err := s.publishGroupDependencies(ctx, tx); err != nil {
+			return err
+		}
 		return s.AuditTx(ctx, tx, actor.ID, "group.delete", target)
 	})
 	if err != nil {

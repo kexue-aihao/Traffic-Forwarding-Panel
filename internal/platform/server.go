@@ -408,6 +408,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/groups", s.RequireUser(s.groups))
 	mux.HandleFunc("POST /api/v1/groups", s.admin(s.saveGroup))
 	mux.HandleFunc("POST /api/v1/my-exit-groups", s.RequireUser(s.saveGroup))
+	mux.HandleFunc("POST /api/v1/groups/{id}/advanced-preview", s.admin(s.groupPolicyPreview))
 	mux.HandleFunc("PUT /api/v1/groups/{id}", s.admin(s.saveGroup))
 	mux.HandleFunc("DELETE /api/v1/groups/{id}", s.admin(s.deleteGroup))
 	mux.HandleFunc("GET /api/v1/groups/{id}/join-key", s.RequireUser(s.groupJoinKey))

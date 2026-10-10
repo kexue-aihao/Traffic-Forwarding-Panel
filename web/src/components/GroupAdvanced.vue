@@ -20,9 +20,19 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ close: []; saved: [group: Group] }>();
 const busy = ref(false);
+const activated = ref(
+  !props.group.advanced ||
+    Number((props.group.advanced as Settings).policy_version) === 2,
+);
+const preview = ref<{
+  rules: { rule_id: string; status: string; reason?: string }[];
+  notes: string[];
+} | null>(null);
+const previewError = ref("");
 const error = ref("");
 const settings = ref<Settings>(initialGroupAdvanced(props.group));
 const initial = JSON.stringify(settings.value);
+const initialActivation = activated.value;
 const rawText = ref(formatGroupAdvanced(settings.value));
 const rawBaseline = ref(rawText.value);
 const tlsDraft = ref(
@@ -34,6 +44,7 @@ const newField = ref("");
 const listDrafts = ref<Record<string, string>>(initialListDrafts());
 const dirty = computed(
   () =>
+    activated.value !== initialActivation ||
     JSON.stringify(settings.value) !== initial ||
     rawText.value !== rawBaseline.value ||
     (Object.hasOwn(settings.value, "tls") &&
@@ -64,6 +75,7 @@ const configuredKeys = new Set(
     section.fields.map((field) => field.key),
   ),
 );
+configuredKeys.add("policy_version");
 const unknownKeys = computed(() =>
   Object.keys(settings.value).filter((key) => !configuredKeys.has(key)),
 );
@@ -154,7 +166,13 @@ function toggleGroup(key: string, value: string, enabled: boolean) {
 }
 function groupChoices(key: string) {
   const choices = props.groups
-    .filter((candidate) => candidate.id !== props.group.id)
+    .filter(
+      (candidate) =>
+        candidate.id !== props.group.id &&
+        (!activated.value ||
+          key !== "reverse_group" ||
+          ["", "entry"].includes(String(candidate.type || ""))),
+    )
     .map((candidate) => ({
       id: String(candidate.id),
       name: String(candidate.name),
@@ -196,6 +214,7 @@ function currentSettings(
   tlsSource = tlsDraft.value,
 ): Settings {
   const next = JSON.parse(JSON.stringify(source)) as Settings;
+  next.policy_version = activated.value ? 2 : 0;
   for (const key of ["max_fail", "fail_timout_sec"]) {
     if (!Object.hasOwn(next, key)) continue;
     const value = next[key];
@@ -222,6 +241,18 @@ function currentSettings(
   return parseGroupAdvanced(JSON.stringify(next));
 }
 
+async function loadPreview() {
+  previewError.value = "";
+  try {
+    preview.value = await api(
+      `/groups/${encodeURIComponent(String(props.group.id))}/advanced-preview`,
+      "POST",
+      { advanced: currentSettings() },
+    );
+  } catch (e) {
+    previewError.value = errorText(e);
+  }
+}
 async function save() {
   if (busy.value) return;
   error.value = "";
@@ -272,6 +303,36 @@ async function save() {
   >
     <p class="advanced-group muted small">{{ group.name }}</p>
     <form @submit.prevent="save">
+      <label class="check advanced-check"
+        ><input
+          v-model="activated"
+          type="checkbox"
+          :disabled="busy"
+          aria-label="启用完整高级策略"
+        />启用完整高级策略</label
+      >
+      <p class="muted small">
+        {{
+          activated
+            ? "保存后下发完整策略；节点能力不足的规则将停止并显示原因。"
+            : "保留旧版行为。尚未激活的 Host、Path、地址和反向配置不会自动执行。"
+        }}
+      </p>
+      <p class="muted small">
+        TCP 检查可见 Host/SNI 和明文 HTTP 路径；HTTPS 路径不可见。直连 UDP
+        保持原生传输。反向服务须先配置托管 hub 和节点证书。
+      </p>
+      <button type="button" :disabled="busy" @click="loadPreview">
+        预览策略影响
+      </button>
+      <p v-if="previewError" class="error">{{ previewError }}</p>
+      <div v-if="preview" class="muted small" aria-label="策略影响预览">
+        <p v-if="!preview.rules.length">无适用规则</p>
+        <p v-for="item in preview.rules" :key="item.rule_id">
+          {{ item.rule_id }} · {{ item.status }} {{ item.reason || "" }}
+        </p>
+        <p v-for="note in preview.notes" :key="note">{{ note }}</p>
+      </div>
       <div class="editor-heading">
         <label for="group-advanced-add">额外设置参数</label>
         <span class="muted small">按需配置</span>
