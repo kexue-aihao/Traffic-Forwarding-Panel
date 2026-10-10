@@ -226,6 +226,9 @@
               }
             ]
           },
+          "upgrade_key_sha256": {
+            "type": "string"
+          },
           "version": {
             "format": "int64",
             "type": "integer"
@@ -235,6 +238,81 @@
           "version",
           "applied_version",
           "error"
+        ],
+        "type": "object"
+      },
+      "AgentUpdateSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "public_key_sha256": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "release_version": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "version",
+          "release_version",
+          "available",
+          "reason",
+          "public_key_sha256"
+        ],
+        "type": "object"
+      },
+      "AgentUpdateSettingsChange": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "version"
+        ],
+        "type": "object"
+      },
+      "AgentUpdateStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "release": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Upgrade"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "target_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "target_version"
         ],
         "type": "object"
       },
@@ -2663,6 +2741,9 @@
                 "type": "null"
               }
             ]
+          },
+          "upgrade_key_sha256": {
+            "type": "string"
           }
         },
         "required": [
@@ -4472,6 +4553,9 @@
             "type": "string"
           },
           "token": {
+            "type": "string"
+          },
+          "upgrade_key_sha256": {
             "type": "string"
           }
         },
@@ -6952,6 +7036,102 @@
           }
         ],
         "summary": "Manually confirm a transfer to a configured Telegram wallet address",
+        "x-role": "admin"
+      }
+    },
+    "/agent-update-settings": {
+      "get": {
+        "operationId": "get_agent-update-settings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentUpdateSettings"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Read automatic Agent update policy",
+        "x-role": "admin"
+      },
+      "put": {
+        "operationId": "put_agent-update-settings",
+        "parameters": [
+          {
+            "description": "Required with Cookie mutations, together with matching Origin; Bearer requests exempt",
+            "in": "header",
+            "name": "X-Requested-With",
+            "schema": {
+              "const": "fetch"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentUpdateSettingsChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentUpdateSettings"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Update automatic Agent update policy",
         "x-role": "admin"
       }
     },
@@ -10148,6 +10328,55 @@
           }
         ],
         "summary": "One-time node enrollment valid for 15 minutes",
+        "x-role": "admin"
+      }
+    },
+    "/nodes/{id}/agent-update": {
+      "get": {
+        "operationId": "get_nodes_id_agent-update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentUpdateStatus"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Failure; some auth failures are plain text. 409 state conflict/payment_uncertain, 422 unsupported operation, 500 not_implemented when the selected protocol lacks the capability."
+          }
+        },
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "summary": "Read node automatic update status and signed release",
         "x-role": "admin"
       }
     },

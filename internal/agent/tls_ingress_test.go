@@ -360,6 +360,9 @@ func TestTLSIngressIsolationAndHotRoutes(t *testing.T) {
 			if e := exchange(ac, "renewed"); e != nil {
 				t.Fatal(e)
 			}
+			if e := store.FlushCredits(); e != nil {
+				t.Fatal(e)
+			}
 			if used(store, renewed.ID) == 0 || used(store, b.Lease.ID) == 0 {
 				t.Fatal("missing per-route metering")
 			}

@@ -11,7 +11,10 @@
 package agentdist
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -81,6 +84,19 @@ func Register(mux *http.ServeMux, dir string) {
 			return
 		}
 		defer f.Close()
+		// Signed automatic upgrades pin both version and bytes. A stale task
+		// must fail instead of receiving a different binary after panel rollout.
+		if expected := r.URL.Query().Get("sha256"); expected != "" {
+			h := sha256.New()
+			if _, err := io.Copy(h, f); err != nil || hex.EncodeToString(h.Sum(nil)) != expected {
+				notFound(w, "requested Agent release is no longer available")
+				return
+			}
+			if _, err := f.Seek(0, 0); err != nil {
+				notFound(w, "agent binary unavailable")
+				return
+			}
+		}
 		info, err := f.Stat()
 		if err != nil || info.IsDir() {
 			notFound(w, "agent binary unavailable")

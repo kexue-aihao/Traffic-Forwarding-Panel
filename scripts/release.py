@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -63,6 +64,16 @@ def main():
                 if f"vcs.revision={commit}" not in build_info or "vcs.modified=false" not in build_info:
                     raise RuntimeError("binary VCS metadata does not match the clean release commit")
                 binaries[app] = binary
+            # Every panel bundle carries both architectures so a single panel
+            # can update a mixed amd64/arm64 fleet without external downloads.
+            shutil.copyfile(binaries["agent"], work / f"agent-linux-{arch}")
+            other_arch = "arm64" if arch == "amd64" else "amd64"
+            subprocess.run([
+                "go", "build", "-trimpath", "-buildvcs=true", "-ldflags",
+                f"-s -w -X {MODULE}/internal/agent.Version={version}",
+                "-o", str(work / f"agent-linux-{other_arch}"), "./cmd/agent",
+            ], cwd=ROOT, env=dict(env, GOARCH=other_arch), check=True)
+            subprocess.run(["go", "run", "./cmd/agentrelease", "-dir", str(work), "-version", version], cwd=ROOT, check=True)
             info = json.dumps({
                 "version": version, "commit": commit, "target": f"linux/{arch}",
                 "toolchain": toolchain, "commit_timestamp": epoch, "cgo_enabled": False,
@@ -76,6 +87,10 @@ def main():
 
                 for app, path in binaries.items():
                     add(app, path.read_bytes(), 0o755)
+                for target_arch in ("amd64", "arm64"):
+                    filename = f"agent-linux-{target_arch}"
+                    add(filename, (work / filename).read_bytes(), 0o755)
+                add("agent-release.json", (work / "agent-release.json").read_bytes(), 0o644)
                 for path in docs:
                     add(path, (ROOT / path).read_bytes(), 0o644)
                 add("BUILDINFO.json", info, 0o644)

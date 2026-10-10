@@ -16,6 +16,8 @@ const authorized = computed(() => !!access.value);
 const capabilities = computed(() => (props.node.capabilities as string[]) || []);
 const nodePath = `/nodes/${encodeURIComponent(String(props.node.id))}`;
 const release = ref({url: "", sha256: "", signature: "", version: "", os: String(props.node.os || "linux"), arch: String(props.node.arch || "amd64")});
+const autoUpdate = ref<{state: string; target_version: string; release?: typeof release.value} | null>(null);
+const updateLabels: Record<string, string> = {current: "已是面板对应版本", disabled: "自动升级已关闭", unavailable: "面板尚未准备升级产物或 HTTPS 地址", unsupported: "暂不支持此节点平台", requires_setup: "需重跑一次接入命令以配置升级公钥", version_skipped: "当前版本较新或无法比较，保留现有版本", waiting: "等待自动升级", pending: "等待节点", running: "升级中", staged: "等待新版本确认", succeeded: "升级完成", failed: "升级失败（自动重试最多三次）", rolled_back: "新版本启动失败，已恢复旧程序", cancelled: "升级已取消", expired: "升级任务已过期"};
 const output = ref("");
 const command = ref("");
 const connected = ref(false);
@@ -33,6 +35,11 @@ async function refresh() {
   try {
     const result = await api<{items: Operation[]}>(nodePath + "/operations");
     if (alive) operations.value = result.items;
+    const update = await api<NonNullable<typeof autoUpdate.value>>(nodePath + "/agent-update");
+    if (alive) {
+      autoUpdate.value = update;
+      if (update.release && !upgradeIntent) release.value = update.release;
+    }
     if (Date.now() >= accessExpiry.value) access.value = "";
   } catch (e) { if (alive) error.value = errorText(e); }
 }
@@ -120,7 +127,8 @@ onUnmounted(() => {alive = false; clearInterval(timer); socket?.close(); access.
     <section class="card">
       <h2>节点升级</h2>
       <p class="muted small">升级会中断现有连接。新进程未在 60 秒内完成配置同步时恢复旧版本。</p>
-      <p v-if="!capabilities.includes('upgrade-v1')" class="muted">节点尚未配置升级签名公钥。</p>
+      <p v-if="autoUpdate" class="muted">自动升级：{{ updateLabels[autoUpdate.state] || autoUpdate.state }}<span v-if="autoUpdate.target_version"> · 目标 {{ autoUpdate.target_version }}</span></p>
+      <p v-if="!capabilities.includes('upgrade-v1')" class="muted">节点尚未配置升级签名公钥，请重跑一次接入命令。</p>
       <form @submit.prevent="upgrade">
         <label>发布版本<input v-model="release.version" required maxlength="64" /></label>
         <label>下载地址<input v-model="release.url" type="url" required placeholder="https://releases.example.com/agent" /></label>

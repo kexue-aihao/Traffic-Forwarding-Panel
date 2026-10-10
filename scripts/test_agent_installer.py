@@ -3,7 +3,9 @@
 Uses the same temporary filesystem as the ACME tests. No package manager,
 system service, host file or public endpoint is changed.
 """
+import os
 import shutil
+import subprocess
 import unittest
 
 from test_agent_certificates import InstallerSandbox, shell_path
@@ -19,6 +21,40 @@ touch "$TFP_TEST_ROOT/dependencies-installed"
 
 
 class InstallerCompatibilityTests(InstallerSandbox):
+    @unittest.skipIf(os.name == "nt", "requires Linux executable inode semantics")
+    def test_reinstall_replaces_running_executable_atomically(self):
+        binary = self.root / "usr/local/bin/tfp-agent"
+        shutil.copyfile(shutil.which("sleep"), binary)
+        binary.chmod(0o755)
+        process = subprocess.Popen([str(binary), "30"])
+        try:
+            self.success(self.run_script(args=AGENT_ARGS))
+            self.assertIsNone(process.poll(), "the running old inode should survive replacement")
+            self.assertEqual(binary.read_bytes(), b"\x7fELFfixture")
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+
+    def test_auto_upgrade_key_pin_and_reinstall_across_distro_families(self):
+        for distro_id, related in (("debian", ""), ("ubuntu", "debian"), ("rocky", "rhel"), ("arch", "")):
+            with self.subTest(distro=distro_id):
+                self.distro(distro_id, related)
+                self.success(self.run_script(args=AGENT_ARGS))
+                public_key = self.root / "etc/tfp-agent/release-key.pub"
+                self.assertEqual(public_key.read_text().strip(), "A" * 43 + "=")
+                unit = (self.root / "etc/systemd/system/tfp-agent.service").read_text(encoding="utf-8")
+                self.assertIn("-release-key ", unit)
+                self.success(self.run_script(args=AGENT_ARGS))
+                changed = self.run_script(args=AGENT_ARGS, env={"RELEASE_KEY_VALUE": "B" * 43 + "="})
+                self.assertNotEqual(changed.returncode, 0)
+                self.assertIn("公钥已变化", changed.stderr)
+                self.assertEqual(public_key.read_text().strip(), "A" * 43 + "=")
+
+    def test_auto_upgrade_key_unavailable_keeps_legacy_install_working(self):
+        self.success(self.run_script(args=AGENT_ARGS, env={"RELEASE_KEY_UNAVAILABLE": "1"}))
+        unit = (self.root / "etc/systemd/system/tfp-agent.service").read_text(encoding="utf-8")
+        self.assertNotIn("-release-key ", unit)
+
     def test_private_inspection_and_business_profiles_across_distro_families(self):
         inspection = self.root / "private-inspection.json"
         business = self.root / "private-business.json"
@@ -231,7 +267,7 @@ command() {
         self.success(self.run_script(args=AGENT_ARGS, extra=("-c", "https://ca.example.com/root.pem"), env={"PRIVATE_CA": "1"}))
         calls = (self.root / "curl.log").read_text(encoding="utf-8").splitlines()
         panel_calls = [line for line in calls if "https://panel.example.com" in line]
-        self.assertEqual(len(panel_calls), 3)
+        self.assertEqual(len(panel_calls), 4)
         self.assertTrue(all("--cacert" in line for line in panel_calls))
         self.assertTrue((self.root / "etc/tfp-agent/ca.pem").exists())
 

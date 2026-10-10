@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -16,7 +18,15 @@ import (
 )
 
 // Version is injected at release build time using -ldflags -X.
-var Version = "0.1.41"
+var Version = "0.1.42"
+
+func (a *Agent) upgradeKeySHA256() string {
+	if a.Upgrader == nil {
+		return ""
+	}
+	h := sha256.Sum256(a.Upgrader.PublicKey)
+	return hex.EncodeToString(h[:])
+}
 
 func (a *Agent) capabilities() []string {
 	result := capabilities()

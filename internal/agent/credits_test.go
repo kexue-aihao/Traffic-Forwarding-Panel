@@ -165,7 +165,7 @@ func TestUDPCreditReserveFailureNeverAuthorizes(t *testing.T) {
 				t.Fatal("unconfirmed reservation authorized")
 			}
 			next := reopen(t, s)
-			maximum := int64(udpCreditSize)
+			maximum := int64(creditWindowSize)
 			if point == "append_before" {
 				maximum = 0
 			}

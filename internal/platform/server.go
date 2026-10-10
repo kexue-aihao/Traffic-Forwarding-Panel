@@ -49,17 +49,18 @@ type Options struct {
 	RetireLease       func(context.Context, *sql.Tx, string, string, int64) error
 }
 type Server struct {
-	Store       *storage.Store
-	opts        Options
-	mu          sync.RWMutex
-	probes      map[string]contract.Probe
-	lastContact map[string]time.Time
-	limits      map[string]limit
-	history     *probeHistory
-	taskMu      sync.Mutex
-	terminalMu  sync.Mutex
-	terminals   map[string]*terminalBridge
-	geo         *geoCache
+	agentUpdates *agentUpdates
+	Store        *storage.Store
+	opts         Options
+	mu           sync.RWMutex
+	probes       map[string]contract.Probe
+	lastContact  map[string]time.Time
+	limits       map[string]limit
+	history      *probeHistory
+	taskMu       sync.Mutex
+	terminalMu   sync.Mutex
+	terminals    map[string]*terminalBridge
+	geo          *geoCache
 }
 type limit struct {
 	since  time.Time
@@ -348,6 +349,10 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 func (s *Server) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /download/agent-release-key", s.agentReleaseKey)
+	mux.HandleFunc("GET /api/v1/agent-update-settings", s.admin(s.getAgentUpdateSettings))
+	mux.HandleFunc("PUT /api/v1/agent-update-settings", s.admin(s.putAgentUpdateSettings))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/agent-update", s.admin(s.getNodeAgentUpdate))
 	mux.HandleFunc("POST /api/v1/rules/{id}/network-diagnostic", s.RequireUser(s.createDiagnostic))
 	mux.HandleFunc("GET /api/v1/diagnostics/{id}", s.RequireUser(s.diagnostic))
 	mux.HandleFunc("POST /api/v1/agent/diagnostics", s.agent(s.claimDiagnostic))

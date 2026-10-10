@@ -114,6 +114,8 @@ type route struct {
 }
 
 func main() {
+	wire(reflect.TypeOf(platform.AgentUpdateSettings{}))
+	wire(reflect.TypeOf(platform.AgentUpdateStatus{}))
 	if _, err := os.Stat("go.mod"); err != nil {
 		if err = os.Chdir("../.."); err != nil {
 			panic(err)
@@ -127,6 +129,7 @@ func main() {
 	date := schema{"type": "string", "format": "date-time"}
 	ids := array(str)
 	model("Empty", schema{})
+	model("AgentUpdateSettingsChange", schema{"enabled": flag, "version": num}, "enabled", "version")
 	model("Login", schema{"captcha_id": str, "captcha_answer": str, "username": str, "password": schema{"type": "string", "writeOnly": true}}, "username", "password")
 	model("Session", schema{"user": ref("User")}, "user")
 	model("PasswordChange", schema{"current_password": str, "password": schema{"type": "string", "minLength": 12, "maxLength": 72}}, "current_password", "password")
@@ -414,6 +417,9 @@ func main() {
 		{"POST", "/nodes/{id}/looking-glass", "LookingGlassInput", "LookingGlass", "202", "admin", "Run ping, tcping or mtr from the node; argv is built server-side and never goes through a shell", false},
 		{"GET", "/looking-glass/{id}", "", "LookingGlass", "200", "user", "Poll one looking glass result", false},
 		{"POST", "/nodes/{id}/upgrade", "UpgradeOperationCreate", "NodeOperation", "201", "admin", "Create a signed Agent upgrade task", false},
+		{"GET", "/agent-update-settings", "", "AgentUpdateSettings", "200", "admin", "Read automatic Agent update policy", false},
+		{"PUT", "/agent-update-settings", "AgentUpdateSettingsChange", "AgentUpdateSettings", "200", "admin", "Update automatic Agent update policy", false},
+		{"GET", "/nodes/{id}/agent-update", "", "AgentUpdateStatus", "200", "admin", "Read node automatic update status and signed release", false},
 		{"GET", "/nodes/{id}/operations", "", "NodeOperationList", "200", "admin", "List node operation status", false},
 		{"POST", "/node-operations/{id}/cancel", "Empty", "", "204", "admin", "Cancel a pending node operation", false},
 		{"GET", "/node-operations/{id}/terminal", "", "", "101", "admin", "Authenticated browser terminal WebSocket", false},

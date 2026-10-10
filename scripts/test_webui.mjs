@@ -33,6 +33,7 @@ const summerUTC = "2026-07-14T16:20:30.000Z";
 const winterUTC = "2026-01-15T16:20:30.000Z";
 let tokenExpiry = "";
 let probeOperations = [];
+let agentUpdateSettings = {enabled: true, version: 1, release_version: "0.1.42", available: true, reason: ""};
 const uncertainOrder = {
   id: "uncertain-fixture",
   channel: "epay",
@@ -173,6 +174,11 @@ const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = raw ? JSON.parse(raw) : {};
+    if (path === "/agent-update-settings") {
+      if (req.method === "PUT") agentUpdateSettings = {...agentUpdateSettings, enabled: body.enabled, version: agentUpdateSettings.version + 1};
+      return json(agentUpdateSettings);
+    }
+    if (path === "/nodes/n1/agent-update") return json({state: "requires_setup", target_version: "0.1.42", release: {version: "0.1.42", os: "linux", arch: "amd64", url: "https://panel.example.com/download/agent/linux/amd64", sha256: "a".repeat(64), signature: "fixture-signature"}});
     if (path === "/exits" && req.method === "POST") {
       savedNativeExit = body;
       return json({ ...body, id: "exit-native", version: 1, tunnel: { ...body.tunnel, token: "" }, udp: { ...body.udp, token: "" } }, 201);
@@ -577,6 +583,8 @@ try {
         .locator("dialog")
         .filter({ hasText: "节点运维 · Fixture node" });
       await operationsDialog.waitFor();
+      await operationsDialog.getByText("自动升级：需重跑一次接入命令以配置升级公钥", {exact: false}).waitFor();
+      assert.equal(await operationsDialog.getByLabel("发布版本", {exact: true}).inputValue(), "0.1.42");
       assert.equal(
         await page.locator("dialog").count(),
         2,

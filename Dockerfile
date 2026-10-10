@@ -9,6 +9,10 @@ COPY . .
 RUN version="$(cat VERSION)" && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.Version=$version" -o /panel ./cmd/panel && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/agent.Version=$version" -o /agent ./cmd/agent && \
+    mkdir /agents && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/agent.Version=$version" -o /agents/agent-linux-amd64 ./cmd/agent && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/agent.Version=$version" -o /agents/agent-linux-arm64 ./cmd/agent && \
+    go run ./cmd/agentrelease -dir /agents -version "$version" && \
     mkdir /empty-data
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 ARG VERSION
@@ -21,10 +25,9 @@ LABEL org.opencontainers.image.title="Traffic Forwarding Panel" \
       org.opencontainers.image.revision=$REVISION
 COPY --from=build /panel /panel
 COPY --from=build /agent /agent
+COPY --from=build /agents/ /
 COPY --from=build /src/docs/protocol-dependency-notices.txt /licenses/protocol-dependency-notices.txt
-# 再放一份带平台后缀的副本：面板默认从这个目录（可执行文件所在目录）发布
-# Agent，裸 agent 只服务面板自身平台。要给别的架构的设备接入，把对应产物
-# 放进挂载目录并设置 TFP_AGENT_DIR。
+# 裸 agent 保留原生平台布局；/agents 已携带双架构产物和发布清单。
 COPY --from=build /agent /agent-linux-${TARGETARCH}
 COPY --from=build --chown=65532:65532 /empty-data /data
 USER 65532:65532

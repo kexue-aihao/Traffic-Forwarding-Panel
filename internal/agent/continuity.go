@@ -89,6 +89,21 @@ func waitMeter(ctx context.Context, config, state <-chan struct{}) error {
 	return nil
 }
 
+func waitCreditMeter(ctx context.Context, config, state <-chan struct{}) error {
+	// A full writer queue must not leave TCP asleep after its refill failed to
+	// enqueue. Retry slowly when there is no durable/config notification.
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-config:
+	case <-state:
+	case <-timer.C:
+	}
+	return nil
+}
+
 func (b *binding) awaitAvailable(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, renewalWait)
 	defer cancel()
@@ -127,8 +142,8 @@ func (b *binding) chargeCurrent(ctx context.Context, id, network string, up bool
 		if err != nil {
 			return err
 		}
-		if network == "udp" && rule.UDP != nil && rule.UDP.CreditWindows {
-			err = b.runtime.Store.TryUDPCharge(rule, until, up, n)
+		if network == "tcp" || network == "udp" && rule.UDP != nil && rule.UDP.CreditWindows {
+			err = b.runtime.Store.TryCreditCharge(rule, until, up, n)
 		} else {
 			err = b.runtime.Store.chargeContext(ctx, rule, until, up, n)
 		}
@@ -140,7 +155,7 @@ func (b *binding) chargeCurrent(ctx context.Context, id, network string, up bool
 		if network == "udp" {
 			return err
 		}
-		if err := waitMeter(ctx, changed, progress); err != nil {
+		if err := waitCreditMeter(ctx, changed, progress); err != nil {
 			return err
 		}
 	}

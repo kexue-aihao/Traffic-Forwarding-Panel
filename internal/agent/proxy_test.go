@@ -60,6 +60,9 @@ func TestProxyProtocolRelayAndMeter(t *testing.T) {
 			if got := <-source; got != "203.0.113.8:1234" {
 				t.Fatal(got)
 			}
+			if err := store.FlushCredits(); err != nil {
+				t.Fatal(err)
+			}
 			var total int64
 			for _, u := range store.Pending() {
 				total += u.UploadBytes + u.DownloadBytes

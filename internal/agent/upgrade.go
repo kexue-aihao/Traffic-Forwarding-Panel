@@ -35,8 +35,9 @@ type Upgrader struct {
 	Restart   func()
 }
 type upgradeJournal struct {
-	Operation contract.NodeOperation `json:"operation"`
-	Phase     string                 `json:"phase"`
+	Operation       contract.NodeOperation `json:"operation"`
+	Phase           string                 `json:"phase"`
+	CompanionActive bool                   `json:"companion_active,omitempty"`
 }
 
 func LoadReleaseKey(path string) (ed25519.PublicKey, error) {
@@ -224,6 +225,9 @@ func (u *Upgrader) install(j upgradeJournal) error {
 	if e = copyExecutable(u.Binary, u.Binary+".tfp-previous"); e != nil {
 		return e
 	}
+	if j.CompanionActive, e = upgradeCompanionActive(u.Binary); e != nil {
+		return e
+	}
 	j.Phase = "installing"
 	if e = u.save(j); e != nil {
 		return e
@@ -235,7 +239,10 @@ func (u *Upgrader) install(j upgradeJournal) error {
 		return e
 	}
 	j.Phase = "testing"
-	return u.save(j)
+	if e = u.save(j); e != nil {
+		return e
+	}
+	return restartUpgradeCompanion(u.Binary, j.CompanionActive)
 }
 func (u *Upgrader) finish(j upgradeJournal, status string) error {
 	result := contract.OperationResult{ID: j.Operation.ID, Claim: j.Operation.Claim, Status: status}
@@ -250,7 +257,15 @@ func (u *Upgrader) finish(j upgradeJournal, status string) error {
 	return syncDirectory(u.Journal)
 }
 func (u *Upgrader) rollback(j upgradeJournal) error {
+	// Read the durable activation flag even when the caller holds the original
+	// staged journal. A failed candidate may have left the companion inactive.
+	if current, err := u.load(); err == nil && current.Operation.ID == j.Operation.ID {
+		j = current
+	}
 	if e := copyExecutable(u.Binary+".tfp-previous", u.Binary); e != nil {
+		return e
+	}
+	if e := restartUpgradeCompanion(u.Binary, j.CompanionActive); e != nil {
 		return e
 	}
 	return u.finish(j, "rolled_back")
@@ -343,6 +358,10 @@ func (u *Upgrader) Supervise(ctx context.Context, args []string) error {
 		}
 		childCtx, stop := context.WithCancel(ctx)
 		cmd := exec.CommandContext(childCtx, u.Binary, args...)
+		// Allow the worker to close forwarding sockets and settle credits before
+		// the supervisor exits or restores the previous executable.
+		cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+		cmd.WaitDelay = 15 * time.Second
 		cmd.Env = append(os.Environ(), "TFP_AGENT_WORKER=1")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

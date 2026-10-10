@@ -9,11 +9,16 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
 
-const udpCreditSize int64 = 256 << 10
+const creditWindowSize int64 = 256 << 10
 const maxRuleCredits int64 = 1 << 20
 const maxAccountCredits int64 = 8 << 20
+const tcpCreditIdleTimeout = time.Second
 
-var errCreditUnavailable = errors.New("UDP persisted credit unavailable")
+var errCreditUnavailable = errors.New("persisted credit unavailable")
+
+func usesCreditWindows(r contract.Rule) bool {
+	return r.Network == "tcp" || r.Network == "udp" && r.UDP != nil && r.UDP.CreditWindows
+}
 
 type creditWindow struct {
 	ID        string    `json:"id"`
@@ -53,9 +58,10 @@ func (s *Store) creditLiabilityLocked(lease string) int64 {
 	return n
 }
 
-// TryUDPCharge never acquires the durable-state mutex or waits for the writer.
+// TryCreditCharge never acquires the durable-state mutex or waits for the writer.
 // A reservation becomes visible here only after its WAL sync has succeeded.
-func (s *Store) TryUDPCharge(r contract.Rule, until time.Time, up bool, n int) error {
+// TCP waits for a refill in the caller; UDP drops an unreserved datagram.
+func (s *Store) TryCreditCharge(r contract.Rule, until time.Time, up bool, n int) error {
 	now := time.Now()
 	if n < 0 {
 		return errors.New("negative charge")
@@ -65,6 +71,17 @@ func (s *Store) TryUDPCharge(r contract.Rule, until time.Time, up bool, n int) e
 	}
 	if r.Lease == nil || !now.Before(until) {
 		return errLeaseUnavailable
+	}
+	if r.Network == "tcp" {
+		var capacity int64
+		for _, l := range ruleLeases(r) {
+			if l != nil {
+				capacity = max(capacity, l.Bytes)
+			}
+		}
+		if int64(n) > capacity {
+			return errors.New("payload exceeds lease capacity")
+		}
 	}
 	k := creditKey(r.ID, up)
 	s.creditMu.Lock()
@@ -78,7 +95,7 @@ func (s *Store) TryUDPCharge(r contract.Rule, until time.Time, up bool, n int) e
 				matches = true
 			}
 		}
-		if c.closed || !matches || !now.Before(c.window.Until) {
+		if c.closed || !matches || c.window.UserID != limitOwner(r) || !now.Before(c.window.Until) {
 			continue
 		}
 		left := c.window.Capacity - c.used
@@ -101,7 +118,7 @@ func (s *Store) TryUDPCharge(r contract.Rule, until time.Time, up bool, n int) e
 		}
 		remaining -= int64(n)
 	}
-	refill := remaining < udpCreditSize && !s.refilling[k]
+	refill := remaining < creditWindowSize && !s.refilling[k]
 	if refill {
 		s.refilling[k] = true
 	}
@@ -131,6 +148,10 @@ func (s *Store) TryUDPCharge(r contract.Rule, until time.Time, up bool, n int) e
 	return nil
 }
 
+func (s *Store) TryUDPCharge(r contract.Rule, until time.Time, up bool, n int) error {
+	return s.TryCreditCharge(r, until, up, n)
+}
+
 func (s *Store) PrimeUDPCredits(r contract.Rule, until time.Time) error {
 	if r.UDP == nil || !r.UDP.CreditWindows {
 		return nil
@@ -146,7 +167,34 @@ func (s *Store) PrimeUDPCredits(r contract.Rule, until time.Time) error {
 }
 
 func (s *Store) FlushUDPCredits() error {
+	return s.FlushCredits()
+}
+
+// FlushCredits settles actual TCP/UDP consumption, preserving unused credit.
+func (s *Store) FlushCredits() error {
 	return s.submit(&stateRequest{event: stateEvent{Kind: "credit_flush"}})
+}
+
+func (s *Store) hasSpendableCredit(r contract.Rule, until time.Time) bool {
+	now := time.Now()
+	if s.fastFailed.Load() || !now.Before(until) {
+		return false
+	}
+	s.creditMu.Lock()
+	defer s.creditMu.Unlock()
+	for _, up := range []bool{true, false} {
+		for _, c := range s.creditPools[creditKey(r.ID, up)] {
+			if c.closed || c.window.UserID != limitOwner(r) || c.used >= c.window.Capacity || !now.Before(c.window.Until) {
+				continue
+			}
+			for _, l := range ruleLeases(r) {
+				if l != nil && l.ID == c.window.LeaseID && now.Before(l.ExpiresAt) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (s *Store) reserveCreditLocked(r *stateRequest, staged []stateEvent) (*stateEvent, error) {
@@ -155,7 +203,7 @@ func (s *Store) reserveCreditLocked(r *stateRequest, staged []stateEvent) (*stat
 	if s.state.Config.NodeID != "" {
 		current := false
 		for _, rule := range s.state.Config.Rules {
-			if rule.ID == r.rule.ID && rule.Enabled && rule.UDP != nil && rule.UDP.CreditWindows && sameForwardingRule(rule, r.rule) {
+			if rule.ID == r.rule.ID && rule.Enabled && usesCreditWindows(rule) && sameForwardingRule(rule, r.rule) {
 				r.rule = rule
 				r.until = minTime(r.until, s.state.Config.ValidUntil)
 				current = true
@@ -238,7 +286,7 @@ func (s *Store) reserveCreditLocked(r *stateRequest, staged []stateEvent) (*stat
 	if count >= 2 {
 		return nil, nil
 	}
-	capacity := min(udpCreditSize, max(int64(r.n), (r.rule.Lease.Bytes-1)/4+1), maxRuleCredits-ruleTotal, maxAccountCredits-userTotal, r.rule.Lease.Bytes-s.state.Used[r.rule.Lease.ID]-s.creditLiabilityLocked(r.rule.Lease.ID)-stagedLease)
+	capacity := min(creditWindowSize, max(int64(r.n), (r.rule.Lease.Bytes-1)/4+1), maxRuleCredits-ruleTotal, maxAccountCredits-userTotal, r.rule.Lease.Bytes-s.state.Used[r.rule.Lease.ID]-s.creditLiabilityLocked(r.rule.Lease.ID)-stagedLease)
 	if r.creditPrime {
 		remaining := r.rule.Lease.Bytes - s.state.Used[r.rule.Lease.ID]
 		half := remaining / 2
@@ -266,9 +314,27 @@ func (s *Store) reserveCreditLocked(r *stateRequest, staged []stateEvent) (*stat
 // first freezes debits; already admitted sends are included in the final total.
 func (s *Store) creditProgressLocked(trigger stateEvent) ([]stateEvent, error) {
 	active := map[string]bool{}
+	tcpRules := map[string]bool{}
+	for _, r := range s.state.Config.Rules {
+		if r.Network == "tcp" {
+			tcpRules[r.ID] = true
+		}
+	}
 	if trigger.Config != nil {
 		for _, r := range trigger.Config.Rules {
-			if r.Enabled && r.UDP != nil && r.UDP.CreditWindows && r.Lease != nil {
+			if r.Enabled && usesCreditWindows(r) && r.Lease != nil {
+				// A destination, owner or limit change revokes the old windows even
+				// when the control plane keeps the same lease identifier.
+				compatible := false
+				for _, old := range s.state.Config.Rules {
+					if old.ID == r.ID && sameForwardingRule(old, r) {
+						compatible = true
+						break
+					}
+				}
+				if !compatible {
+					continue
+				}
 				for _, l := range ruleLeases(r) {
 					if l != nil {
 						active[l.ID] = true
@@ -292,7 +358,10 @@ func (s *Store) creditProgressLocked(trigger stateEvent) ([]stateEvent, error) {
 		if c == nil {
 			return nil, errors.New("missing live credit")
 		}
-		closeWindow := trigger.Kind == "credit_close" || trigger.Kind == "credit_rebalance" && trigger.RuleID == w.RuleID || c.used == w.Capacity || !time.Now().Before(w.Until) || trigger.Kind == "retire" && trigger.LeaseID == w.LeaseID || trigger.Config != nil && !active[w.LeaseID]
+		// Return idle TCP reservations to the shared account budget. Rules that
+		// once transferred data must not hold all credit slots indefinitely.
+		idle := tcpRules[w.RuleID] && time.Since(c.last) >= tcpCreditIdleTimeout
+		closeWindow := idle || trigger.Kind == "credit_close" || trigger.Kind == "credit_rebalance" && trigger.RuleID == w.RuleID || c.used == w.Capacity || !time.Now().Before(w.Until) || trigger.Kind == "retire" && trigger.LeaseID == w.LeaseID || trigger.Config != nil && !active[w.LeaseID]
 		if !closeWindow && (c.used == w.Confirmed || room <= 0) {
 			continue
 		}
@@ -326,7 +395,7 @@ func (s *Store) creditUsage(w creditWindow, n int64, kind string, end time.Time)
 
 func (s *Store) validateCreditEvent(e stateEvent) error {
 	w := e.Window
-	if w == nil || len(w.ID) != 32 || w.RuleID == "" || w.UserID == "" || w.Capacity <= 0 || w.Capacity > udpCreditSize || w.Confirmed < 0 || w.Confirmed > w.Capacity || w.StartedAt.IsZero() || !w.Until.After(w.StartedAt) {
+	if w == nil || len(w.ID) != 32 || w.RuleID == "" || w.UserID == "" || w.Capacity <= 0 || w.Capacity > creditWindowSize || w.Confirmed < 0 || w.Confirmed > w.Capacity || w.StartedAt.IsZero() || !w.Until.After(w.StartedAt) {
 		return errors.New("invalid credit window")
 	}
 	if e.Kind == "credit_reserve" {
@@ -449,6 +518,7 @@ func (s *Store) commitCreditEventsLocked(events []stateEvent) error {
 		s.fastFailed.Store(true)
 		s.notifyChangedLocked()
 	} else {
+		s.notifyChangedLocked()
 		s.requestUsage()
 	}
 	return e
@@ -571,7 +641,7 @@ func (s *Store) rebalanceCreditsLocked(r *stateRequest) error {
 	// Small leases can have enough total budget for a packet while the two
 	// directional windows strand unused bytes. Freeze and settle the rule's
 	// windows before returning those bytes to the shared budget. This happens
-	// only in the writer; the receive worker still drops instead of waiting.
+	// only in the writer; TCP waits and UDP drops instead of blocking its reader.
 	events, e := s.creditProgressLocked(stateEvent{Kind: "credit_rebalance", RuleID: r.rule.ID})
 	if e != nil {
 		return e

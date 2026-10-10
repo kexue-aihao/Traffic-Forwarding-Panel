@@ -632,6 +632,7 @@ func (s *Store) backfillGroupJoinKeys(ctx context.Context, conn *sql.Conn) error
 }
 
 var schema = []string{
+	`CREATE TABLE IF NOT EXISTS cp_agent_update_settings(id INTEGER PRIMARY KEY,enabled INTEGER NOT NULL,version BIGINT NOT NULL,private_key TEXT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS cp_diagnostics(id VARCHAR(64) PRIMARY KEY,user_id VARCHAR(64) NOT NULL,node_id VARCHAR(64) NOT NULL,rule_id VARCHAR(64) NOT NULL,payload TEXT NOT NULL,status VARCHAR(16) NOT NULL,claim_token VARCHAR(64) NOT NULL,created_at BIGINT NOT NULL,claimed_at BIGINT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS cp_site_settings(id INTEGER PRIMARY KEY,payload TEXT NOT NULL,version BIGINT NOT NULL)`,
 	`CREATE TABLE IF NOT EXISTS cp_captchas(id VARCHAR(64) PRIMARY KEY,answer_hash VARCHAR(64) NOT NULL,expires_at BIGINT NOT NULL)`,

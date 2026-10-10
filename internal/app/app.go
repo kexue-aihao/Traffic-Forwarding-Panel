@@ -31,6 +31,7 @@ type Options struct {
 	// AgentDir 是发布给设备接入用的 Agent 产物目录，空值表示面板可执行文件
 	// 所在目录 —— 容器镜像正是把 /agent 放在 /panel 旁边。
 	AgentDir             string
+	ReleaseVersion       string
 	HTMLPath             string
 	DisableGzip          bool
 	OfflineNodeTime      time.Duration
@@ -112,6 +113,9 @@ func New(ctx context.Context, store *storage.Store, opts Options) (*App, error) 
 		return nil, err
 	}
 	control := platform.New(store, platform.Options{Origin: opts.Origin, TrustProxy: opts.TrustProxy, SecureCookies: opts.SecureCookies, Entitlements: billing, EventEmitter: billing, LeaseCurrent: billing.LeaseCurrent, RetireLease: billing.RetireLease, ResourceLimits: billing.LimitsTx, ActiveEntitlement: billing.HasActiveEntitlement, OfflineNodeTime: opts.OfflineNodeTime, OfflineNodeRetention: opts.OfflineNodeRetention, UserRateLimit: opts.UserRateLimit, DefaultRateLimit: opts.DefaultRateLimit})
+	if err := control.ConfigureAgentUpdates(ctx, opts.AgentDir, opts.ReleaseVersion); err != nil {
+		return nil, err
+	}
 	billing.PaymentAllowed = control.PaymentAllowed
 	billing.PaymentReceived = func(ctx context.Context, tx *sql.Tx, user, order string, amount int64) error {
 		rows, err := tx.QueryContext(ctx, "SELECT id FROM cp_users WHERE role='admin' AND disabled=0")
@@ -178,6 +182,7 @@ func (a *App) RunBackground(ctx context.Context) {
 	workers.Go(func() { a.Alerts.Run(ctx) })
 	workers.Go(func() { a.Platform.RunProbeHistory(ctx) })
 	workers.Go(func() { a.Platform.RunOperationLoop(ctx) })
+	workers.Go(func() { a.Platform.RunAgentUpdates(ctx) })
 	workers.Go(func() { _ = a.Platform.RunTaskLoop(ctx) })
 	workers.Go(func() { _ = a.Commerce.RunReconciliation(ctx) })
 	workers.Go(func() { _ = a.Commerce.RunAutoRenewLoop(ctx) })

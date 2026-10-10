@@ -64,6 +64,9 @@ func TestCandidateWeightAndAdditionPreserveHealthyConnection(t *testing.T) {
 	if err := exchange(c, "before"); err != nil {
 		t.Fatal(err)
 	}
+	// Build a replacement config without mutating the live config's slice.
+	// Credit refills can still be validating that immutable snapshot.
+	rule.RouteCandidates = append([]contract.RouteCandidate(nil), rule.RouteCandidates...)
 	rule.RouteCandidates[0].Weight = 5
 	rule.RouteCandidates = append(rule.RouteCandidates, contract.RouteCandidate{ID: "backup", Target: rule.Target, Transport: "direct", Weight: 1})
 	config.Rules = []contract.Rule{rule}

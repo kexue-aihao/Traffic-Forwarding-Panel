@@ -2,7 +2,7 @@
 
 Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP、secure-direct 和单出口 QUIC DATAGRAM 加密承载。
 
-当前版本为正式版 `v0.1.41`。安装包、更新范围及升级注意事项见 [发布说明](docs/releases/v0.1.41.md)。本版新增设备组统一 TLS 共享入口，授权账户的规则可在同一入口节点复用一个 TCP 端口，通过真实业务 SNI 分流到各自目标，覆盖直连入口和入口→出口，保留独立策略、租约与计费。先更新面板与 Agent，再在管理员设备组高级设置显式启用；默认 TLS 透传，目标证书必须覆盖业务 SNI，已有规则不自动迁移，详见 [共享入口说明](docs/shared-tls-ingress.md)。完整高级策略、条件化协议嗅探禁用、直连 UDP 与单出口 QUIC DATAGRAM 已提供，协议检测范围见 [交付说明](docs/protocol-sniffing-implementation.md)。Linux 跨机吞吐/P99、5% 性能预算和 24 小时稳定性尚未验收。已实现内容见 [实施状态](docs/implementation-status.md)，完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持已有 Docker 安装自动备份并升级。Cyber 按用户要求跳过；生产容量、公网和真实支付仍待验收。
+当前版本为正式版 `v0.1.42`。安装包、更新范围及升级注意事项见 [发布说明](docs/releases/v0.1.42.md)。本版优化 TCP 计量写盘等待，并让 Linux amd64/arm64 Agent 自动跟随面板正式版本升级，支持签名校验和失败回滚；旧节点首次需重跑接入命令配置公钥，详见 [自动升级说明](docs/agent-auto-upgrade.md) 与 [TCP 性能说明](docs/tcp-credit-performance.md)。设备组统一 TLS 共享入口、完整高级策略、条件化协议嗅探禁用、直连 UDP 与单出口 QUIC DATAGRAM 已提供，配置与范围见 [共享入口说明](docs/shared-tls-ingress.md) 和 [协议交付说明](docs/protocol-sniffing-implementation.md)。Linux 跨机吞吐/P99、5% 性能预算和 24 小时稳定性尚未验收。已实现内容见 [实施状态](docs/implementation-status.md)，完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持已有 Docker 安装自动备份并升级。Cyber 按用户要求跳过；生产容量、公网和真实支付仍待验收。
 
 ## 本机启动
 
@@ -66,6 +66,7 @@ Docker 部署也可以下载 [综合管理脚本](docs/docker-deployment.md#综�
 
 ## Agent、支付和接口
 
+- [Agent 自动升级](docs/agent-auto-upgrade.md)：面板升级后自动分批升级 Linux amd64/arm64 节点；旧节点首次需重跑接入命令，支持签名校验和失败回滚。
 - [Agent 安装与四承载示例](examples/agent-README.md)：入口 Agent 可用控制台生成的一条命令接入（下载、装 systemd 服务、注册），注册后拉取配置；出口需提供证书和凭据，目标由转发规则指定；WS/HTTP 内层同样使用 TLS，禁止证书验证降级。接入脚本支持 Debian/Ubuntu、Red Hat 与 Arch 系列，要求和验证范围见 [Linux 兼容性说明](docs/agent-linux-compatibility.md)。
 - [支付配置示例](examples/payments.example.json)：复制到仓库外的受保护文件，填写商户资料，以 `-payments /path/payments.json -origin https://panel.example.com` 启动。示例占位值不能直接付款。
 - [支付协议与固定版本](docs/payment/protocol-sources.md)、[支付实现边界](docs/payment/implementation-status.md)：已接入的渠道仍需分别验证真实商户；Cyber 已跳过。

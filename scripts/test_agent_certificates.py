@@ -53,6 +53,13 @@ if [ "$directory" = 1 ]; then mkdir -p "$@"; else cp "$1" "$2"; fi
 printf '%s\n' "$*" >> "$TFP_TEST_ROOT/curl.log"
 if [ "${PRIVATE_CA:-0}" = 1 ] && [[ "$*" == *https://panel.example.com* ]] && [[ "$*" != *--cacert* ]]; then exit 60; fi
 case "$*" in
+  *download/agent-release-key*)
+    [ "${RELEASE_KEY_UNAVAILABLE:-0}" != 1 ] || exit 22
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = -o ]; then printf '%s\n' "${RELEASE_KEY_VALUE:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}" > "$2"; exit; fi
+      shift
+    done
+    exit 1 ;;
   *https://api.ipify.org*) [ -n "$FAKE_IP4" ] || exit 1; printf '%s' "$FAKE_IP4"; exit ;;
   *https://api6.ipify.org*) [ -n "$FAKE_IP6" ] || exit 1; printf '%s' "$FAKE_IP6"; exit ;;
 esac
@@ -133,6 +140,7 @@ class CertificateInstallerTests(InstallerSandbox):
                 service = (self.root / "etc/systemd/system/tfp-exit.service").read_text(encoding="utf-8")
                 self.assertIn("-mode " + mode, service)
                 self.assertNotIn("-allow", service)
+                self.assertEqual((self.root / "etc/tfp-agent/managed-exit").read_text().strip(), "tfp-exit.service")
 
     def test_legacy_target_option_is_ignored(self):
         self.success(self.run_script(extra=("-w", "tcp|127.0.0.1:8080,udp|127.0.0.1:5353")))

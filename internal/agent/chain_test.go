@@ -139,6 +139,9 @@ func TestChainChargesPayloadOnlyOnceAtEntry(t *testing.T) {
 				if err != nil || !bytes.Equal(got, payload) {
 					t.Fatalf("forwarded payload: %d bytes, %v", len(got), err)
 				}
+				if err := store.FlushCredits(); err != nil {
+					t.Fatal(err)
+				}
 				var up, down int64
 				for _, usage := range store.Pending() {
 					if usage.RuleID != rule.ID || usage.LeaseID != rule.Lease.ID {

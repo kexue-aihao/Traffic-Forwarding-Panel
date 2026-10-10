@@ -92,6 +92,7 @@ type GroupAdvanced struct {
 }
 
 type Node struct {
+	UpgradeKeySHA256   string                    `json:"upgrade_key_sha256,omitempty"`
 	TLSIngressStatuses []TLSIngressStatus        `json:"tls_ingress_statuses,omitempty"`
 	InspectionProfiles []InspectionProfileStatus `json:"inspection_profiles,omitempty"`
 	RuleStatuses       []RuleRuntimeStatus       `json:"rule_statuses,omitempty"`
@@ -201,6 +202,7 @@ type Config struct {
 }
 
 type Ack struct {
+	UpgradeKeySHA256   string                    `json:"upgrade_key_sha256,omitempty"`
 	TLSIngressStatuses []TLSIngressStatus        `json:"tls_ingress_statuses,omitempty"`
 	InspectionProfiles []InspectionProfileStatus `json:"inspection_profiles"`
 	RuleStatuses       []RuleRuntimeStatus       `json:"rule_statuses,omitempty"`
@@ -213,6 +215,7 @@ type Ack struct {
 }
 
 type Registration struct {
+	UpgradeKeySHA256   string                    `json:"upgrade_key_sha256,omitempty"`
 	InspectionProfiles []InspectionProfileStatus `json:"inspection_profiles,omitempty"`
 	Token              string                    `json:"token"`
 	Name               string                    `json:"name"`

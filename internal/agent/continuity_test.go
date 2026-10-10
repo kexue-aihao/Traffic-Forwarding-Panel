@@ -109,6 +109,9 @@ func TestLiveConnectionsFollowRenewedLease(t *testing.T) {
 					t.Fatal("renewal replaced UDP session")
 				}
 			}
+			if err := s.FlushCredits(); err != nil {
+				t.Fatal(err)
+			}
 			amounts := map[string]int64{}
 			for _, u := range s.Pending() {
 				amounts[u.LeaseID] += u.UploadBytes + u.DownloadBytes
@@ -166,6 +169,14 @@ func TestMeterBackpressureResumesAndCancellationStopsSpending(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	// A partial window needs one record slot for its durable progress. The
+	// reservation itself already owns the slot used while admission resumed.
+	if err := s.Confirm([]string{"1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FlushCredits(); err != nil {
 		t.Fatal(err)
 	}
 	if got := used(s, rule.Lease.ID); got != 7 {
@@ -311,6 +322,9 @@ func TestSharedTLSChildSurvivesRefreshAndStopsOnLimitChange(t *testing.T) {
 	if err := exchange(conn, "after"); err != nil {
 		t.Fatal("lease refresh disconnected shared TLS", err)
 	}
+	if err := s.FlushCredits(); err != nil {
+		t.Fatal(err)
+	}
 	if used(s, parent.Lease.ID) != 0 || used(s, renewed.ID) == 0 {
 		t.Fatal("child used its parent's allocation or failed to switch leases")
 	}
@@ -365,6 +379,9 @@ func TestExpiryWaitsWithoutSpendingAndUsesFreshDeadline(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal("flow retained the expired deadline", err)
+	}
+	if err := s.FlushCredits(); err != nil {
+		t.Fatal(err)
 	}
 	if used(s, "lease") != 0 || used(s, renewed.ID) != 11 {
 		t.Fatal("renewed bytes charged outside their allocation")

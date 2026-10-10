@@ -368,6 +368,9 @@ func (s *Server) agentControl(w http.ResponseWriter, r *http.Request) {
 				return e
 			}
 			_, _, grantErr := s.operationGrant(r.Context(), tx, owner, node, session, access)
+			if s.automaticUpgradeAuthorized(r.Context(), tx, op, owner, access) {
+				grantErr = nil
+			}
 			if !(op.Kind == "uninstall" && op.Status == "running") && (!op.ExpiresAt.After(time.Now()) || grantErr != nil) {
 				if _, e = tx.ExecContext(r.Context(), s.q("UPDATE cp_node_operations SET status='expired',updated_at=? WHERE id=?"), time.Now().Unix(), oid); e != nil {
 					return e

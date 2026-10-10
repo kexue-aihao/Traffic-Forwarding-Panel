@@ -256,6 +256,29 @@ function seedHistory(nodeID) {
   }
 }
 const historyNodeIDs = [];
+async function checkAgentUpdates(page, browserName) {
+  await page.getByRole("link", {name: "站点设置", exact: true}).click();
+  const checkbox = page.getByLabel("Agent 自动跟随面板版本", {exact: true});
+  await checkbox.waitFor();
+  assert.equal(await checkbox.isChecked(), true);
+  const settings = await (await page.request.get(base + "/api/v1/agent-update-settings")).json();
+  assert.equal(settings.enabled, true);
+  assert.equal(settings.available, false, "local development server has no bundled release");
+  assert.equal("private_key" in settings, false);
+  await page.getByText(settings.reason, {exact: false}).waitFor();
+  for (const enabled of [false, true]) {
+    await checkbox.setChecked(enabled);
+    const saved = page.waitForResponse(r => r.url() === base + "/api/v1/agent-update-settings" && r.request().method() === "PUT");
+    await page.getByRole("button", {name: "保存自动升级设置", exact: true}).click();
+    const response = await saved;
+    assert.equal(response.status(), 200, await response.text());
+    assert.equal((await response.json()).enabled, enabled);
+    await page.reload();
+    await checkbox.waitFor();
+    assert.equal(await checkbox.isChecked(), enabled, "automatic update switch must persist across reload");
+  }
+  console.log(`${browserName}: Agent automatic update switch persistence, availability reason and key privacy PASS`);
+}
 async function checkInspectionEditor(page, browserName) {
   const name = `inspection-${browserName}`;
   const headers = { Origin: base, "X-Requested-With": "fetch" };
@@ -395,12 +418,18 @@ try {
       const exceptions = [];
       admin.on("pageerror", (e) => exceptions.push(e.message));
       await login(admin, "ui-admin", password, "/admin");
+      if (process.argv.includes("--agent-updates-only")) {
+        await checkAgentUpdates(admin, browserName);
+        assert.deepEqual(exceptions, []);
+        continue;
+      }
       if (process.argv.includes("--inspection-only")) {
         await checkInspectionEditor(admin, browserName);
         assert.deepEqual(exceptions, []);
         continue;
       }
       await checkSiteLogo(admin, browserName);
+      await checkAgentUpdates(admin, browserName);
       if (process.argv.includes("--site-logo-only")) {
         assert.deepEqual(exceptions, []);
         continue;

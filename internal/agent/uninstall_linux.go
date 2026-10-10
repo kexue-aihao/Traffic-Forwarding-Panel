@@ -175,6 +175,7 @@ func RunUninstallWorker(ctx context.Context) error {
 		// Remove only known managed files; user certificates and other files in
 		// these directories are deliberately preserved.
 		paths := []string{"/etc/systemd/system/tfp-agent.service", "/etc/systemd/system/tfp-exit.service", "/etc/systemd/system/tfp-cert-renew.service", "/etc/systemd/system/tfp-cert-renew.timer", "/usr/local/bin/tfp-agent", "/etc/tfp-agent/agent.env", "/etc/tfp-agent/exit.env", "/etc/tfp-agent/managed-install", managedState, managedState + ".wal", managedState + ".lock"}
+		paths = append(paths, "/usr/local/bin/tfp-agent.tfp-next", "/usr/local/bin/tfp-agent.tfp-previous", "/etc/tfp-agent/release-key.pub", "/etc/tfp-agent/managed-exit", managedState+".upgrade.json", managedState+".upgrade.json.result", managedState+".upgrade.json.health", managedState+".upgrade.json.lock")
 		for _, p := range paths {
 			if e = os.Remove(p); e != nil && !errors.Is(e, os.ErrNotExist) {
 				return e

@@ -76,6 +76,16 @@ curl "${curl_options[@]}" -D "$work/headers" -c "$work/cookies" \
     --data-binary @"$work/login.json" "$origin/api/v1/auth/login" | jq -e '.user.role == "admin"' >/dev/null
 grep -qi 'set-cookie:.*Secure' "$work/headers"
 curl "${curl_options[@]}" -b "$work/cookies" "$origin/api/v1/auth/session" | jq -e '.user.username == "admin"' >/dev/null
+# Every image must serve both Agent architectures with the published checksums.
+docker cp traffic-forwarding-panel:/agent-release.json "$work/agent-release.json"
+jq -e --arg version "$(cat "$repo_dir/VERSION")" '.version == $version and (.files | length) == 2' "$work/agent-release.json" >/dev/null
+release_key_before=$(curl "${curl_options[@]}" "$origin/download/agent-release-key")
+[[ $release_key_before =~ ^[A-Za-z0-9+/]{43}=$ ]]
+for target_arch in amd64 arm64; do
+    checksum=$(jq -r --arg arch "$target_arch" '.files[] | select(.arch == $arch) | .sha256' "$work/agent-release.json")
+    curl "${curl_options[@]}" "$origin/download/agent/linux/$target_arch?sha256=$checksum" > "$work/agent-$target_arch"
+    printf '%s  %s\n' "$checksum" "$work/agent-$target_arch" | sha256sum --check >/dev/null
+done
 curl "${curl_options[@]}" -b "$work/cookies" \
     -H "Origin: $origin" -H 'X-Requested-With: fetch' -H 'Content-Type: application/json' \
     --data '{"enabled":false,"plan_id":""}' "$origin/api/v1/auto-renew" | jq -e '.enabled == false' >/dev/null
@@ -124,6 +134,8 @@ services:
 YAML
 sudo docker compose --project-directory "$install_dir" up -d --wait --wait-timeout 120
 old_container=$(docker inspect --format '{{.Id}}' traffic-forwarding-panel)
+curl "${curl_options[@]}" -b "$work/cookies" "$origin/api/v1/agent-update-settings" | jq -e '.enabled == true and .available == true and .reason == "" and (has("private_key") | not)' >/dev/null
+[[ $(curl "${curl_options[@]}" "$origin/download/agent-release-key") == "$release_key_before" ]]
 sudo cp "$install_dir/.env" "$work/old.env"
 sudo cp "$install_dir/compose.override.yaml" "$work/override.yaml"
 sudo sha256sum "$install_dir/compose.yaml" "$install_dir/compose.override.yaml" "$install_dir/config/upgrade-marker" > "$work/preserved-files"

@@ -68,7 +68,7 @@ func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	if len(in.Name) > 190 || len(in.Capabilities) > 64 || len(in.Token) > 128 {
+	if len(in.Name) > 190 || len(in.Capabilities) > 64 || len(in.Token) > 128 || len(in.UpgradeKeySHA256) > 64 {
 		fail(w, 400, "invalid registration")
 		return
 	}
@@ -76,7 +76,7 @@ func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err.Error())
 		return
 	}
-	node := contract.Node{ID: id(), Name: in.Name, Version: in.Version, OS: in.OS, Arch: in.Arch, Capabilities: in.Capabilities, InspectionProfiles: in.InspectionProfiles, DesiredVersion: 1}
+	node := contract.Node{ID: id(), Name: in.Name, Version: in.Version, OS: in.OS, Arch: in.Arch, Capabilities: in.Capabilities, InspectionProfiles: in.InspectionProfiles, DesiredVersion: 1, UpgradeKeySHA256: in.UpgradeKeySHA256}
 	credential := token()
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
 		// 两种凭据走同一条注册路径：一次性接入令牌，以及设备组的固定接入密钥。
@@ -472,7 +472,7 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	if len(in.Capabilities) > 64 || len(in.AgentVersion) > 64 {
+	if len(in.Capabilities) > 64 || len(in.AgentVersion) > 64 || len(in.UpgradeKeySHA256) > 64 {
 		fail(w, 400, "too many capabilities")
 		return
 	}
@@ -570,8 +570,9 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal([]byte(raw), &info); err != nil {
 				return err
 			}
-			if !slices.Equal(info.Capabilities, in.Capabilities) || in.AgentVersion != "" && info.Version != in.AgentVersion {
+			if !slices.Equal(info.Capabilities, in.Capabilities) || in.AgentVersion != "" && info.Version != in.AgentVersion || info.UpgradeKeySHA256 != in.UpgradeKeySHA256 {
 				info.Capabilities = in.Capabilities
+				info.UpgradeKeySHA256 = in.UpgradeKeySHA256
 				if in.AgentVersion != "" {
 					info.Version = in.AgentVersion
 				}

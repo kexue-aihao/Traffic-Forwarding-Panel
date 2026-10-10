@@ -67,8 +67,9 @@ echo "正在卸载…"
 systemctl disable --now tfp-agent.service 2>/dev/null || true
 systemctl disable --now tfp-exit.service 2>/dev/null || true
 systemctl disable --now tfp-cert-renew.timer tfp-cert-renew.service 2>/dev/null || true
-rm -f "$UNIT_PATH" "$EXIT_UNIT" "$RENEW_UNIT" "$RENEW_TIMER" "$BIN_PATH"
-rm -f "$ENV_DIR/agent.env" "$ENV_DIR/exit.env" "$ENV_DIR/managed-install" "$ENV_DIR/agent-uninstall.sh"
+rm -f "$UNIT_PATH" "$EXIT_UNIT" "$RENEW_UNIT" "$RENEW_TIMER" "$BIN_PATH" "$BIN_PATH.tfp-next" "$BIN_PATH.tfp-previous"
+rm -f "$ENV_DIR/agent.env" "$ENV_DIR/exit.env" "$ENV_DIR/managed-install" "$ENV_DIR/managed-exit" "$ENV_DIR/agent-uninstall.sh" "$ENV_DIR/release-key.pub"
+rm -f "$STATE_DIR/agent-state.json.upgrade.json" "$STATE_DIR/agent-state.json.upgrade.json.result" "$STATE_DIR/agent-state.json.upgrade.json.health" "$STATE_DIR/agent-state.json.upgrade.json.lock"
 systemctl daemon-reload
 
 if [ "$PURGE" = "yes" ]; then

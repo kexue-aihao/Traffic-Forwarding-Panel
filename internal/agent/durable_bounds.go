@@ -75,7 +75,7 @@ func (s *Store) validateSnapshot() error {
 	for id, w := range s.state.Windows {
 		l, ok := s.state.Leases[w.LeaseID]
 		_, retired := s.state.Retired[w.LeaseID]
-		if !ok || retired || w.ID != id || len(w.ID) != 32 || w.RuleID == "" || w.UserID == "" || w.Closed || w.Capacity <= 0 || w.Capacity > udpCreditSize || w.Confirmed < 0 || w.Confirmed > w.Capacity || w.Confirmed > 0 && w.Sequence == 0 || w.Sequence == ^uint64(0) || w.StartedAt.IsZero() || !w.Until.After(w.StartedAt) || w.Until.After(l.ExpiresAt) {
+		if !ok || retired || w.ID != id || len(w.ID) != 32 || w.RuleID == "" || w.UserID == "" || w.Closed || w.Capacity <= 0 || w.Capacity > creditWindowSize || w.Confirmed < 0 || w.Confirmed > w.Capacity || w.Confirmed > 0 && w.Sequence == 0 || w.Sequence == ^uint64(0) || w.StartedAt.IsZero() || !w.Until.After(w.StartedAt) || w.Until.After(l.ExpiresAt) {
 			return errors.New("invalid durable credit window")
 		}
 		left := w.Capacity - w.Confirmed

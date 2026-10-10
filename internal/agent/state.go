@@ -68,6 +68,7 @@ type Store struct {
 	closing          bool
 	closeOnce        sync.Once
 	closeErr         error
+	changedMu        sync.Mutex // Notification snapshots must not wait for fsync.
 	changed          chan struct{}
 	usageWake        chan struct{}
 	configWake       chan struct{}
@@ -527,7 +528,13 @@ func (s *Store) Confirm(ids []string) error {
 func (s *Store) Available(r contract.Rule, until time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.availableLocked(s.spendingRuleLocked(r, until, 0), until, 0)
+	err := s.availableLocked(s.spendingRuleLocked(r, until, 0), until, 0)
+	// A reserved window already owns its recovery slot and budget, so it can
+	// still admit a connection while unreserved durable capacity is full.
+	if transientMeterError(err) && usesCreditWindows(r) && s.hasSpendableCredit(r, until) {
+		return nil
+	}
+	return err
 }
 func (s *Store) availableLocked(r contract.Rule, until time.Time, n int64) error {
 	now := time.Now()
@@ -575,13 +582,15 @@ func wake(ch chan struct{}) {
 func (s *Store) requestUsage() { wake(s.usageWake) }
 
 func (s *Store) notifyChangedLocked() {
+	s.changedMu.Lock()
+	defer s.changedMu.Unlock()
 	close(s.changed)
 	s.changed = make(chan struct{})
 }
 
 func (s *Store) changes() <-chan struct{} {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.changedMu.Lock()
+	defer s.changedMu.Unlock()
 	return s.changed
 }
 

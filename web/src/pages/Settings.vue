@@ -24,6 +24,23 @@ interface Settings {
   geo_lookup_url: string;
 }
 const allowed = computed(() => adminSite && state.user?.role === "admin");
+interface AgentUpdates {enabled: boolean; version: number; release_version: string; available: boolean; reason: string}
+const agentUpdates = ref<AgentUpdates | null>(null);
+const agentUpdateError = ref("");
+const agentUpdateBusy = ref(false);
+async function loadAgentUpdates() {
+  try {agentUpdates.value = await api<AgentUpdates>("/agent-update-settings");}
+  catch (e) {agentUpdateError.value = errorText(e);}
+}
+async function saveAgentUpdates() {
+  if (!agentUpdates.value || agentUpdateBusy.value) return;
+  agentUpdateBusy.value = true; agentUpdateError.value = "";
+  try {
+    agentUpdates.value = await api<AgentUpdates>("/agent-update-settings", "PUT", {enabled: agentUpdates.value.enabled, version: agentUpdates.value.version});
+    notice("Agent 自动升级设置已保存。");
+  } catch (e) {agentUpdateError.value = errorText(e);}
+  finally {agentUpdateBusy.value = false;}
+}
 // 面板列出的五种协议，以及各自需要哪些字段：字段少的那几种不该出现用不上的
 // 输入框。协议名会进回调路径与适配器工厂，所以这里是固定的一份，不接受自定义。
 interface PaymentChannelSettings {
@@ -270,6 +287,7 @@ onMounted(() => {
   if (!allowed.value) return;
   void load();
   void loadPayments();
+  void loadAgentUpdates();
 });
 </script>
 <template>
@@ -283,6 +301,18 @@ onMounted(() => {
     </div>
     <p v-if="!allowed" class="card">仅管理员可以修改站点设置。</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
+    <form v-if="allowed" class="card" @submit.prevent="saveAgentUpdates">
+      <h2>Agent 自动升级</h2>
+      <template v-if="agentUpdates">
+        <label><input v-model="agentUpdates.enabled" type="checkbox" /> Agent 自动跟随面板版本</label>
+        <p class="muted">面板升级后自动分批更新已接入的 Linux 节点；离线节点上线后补升级。升级会重启 Agent，短暂中断现有连接，启动验证失败时恢复旧程序。</p>
+        <p v-if="agentUpdates.available">当前目标版本：{{ agentUpdates.release_version }}</p>
+        <p v-else class="muted">{{ agentUpdates.reason }}</p>
+        <p class="muted">旧节点需重跑一次接入命令启用自动升级；以后无需重复操作。节点运维中可查看升级进度。</p>
+        <button class="primary" :disabled="agentUpdateBusy">保存自动升级设置</button>
+      </template>
+      <p v-if="agentUpdateError" class="error" role="alert">{{ agentUpdateError }}</p>
+    </form>
     <form v-if="allowed && form" class="card" @submit.prevent="save">
       <h2>品牌与公告</h2>
       <div class="site-logo-editor">

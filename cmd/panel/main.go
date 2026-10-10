@@ -24,7 +24,7 @@ import (
 )
 
 // Version is injected at release build time using -ldflags -X.
-var Version = "0.1.41"
+var Version = "0.1.42"
 
 func main() {
 	if err := run(); err != nil {
@@ -103,7 +103,8 @@ func run() error {
 		}
 	}
 	application, err := app.New(ctx, store, app.Options{
-		Origin: *origin, TrustProxy: *trustProxy, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, PaymentConfigs: paymentConfigs, AgentDir: *agentDir,
+		ReleaseVersion: Version,
+		Origin:         *origin, TrustProxy: *trustProxy, SecureCookies: strings.HasPrefix(*origin, "https://"), EPay: gateway, PaymentConfigs: paymentConfigs, AgentDir: *agentDir,
 		HTMLPath: opts.HTMLPath, DisableGzip: opts.DisableGzip,
 		OfflineNodeTime: time.Duration(opts.OfflineNodeTime) * time.Second, OfflineNodeRetention: time.Duration(opts.OfflineNodeRetentionTime) * time.Second,
 		UserRateLimit: rateLimit(opts.UserRateLimit), DefaultRateLimit: rateLimit(opts.DefaultRateLimit),

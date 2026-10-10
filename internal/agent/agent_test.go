@@ -127,6 +127,9 @@ func TestAtomicApplyDirectHalfCloseAndMeter(t *testing.T) {
 	if e != nil || string(got) != "hello" {
 		t.Fatalf("half-close failed: %q %v", got, e)
 	}
+	if e := s.FlushCredits(); e != nil {
+		t.Fatal(e)
+	}
 	var up, down int64
 	for _, u := range s.Pending() {
 		up += u.UploadBytes

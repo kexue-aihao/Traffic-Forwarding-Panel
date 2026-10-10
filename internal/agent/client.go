@@ -90,7 +90,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			return errors.New("enrollment token required for first start")
 		}
 		var registered contract.Registered
-		reg := contract.Registration{Token: a.EnrollmentToken, Name: a.Name, Version: Version, OS: runtime.GOOS, Arch: runtime.GOARCH, Capabilities: a.capabilities()}
+		reg := contract.Registration{Token: a.EnrollmentToken, Name: a.Name, Version: Version, OS: runtime.GOOS, Arch: runtime.GOARCH, Capabilities: a.capabilities(), UpgradeKeySHA256: a.upgradeKeySHA256()}
 		if a.Runtime != nil {
 			reg.InspectionProfiles = a.Runtime.InspectionProfileStatuses()
 		}
@@ -199,7 +199,7 @@ func (a *Agent) syncConfig(ctx context.Context) error {
 		return e
 	}
 	applyErr := a.Runtime.Apply(c, true)
-	ack := contract.Ack{TLSIngressStatuses: a.Runtime.TLSIngressStatuses(), RuleStatuses: a.Runtime.PolicyStatuses(), Services: a.Runtime.Services.Statuses(), Capabilities: a.capabilities(), AgentVersion: Version, Version: c.Version, AppliedVersion: a.Runtime.Version()}
+	ack := contract.Ack{TLSIngressStatuses: a.Runtime.TLSIngressStatuses(), RuleStatuses: a.Runtime.PolicyStatuses(), Services: a.Runtime.Services.Statuses(), Capabilities: a.capabilities(), AgentVersion: Version, Version: c.Version, AppliedVersion: a.Runtime.Version(), UpgradeKeySHA256: a.upgradeKeySHA256()}
 	ack.InspectionProfiles = a.Runtime.InspectionProfileStatuses()
 	if applyErr != nil {
 		ack.Error = applyErr.Error()
@@ -215,7 +215,7 @@ func (a *Agent) syncUsage(ctx context.Context) error {
 	a.usageMu.Lock()
 	defer a.usageMu.Unlock()
 	var errs []error
-	errs = append(errs, a.Store.FlushUDPCredits())
+	errs = append(errs, a.Store.FlushCredits())
 	for _, id := range a.Store.renewals() {
 		if err := a.Store.Retire(id); err != nil {
 			errs = append(errs, err)
