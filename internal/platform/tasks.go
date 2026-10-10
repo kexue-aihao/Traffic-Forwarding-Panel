@@ -261,14 +261,14 @@ func (s *Server) runTask(ctx context.Context, taskID, claim string) error {
 			}
 			where += ")"
 		}
-		rows, err := tx.QueryContext(ctx, s.q("SELECT payload FROM cp_rules"+where+" ORDER BY id LIMIT 10001"), args...)
+		rows, err := tx.QueryContext(ctx, s.q("SELECT payload,(SELECT payload FROM cp_groups WHERE id=cp_rules.group_id) FROM cp_rules"+where+" ORDER BY id LIMIT 10001"), args...)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var raw string
+			var raw, groupRaw string
 			var rule contract.Rule
-			if err = rows.Scan(&raw); err != nil {
+			if err = rows.Scan(&raw, &groupRaw); err != nil {
 				rows.Close()
 				return err
 			}
@@ -276,6 +276,12 @@ func (s *Server) runTask(ctx context.Context, taskID, claim string) error {
 				rows.Close()
 				return err
 			}
+			var group contract.Group
+			if err = json.Unmarshal([]byte(groupRaw), &group); err != nil {
+				rows.Close()
+				return err
+			}
+			hydrateTLSListen(&rule, group)
 			redact(&rule)
 			items = append(items, rule)
 			if len(items) > 10000 {
@@ -510,7 +516,7 @@ func (s *Server) importRuleTx(ctx context.Context, tx *sql.Tx, owner string, adm
 		rule.UserID = owner
 	}
 	rule.ID, rule.Version, rule.Lease = id(), 0, nil
-	if rule.SharedTLS != nil {
+	if rule.SharedTLS != nil && !managedTLS(rule) {
 		return rule, errors.New("shared TLS rules must be created individually after their parent")
 	}
 	err := s.saveRuleTx(ctx, tx, actor, &rule, true)

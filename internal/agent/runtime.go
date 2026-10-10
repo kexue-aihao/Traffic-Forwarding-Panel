@@ -39,6 +39,11 @@ type Runtime struct {
 	udpQueued             atomic.Int64
 }
 type binding struct {
+	ingressID            string
+	ingressRejected      uint64
+	ingressLastReject    string
+	connRoutes           map[net.Conn]string
+	expiry               *time.Timer
 	plans                map[string]*detect.Plan
 	inspectionGeneration string
 	business             map[string]*preparedBusiness
@@ -231,14 +236,48 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 	policies := map[string]contract.ResourceLimits{}
 	staged := []*binding{}
 	routes := map[string]map[string]route{}
+	var restoreListeners []func() error
 	fail := func(e error) error {
 		for _, b := range staged {
 			b.close()
+		}
+		for _, restore := range restoreListeners {
+			if err := restore(); err != nil {
+				e = fmt.Errorf("%w; previous ingress could not be restored: %v", e, err)
+			}
 		}
 		return e
 	}
 	if err := validateSharedRules(c.Rules); err != nil {
 		return err
+	}
+	if err := validateTLSIngresses(c); err != nil {
+		return err
+	}
+	for _, ingress := range c.TLSIngresses {
+		v := contract.Rule{ID: "ingress:" + ingress.ID, NodeID: ingress.NodeID, GroupID: ingress.GroupID, Network: "tcp", Listen: ingress.Listen, SharedTLS: &contract.SharedTLS{IngressID: ingress.ID}}
+		k := key(v)
+		rules[k] = v
+		if old := r.listeners[k]; old != nil {
+			if old.ingressID != ingress.ID {
+				return fail(errors.New("shared TLS listener ownership changed; remove the old listener first"))
+			}
+			next[k] = old
+			continue
+		}
+		b := &binding{ingressID: ingress.ID, connRoutes: map[net.Conn]string{}, changed: make(chan struct{}), rule: v, until: c.ValidUntil, conns: map[net.Conn]struct{}{}, sessions: map[string]*udpSession{}, runtime: r, slots: make(chan struct{}, 256), backends: map[string]*backendState{}}
+		b.ctx, b.cancel = context.WithCancel(context.Background())
+		var err error
+		b.tcp, err = net.Listen("tcp", v.Listen)
+		if err != nil {
+			b.tcp, err = r.replaceIngressSocket(ingress, err, &restoreListeners)
+		}
+		if err != nil {
+			b.close()
+			return fail(err)
+		}
+		next[k] = b
+		staged = append(staged, b)
 	}
 	udpListeners := 0
 	for _, rule := range c.Rules {
@@ -247,7 +286,7 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 		}
 	}
 	if udpListeners > 128 {
-		return errors.New("UDP listener capacity exceeded (128 per Agent)")
+		return fail(errors.New("UDP listener capacity exceeded (128 per Agent)"))
 	}
 	for _, v := range c.Rules {
 		if !v.Enabled {
@@ -276,7 +315,7 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 				routes[k] = map[string]route{}
 			}
 			routes[k][v.SharedTLS.ServerName] = route{rule: v, until: c.ValidUntil}
-			if v.SharedTLS.ParentID != "" {
+			if v.SharedTLS.ParentID != "" || v.SharedTLS.IngressID != "" {
 				continue
 			}
 		}
@@ -285,6 +324,9 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 		}
 		rules[k] = v
 		if old := r.listeners[k]; old != nil {
+			if old.ingressID != "" {
+				return fail(errors.New("dedicated listener conflicts with existing shared TLS ingress"))
+			}
 			next[k] = old
 			continue
 		}
@@ -366,6 +408,16 @@ func (r *Runtime) Apply(c contract.Config, persist bool) error {
 	}
 	for k, b := range next {
 		b.mu.Lock()
+		if b.ingressID != "" {
+			b.updateIngressRoutes(routes[k], inspectionProfiles, business, r.pools)
+			b.plans, b.business, b.associations = plans, business, controlAssociations
+			b.rule, b.until = rules[k], c.ValidUntil
+			close(b.changed)
+			b.changed = make(chan struct{})
+			b.resetIngressExpiry()
+			b.mu.Unlock()
+			continue
+		}
 		generation := inspectionGeneration(inspectionProfiles, business, rules[k], routes[k])
 		if plan := plans[rules[k].ID]; plan.HasAssociation() {
 			generation += "|udp-association:" + plan.Generation()
@@ -442,6 +494,15 @@ func (r *Runtime) StopLease(id string) {
 	defer r.mu.Unlock()
 	for _, b := range r.listeners {
 		b.mu.Lock()
+		if b.ingressID != "" {
+			for _, v := range b.routes {
+				if v.rule.Lease != nil && v.rule.Lease.ID == id {
+					b.revokeIngressRoute(v)
+				}
+			}
+			b.mu.Unlock()
+			continue
+		}
 		matches := b.rule.Lease != nil && b.rule.Lease.ID == id
 		for _, route := range b.routes {
 			matches = matches || route.rule.Lease != nil && route.rule.Lease.ID == id
@@ -470,6 +531,9 @@ func (b *binding) close() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.closed = true
+	if b.expiry != nil {
+		b.expiry.Stop()
+	}
 	b.cancel()
 	if b.tcp != nil {
 		b.tcp.Close()
@@ -492,14 +556,20 @@ func (b *binding) snapshot() (contract.Rule, time.Time, context.Context, *resour
 func (b *binding) track(c net.Conn) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.closed {
+	if b.closed || b.ingressID != "" && (b.ctx.Err() != nil || !time.Now().Before(b.until)) {
 		c.Close()
 		return false
 	}
 	b.conns[c] = struct{}{}
 	return true
 }
-func (b *binding) untrack(c net.Conn) { b.mu.Lock(); delete(b.conns, c); b.mu.Unlock(); c.Close() }
+func (b *binding) untrack(c net.Conn) {
+	b.mu.Lock()
+	delete(b.conns, c)
+	delete(b.connRoutes, c)
+	b.mu.Unlock()
+	c.Close()
+}
 func (b *binding) dial(ctx context.Context, v contract.Rule) (net.Conn, *tunnel.Session, error) {
 	if len(v.Backends) > 0 || len(v.RouteCandidates) > 0 || v.EffectivePolicy != nil && v.EffectivePolicy.Failover != nil {
 		return b.dialBackends(ctx, v)
@@ -579,8 +649,11 @@ func (b *binding) dialTargetTLS(ctx context.Context, v contract.Rule) (net.Conn,
 }
 
 func (b *binding) serveTCP() {
+	b.mu.Lock()
+	listener := b.tcp
+	b.mu.Unlock()
 	for {
-		c, e := b.tcp.Accept()
+		c, e := listener.Accept()
 		if e != nil {
 			return
 		}
@@ -588,6 +661,7 @@ func (b *binding) serveTCP() {
 		case b.slots <- struct{}{}:
 			go func() { defer func() { <-b.slots }(); b.handleTCP(c) }()
 		default:
+			b.rejectIngress("connection_capacity")
 			c.Close()
 		}
 	}
@@ -610,7 +684,8 @@ func (b *binding) handleTCP(c net.Conn) {
 	if v.SharedTLS != nil || business != nil && business.inbound != nil {
 		outer, err = policy.Inspect(client)
 		if err != nil {
-			if outer.Detection.Reason != "" {
+			b.rejectIngress("invalid_or_timed_out_hello")
+			if b.ingressID == "" && outer.Detection.Reason != "" {
 				b.recordInspection(v.ID, outer.Detection, "raw")
 			}
 			return
@@ -619,20 +694,29 @@ func (b *binding) handleTCP(c net.Conn) {
 		if v.SharedTLS != nil {
 			name, e := policy.Host(outer.Host)
 			if e != nil || outer.Kind != "tls" {
+				b.rejectIngress("tls_sni_required")
 				return
 			}
 			b.mu.Lock()
 			selected, ok := b.routes[name]
 			ctx = b.ctx
+			if ok && b.ingressID != "" {
+				ctx = selected.ctx
+				ok = !b.closed && ctx != nil && ctx.Err() == nil && time.Now().Before(b.until)
+				if ok {
+					b.connRoutes[c] = selected.rule.ID
+				}
+			}
+			if ok {
+				plan, business = b.plans[selected.rule.ID], b.business[selected.rule.ID]
+			}
 			b.mu.Unlock()
 			if !ok {
+				b.rejectIngress("sni_route_unavailable")
 				return
 			}
 			v, pool = selected.rule, selected.pool
 			layers = ruleLayers(v)
-			b.mu.Lock()
-			plan, business = b.plans[v.ID], b.business[v.ID]
-			b.mu.Unlock()
 		}
 		if err = outer.CheckMetadata(layers); err != nil {
 			b.policyRejected(v.ID)
@@ -707,7 +791,13 @@ func (b *binding) handleTCP(c net.Conn) {
 		}
 	}
 	defer target.Close()
-	if !b.track(target) {
+	tracked := false
+	if b.ingressID != "" {
+		tracked = b.trackIngressTarget(target, v.ID, ctx)
+	} else {
+		tracked = b.track(target)
+	}
+	if !tracked {
 		return
 	}
 	defer b.untrack(target)

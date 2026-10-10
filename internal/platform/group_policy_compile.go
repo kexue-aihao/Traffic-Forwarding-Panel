@@ -77,6 +77,15 @@ func compileGroupPolicy(rule *contract.Rule, role string, groups map[string]cont
 		}
 	}
 	if activeAdvanced(entry) {
+		if managedTLS(*rule) {
+			v := ingressSettings(entry)
+			if v == nil || !v.Enabled {
+				return errors.New("shared_tls_ingress_disabled")
+			}
+			if !contains(caps, "shared-tls-ingress-v1") {
+				return errors.New("required_capability_missing:shared-tls-ingress-v1")
+			}
+		}
 		if entry.Advanced.UDPOverTCP && rule.Network == "udp" && rule.Transport == "quic" && rule.ExitGroupID == "" {
 			return errors.New("udp_over_tcp_requires_configured_tcp_exit")
 		}
@@ -84,7 +93,7 @@ func compileGroupPolicy(rule *contract.Rule, role string, groups map[string]cont
 		if a.TLSInboundPolicy > 0 && rule.Network != "tcp" {
 			return errors.New("tls_inbound_requires_tcp")
 		}
-		if a.TLSInboundPolicy == 2 && role != "admin" && sharedParent(*rule) == "" {
+		if a.TLSInboundPolicy == 2 && role != "admin" && !sharesPort(*rule) {
 			return errors.New("tls_independent_port_admin_only")
 		}
 	}

@@ -12,6 +12,9 @@ import (
 func (b *binding) policyRejected(id string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if !b.activeIngressRule(id) {
+		return
+	}
 	if b.policyStatus == nil {
 		b.policyStatus = map[string]contract.RuleRuntimeStatus{}
 	}
@@ -24,6 +27,9 @@ func (b *binding) policyRejected(id string) {
 func (b *binding) recordDial(rule contract.Rule, candidate string, conn net.Conn) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if !b.activeIngressRule(rule.ID) {
+		return
+	}
 	if b.policyStatus == nil {
 		b.policyStatus = map[string]contract.RuleRuntimeStatus{}
 	}
@@ -51,6 +57,9 @@ func (b *binding) recordDial(rule contract.Rule, candidate string, conn net.Conn
 func (b *binding) recordInspection(id string, d detect.Detection, visibility string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if !b.activeIngressRule(id) {
+		return
+	}
 	if b.policyStatus == nil {
 		b.policyStatus = map[string]contract.RuleRuntimeStatus{}
 	}

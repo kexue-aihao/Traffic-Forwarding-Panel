@@ -447,6 +447,11 @@ func (s *Server) agentControlResult(w http.ResponseWriter, r *http.Request) {
 			return errConflict
 		}
 		if op.Kind == "uninstall" && in.Status == "succeeded" {
+			for _, q := range []string{"DELETE FROM cp_ingress_ports WHERE node_id=?", "DELETE FROM cp_tls_ingresses WHERE node_id=?"} {
+				if _, e = tx.ExecContext(r.Context(), s.q(q), node); e != nil {
+					return e
+				}
+			}
 			if _, e = tx.ExecContext(r.Context(), s.q("DELETE FROM cp_node_groups WHERE node_id=?"), node); e != nil {
 				return e
 			}

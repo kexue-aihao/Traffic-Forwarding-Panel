@@ -13,9 +13,12 @@ import (
 )
 
 type route struct {
-	rule  contract.Rule
-	until time.Time
-	pool  *resourcePool
+	rule       contract.Rule
+	until      time.Time
+	pool       *resourcePool
+	ctx        context.Context
+	cancel     context.CancelFunc
+	generation string
 }
 
 func sameRoutes(a, b map[string]route) bool {
@@ -48,11 +51,11 @@ func validateSharedRules(rules []contract.Rule) error {
 			return errors.New("duplicate shared TLS SNI")
 		}
 		names[k] = true
-		if t.ParentID == "" {
+		if t.ParentID == "" || t.IngressID != "" {
 			continue
 		}
 		p, ok := byID[t.ParentID]
-		if !ok || p.SharedTLS == nil || p.SharedTLS.ParentID != "" || p.UserID != r.UserID || p.GroupID != r.GroupID || p.NodeID != r.NodeID || key(p) != key(r) {
+		if !ok || p.SharedTLS == nil || p.SharedTLS.IngressID != "" || p.SharedTLS.ParentID != "" || p.UserID != r.UserID || p.GroupID != r.GroupID || p.NodeID != r.NodeID || key(p) != key(r) {
 			return errors.New("shared TLS parent unavailable or unauthorized")
 		}
 	}

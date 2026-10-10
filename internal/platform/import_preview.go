@@ -33,6 +33,9 @@ func (s *Server) importInputTx(ctx context.Context, tx *sql.Tx, owner string, ad
 	if mode != "update_by_port" {
 		return s.importRuleTx(ctx, tx, owner, admin, rule)
 	}
+	if managedTLS(rule) {
+		return rule, errors.New("shared TLS routes must be imported in create mode; a port does not identify a unique rule")
+	}
 	if !admin || rule.UserID == "" {
 		rule.UserID = owner
 	}

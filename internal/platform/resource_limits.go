@@ -43,7 +43,7 @@ func (s *Server) resourceCapabilities(ctx context.Context, tx *sql.Tx, rule cont
 	if err := json.Unmarshal([]byte(raw), &node); err != nil {
 		return false, err
 	}
-	return (rule.ProxyProtocol == nil || contains(node.Capabilities, "proxy-protocol-v1")) && (!rule.Advanced() || contains(node.Capabilities, "advanced-routing-v1")) && (rule.Transport != "direct-tls" || contains(node.Capabilities, "direct-tls-v1")) && (rule.Transport != "secure-direct" || contains(node.Capabilities, "secure-direct-v1")), nil
+	return (!managedTLS(rule) || contains(node.Capabilities, "shared-tls-ingress-v1")) && (rule.ProxyProtocol == nil || contains(node.Capabilities, "proxy-protocol-v1")) && (!rule.Advanced() || contains(node.Capabilities, "advanced-routing-v1")) && (rule.Transport != "direct-tls" || contains(node.Capabilities, "direct-tls-v1")) && (rule.Transport != "secure-direct" || contains(node.Capabilities, "secure-direct-v1")), nil
 }
 
 // Existing rules are ordered by immutable ID on every node. A downgrade keeps

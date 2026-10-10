@@ -586,6 +586,7 @@ const form = ref({
   backends: [] as { target: string; weight: number; disabled: boolean }[],
   shared: false,
   shared_parent: "",
+  shared_ingress: "",
   shared_name: "",
   identity_group_ids: [] as string[],
   group_ids: [] as string[],
@@ -605,6 +606,34 @@ const formForwards = computed(
     (!!form.value.group_type || !!selected.value),
 );
 const entryGroups = computed(() => options.value.groups.filter(isEntryGroup));
+const groupIngress = computed(() => {
+  const group = options.value.groups.find((g) => g.id === form.value.group_id);
+  const advanced = group?.advanced as Row | undefined;
+  return Number(advanced?.policy_version) === 2
+    ? (advanced?.shared_tls_ingress as Row | undefined)
+    : undefined;
+});
+const managedIngressMode = computed(
+  () =>
+    !!form.value.shared_ingress ||
+    (!selected.value && !!groupIngress.value?.enabled),
+);
+const ingressListen = computed(() => {
+  const v = groupIngress.value;
+  if (!v) return form.value.listen;
+  const host = String(v.listen_ip || "0.0.0.0");
+  return `${host.includes(":") ? `[${host}]` : host}:${v.port || 443}`;
+});
+watch(
+  () => [form.value.group_id, form.value.network],
+  () => {
+    if (selected.value) return;
+    form.value.shared =
+      form.value.network === "tcp" && !!groupIngress.value?.enabled;
+    form.value.shared_ingress = form.value.shared ? "group" : "";
+    form.value.shared_parent = "";
+  },
+);
 // 下拉的 value 只能是字符串，而这一项要同时提交机器与设备组，所以把两个 id
 // 拼起来（都是接口给的不透明字符串，中间用 :: 隔开）。
 function entryKeyOf(nodeID: string, groupID: string) {
@@ -805,6 +834,9 @@ async function open(row: Row | null = null) {
     shared_parent: String(
       (row?.shared_tls as Row | undefined)?.parent_id || "",
     ),
+    shared_ingress: String(
+      (row?.shared_tls as Row | undefined)?.ingress_id || "",
+    ),
     shared_name: String(
       (row?.shared_tls as Row | undefined)?.server_name || "",
     ),
@@ -905,14 +937,16 @@ function payload(): Row {
     group_id: f.group_id,
     network: f.network,
     transport: ruleTransport,
-    listen: f.listen,
+    listen: f.shared && managedIngressMode.value ? "" : f.listen,
     target: f.target,
     enabled: f.enabled,
     backends: f.network === "tcp" ? f.backends : [],
     shared_tls:
       f.shared && f.network === "tcp"
         ? {
-            parent_id: f.shared_parent,
+            ...(managedIngressMode.value
+              ? { ingress_id: f.shared_ingress || "group" }
+              : { parent_id: f.shared_parent }),
             server_name: f.shared_name.toLowerCase(),
           }
         : null,
@@ -2089,7 +2123,7 @@ const labels: Record<string, string> = {
             <p v-if="selected" class="small muted">
               入口、设备组、传输层和监听地址创建后不可更改。如需调整，请删除并等待节点确认解绑后重建。
             </p>
-            <label
+            <label v-if="!(form.shared && managedIngressMode)"
               >监听地址<input
                 v-model="form.listen"
                 :disabled="!!selected"
@@ -2178,7 +2212,10 @@ const labels: Record<string, string> = {
                 ><input
                   v-model="form.shared"
                   type="checkbox"
-                  :disabled="!!selected && !!form.shared_parent"
+                  :disabled="
+                    !!selected &&
+                    (!!form.shared_parent || !!form.shared_ingress)
+                  "
                 />按 SNI 路由</label
               >
               <template v-if="form.shared">
@@ -2188,15 +2225,23 @@ const labels: Record<string, string> = {
                     required
                     placeholder="app.example.com"
                 /></label>
-                <label
+                <p v-if="managedIngressMode" class="small muted">
+                  统一入口：{{ ingressListen }}。管理员配置监听，规则按 SNI
+                  路由。
+                </p>
+                <label v-if="!managedIngressMode"
                   >母规则 ID<input
                     v-model="form.shared_parent"
                     :disabled="!!selected"
                     placeholder="留空创建母规则"
                 /></label>
-                <p class="small muted">
+                <p v-if="!managedIngressMode" class="small muted">
                   子规则须与母规则属于同一账号、节点、设备组和监听地址。空 SNI
                   与未匹配域名会被拒绝；客户端直接验证回源服务证书。
+                </p>
+                <p v-else class="small muted">
+                  填写客户端实际使用的业务 TLS 域名，目标证书须覆盖该域名。空
+                  SNI 与未知域名会被拒绝；SNI 不替代业务认证。
                 </p>
               </template>
             </fieldset>

@@ -98,6 +98,9 @@ func validateGroupAdvanced(a *contract.GroupAdvanced) error {
 	if a == nil {
 		return nil
 	}
+	if err := validateIngressSettings(a); err != nil {
+		return err
+	}
 	if a.PolicyVersion != 0 && a.PolicyVersion != contract.GroupPolicyVersion {
 		return errors.New("unsupported group policy version")
 	}
@@ -389,6 +392,14 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err.Error())
 		return
 	}
+	if g.Advanced != nil && g.Advanced.SharedTLSIngress != nil && (!g.CanEnter() || actor.Role != "admin") {
+		fail(w, 400, "shared TLS ingress requires an administrator-owned entry group")
+		return
+	}
+	if g.Advanced != nil && g.Advanced.SharedTLSIngress != nil && g.Advanced.SharedTLSIngress.Enabled && !activeAdvanced(g) {
+		fail(w, 400, "shared TLS ingress requires activated policy_version 2")
+		return
+	}
 	if !g.CanEnter() && g.PortMin == 0 && g.PortMax == 0 {
 		g.PortMin, g.PortMax = 10000, 60000
 	}
@@ -511,6 +522,9 @@ func (s *Server) saveGroup(w http.ResponseWriter, r *http.Request) {
 				return e
 			}
 		}
+		if e := s.syncTLSIngresses(r.Context(), tx); e != nil {
+			return e
+		}
 		if e := s.publishGroupDependencies(r.Context(), tx); e != nil {
 			return e
 		}
@@ -549,7 +563,7 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args = append(args, n, o)
-	rows, e := s.Store.DB.QueryContext(r.Context(), s.q("SELECT payload,category FROM cp_rules"+where+" ORDER BY id LIMIT ? OFFSET ?"), args...)
+	rows, e := s.Store.DB.QueryContext(r.Context(), s.q("SELECT payload,category,(SELECT payload FROM cp_groups WHERE id=cp_rules.group_id) FROM cp_rules"+where+" ORDER BY id LIMIT ? OFFSET ?"), args...)
 	if e != nil {
 		fail(w, 500, "query failed")
 		return
@@ -557,14 +571,20 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := []contract.Rule{}
 	for rows.Next() {
-		var p, category string
+		var p, category, groupRaw string
 		var rule contract.Rule
-		if rows.Scan(&p, &category) != nil || json.Unmarshal([]byte(p), &rule) != nil {
+		if rows.Scan(&p, &category, &groupRaw) != nil || json.Unmarshal([]byte(p), &rule) != nil {
 			fail(w, 500, "query failed")
 			return
 		}
 		// 分类来自那一列；payload 里不该有它，这里以列为准。
 		rule.Category = category
+		var group contract.Group
+		if json.Unmarshal([]byte(groupRaw), &group) != nil {
+			fail(w, 500, "group unavailable")
+			return
+		}
+		hydrateTLSListen(&rule, group)
 		redact(&rule)
 		items = append(items, rule)
 	}
@@ -685,7 +705,7 @@ func (s *Server) allocateListen(ctx context.Context, tx *sql.Tx, groupPayload, n
 	for i := 0; i < span; i++ {
 		port := g.PortMin + (start+i)%span
 		var n int
-		if e := tx.QueryRowContext(ctx, s.q("SELECT (SELECT COUNT(*) FROM cp_ports WHERE node_id=? AND network=? AND port=?)+(SELECT COUNT(*) FROM cp_exit_ports WHERE node_id=? AND network=? AND port=?)"), node, network, port, node, network, port).Scan(&n); e != nil {
+		if e := tx.QueryRowContext(ctx, s.q("SELECT (SELECT COUNT(*) FROM cp_ports WHERE node_id=? AND network=? AND port=?)+(SELECT COUNT(*) FROM cp_exit_ports WHERE node_id=? AND network=? AND port=?)+(SELECT COUNT(*) FROM cp_ingress_ports WHERE node_id=? AND network=? AND port=?)"), node, network, port, node, network, port, node, network, port).Scan(&n); e != nil {
 			return "", e
 		}
 		if n == 0 {
@@ -859,10 +879,10 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 		if deleted != 0 || old.Version != oldVersion || (actor.Role != "admin" && old.UserID != actor.ID) {
 			return errConflict
 		}
-		if rule.NodeID != old.NodeID || rule.GroupID != old.GroupID || rule.UserID != old.UserID || rule.Listen != old.Listen || rule.Network != old.Network {
+		if rule.NodeID != old.NodeID || rule.GroupID != old.GroupID || rule.UserID != old.UserID || !managedTLS(old) && rule.Listen != old.Listen || rule.Network != old.Network {
 			return errors.New("listener, owner and placement are immutable; delete and recreate after ACK")
 		}
-		if sharedParent(*rule) != sharedParent(old) {
+		if sharedParent(*rule) != sharedParent(old) || managedTLS(*rule) != managedTLS(old) || managedTLS(old) && rule.SharedTLS.IngressID != old.SharedTLS.IngressID {
 			return errors.New("shared TLS parent is immutable")
 		}
 		if rule.ExitGroupID == "" && old.ExitGroupID == "" && rule.Tunnel != nil && old.Tunnel != nil {
@@ -897,6 +917,13 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 	if e = s.nodeAvailableTx(ctx, tx, rule.NodeID); e != nil {
 		return e
 	}
+	var g contract.Group
+	if e = json.Unmarshal([]byte(payload), &g); e != nil {
+		return e
+	}
+	if e = s.bindTLSIngress(ctx, tx, rule, g); e != nil {
+		return e
+	}
 	// 监听地址留空 = 从设备组允许的范围里随机分配。
 	if strings.TrimSpace(rule.Listen) == "" {
 		listen, e := s.allocateListen(ctx, tx, payload, rule.NodeID, rule.Network)
@@ -916,9 +943,14 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 	if reservedExit > 0 {
 		return errors.New("physical port reserved by exit listener")
 	}
-	var g contract.Group
-	if e = json.Unmarshal([]byte(payload), &g); e != nil {
-		return e
+	if !managedTLS(*rule) {
+		var reservedIngress int
+		if e = tx.QueryRowContext(ctx, s.q("SELECT COUNT(*) FROM cp_ingress_ports WHERE node_id=? AND network=? AND port=?"), rule.NodeID, rule.Network, port).Scan(&reservedIngress); e != nil {
+			return e
+		}
+		if reservedIngress != 0 {
+			return errors.New("physical port reserved by shared TLS ingress")
+		}
 	}
 	if actor.Role != "admin" {
 		authorized, err := s.groupAuthorized(ctx, tx, rule.GroupID, actor.ID)
@@ -944,10 +976,10 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 	if e = tx.QueryRowContext(ctx, s.q("SELECT role FROM cp_users WHERE id=?"), rule.UserID).Scan(&ownerRole); e != nil {
 		return e
 	}
-	if activeAdvanced(g) && (g.Advanced.TLSInboundPolicy > 0 && rule.Network != "tcp" || g.Advanced.TLSInboundPolicy == 2 && ownerRole != "admin" && sharedParent(*rule) == "") {
+	if activeAdvanced(g) && (g.Advanced.TLSInboundPolicy > 0 && rule.Network != "tcp" || g.Advanced.TLSInboundPolicy == 2 && ownerRole != "admin" && !sharesPort(*rule)) {
 		return errors.New("TLS inbound group policy denied")
 	}
-	if port < g.PortMin || port > g.PortMax || entryPolicyDenied(g, *rule) {
+	if (!managedTLS(*rule) && (port < g.PortMin || port > g.PortMax)) || entryPolicyDenied(g, *rule) {
 		return errors.New("group policy denied")
 	}
 	for _, p := range rule.BlockedProtocols {
@@ -959,7 +991,7 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 	if e = s.validateSharedTx(ctx, tx, *rule); e != nil {
 		return e
 	}
-	if rule.Enabled {
+	if rule.Enabled || managedTLS(*rule) {
 		supported, err := s.resourceCapabilities(ctx, tx, *rule)
 		if err != nil {
 			return err
@@ -1006,7 +1038,7 @@ func (s *Server) saveRuleTx(ctx context.Context, tx *sql.Tx, actor contract.User
 		if e != nil {
 			return e
 		}
-		if sharedParent(*rule) == "" {
+		if !sharesPort(*rule) {
 			_, e = tx.ExecContext(ctx, s.q(`INSERT INTO cp_ports(node_id,network,port,rule_id) VALUES(?,?,?,?)`), rule.NodeID, rule.Network, port, rule.ID)
 			if e != nil {
 				return errors.New("physical machine port reserved (all IP addresses)")

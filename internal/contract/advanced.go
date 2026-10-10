@@ -16,7 +16,33 @@ type Backend struct {
 // SharedTLS routes the unmodified TLS handshake to the selected rule's target.
 type SharedTLS struct {
 	ParentID   string `json:"parent_id,omitempty"`
+	IngressID  string `json:"ingress_id,omitempty"`
 	ServerName string `json:"server_name"`
+}
+
+// SharedTLSIngress is an administrator-owned socket, independent of rule leases.
+type SharedTLSIngress struct {
+	ID      string `json:"id"`
+	NodeID  string `json:"node_id"`
+	GroupID string `json:"group_id"`
+	Listen  string `json:"listen"`
+}
+
+type SharedTLSIngressSettings struct {
+	Enabled  bool   `json:"enabled"`
+	ListenIP string `json:"listen_ip"`
+	Port     int    `json:"port"`
+}
+
+type TLSIngressStatus struct {
+	ID          string `json:"id"`
+	GroupID     string `json:"group_id"`
+	Listen      string `json:"listen"`
+	State       string `json:"state"`
+	Routes      int    `json:"routes"`
+	Connections int    `json:"connections"`
+	Rejected    uint64 `json:"rejected"`
+	LastReject  string `json:"last_reject,omitempty"`
 }
 
 func (r Rule) Advanced() bool {
@@ -47,7 +73,7 @@ func (r Rule) ValidateAdvanced() error {
 		return errors.New("weighted health-checked backends require TCP and an enabled target")
 	}
 	if t := r.SharedTLS; t != nil {
-		if r.Network != "tcp" || t.ParentID == r.ID && r.ID != "" || !ValidServerName(t.ServerName) {
+		if r.Network != "tcp" || t.ParentID == r.ID && r.ID != "" || t.ParentID != "" && t.IngressID != "" || !ValidServerName(t.ServerName) {
 			return errors.New("shared TLS requires TCP, an exact DNS SNI and a distinct parent")
 		}
 	}

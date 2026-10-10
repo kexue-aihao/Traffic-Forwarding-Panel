@@ -55,6 +55,58 @@ const preview = ref<{
 const previewError = ref("");
 const error = ref("");
 const settings = ref<Settings>(initialGroupAdvanced(props.group));
+function ingressValue(key: string) {
+  return (settings.value.shared_tls_ingress as Settings)?.[key];
+}
+function setIngress(key: string, value: unknown) {
+  settings.value.shared_tls_ingress = {
+    ...(settings.value.shared_tls_ingress as Settings),
+    [key]: value,
+  };
+}
+const ingressNodes = ref<Group[]>([]);
+const ingressStatusError = ref("");
+watch(
+  () => !!ingressValue("enabled"),
+  async (enabled) => {
+    if (!enabled) return;
+    try {
+      const nodes: Group[] = [];
+      for (let page = 1; ; page++) {
+        const batch = await api<{ items: Group[]; total: number }>(
+          `/nodes?page=${page}&page_size=100`,
+        );
+        nodes.push(...batch.items);
+        if (!batch.items.length || nodes.length >= batch.total) break;
+      }
+      ingressNodes.value = nodes.filter((n) =>
+        ((n.group_ids as string[]) || []).includes(String(props.group.id)),
+      );
+    } catch (e) {
+      ingressStatusError.value = errorText(e);
+    }
+  },
+  { immediate: true },
+);
+function ingressNodeState(node: Group) {
+  if (
+    !((node.capabilities as string[]) || []).includes("shared-tls-ingress-v1")
+  )
+    return "需要升级 Agent";
+  if (node.apply_error) return "应用失败";
+  if (
+    !node.last_seen ||
+    Date.now() - Date.parse(String(node.last_seen)) > 120000
+  )
+    return "节点离线";
+  if (node.desired_version !== node.applied_version) return "等待节点确认";
+  const status = ((node.tls_ingress_statuses as Group[]) || []).find(
+    (s) => s.group_id === props.group.id,
+  );
+  if (!status) return "等待入口状态";
+  if (status.state === "expired") return "配置已过期";
+  return `监听中 · ${status.routes} 条路由 · ${status.connections} 个连接 · ${status.rejected} 次拒绝`;
+}
 const initial = JSON.stringify(settings.value);
 const initialActivation = activated.value;
 const rawText = ref(formatGroupAdvanced(settings.value));
@@ -506,7 +558,68 @@ async function save() {
           </div>
           <p class="muted small field-description">{{ field.description }}</p>
 
-          <label v-if="isBoolean(field.key)" class="check advanced-check">
+          <fieldset
+            v-if="field.key === 'shared_tls_ingress'"
+            class="choice-list"
+          >
+            <legend class="sr-only">设备组共享 TLS 入口</legend>
+            <label class="check"
+              ><input
+                type="checkbox"
+                :checked="!!ingressValue('enabled')"
+                :disabled="busy"
+                @change="
+                  setIngress(
+                    'enabled',
+                    ($event.target as HTMLInputElement).checked,
+                  )
+                "
+              />启用共享入口</label
+            >
+            <label
+              >监听 IP<input
+                :value="String(ingressValue('listen_ip') || '')"
+                :disabled="busy"
+                required
+                placeholder="0.0.0.0"
+                @input="
+                  setIngress(
+                    'listen_ip',
+                    ($event.target as HTMLInputElement).value,
+                  )
+                "
+            /></label>
+            <label
+              >共享 TCP 端口<input
+                type="number"
+                :value="Number(ingressValue('port'))"
+                :disabled="busy"
+                required
+                min="1"
+                max="65535"
+                @input="
+                  setIngress(
+                    'port',
+                    Number(($event.target as HTMLInputElement).value),
+                  )
+                "
+            /></label>
+            <p class="small muted">
+              客户端必须发送每条规则的业务域名，目标证书须覆盖该域名。普通 TCP
+              和原生 UDP 使用独立入口。
+            </p>
+            <p v-if="ingressStatusError" class="error">
+              {{ ingressStatusError }}
+            </p>
+            <p
+              v-for="node in ingressNodes"
+              :key="String(node.id)"
+              class="small muted"
+            >
+              {{ node.name }}：{{ ingressNodeState(node) }}
+            </p>
+          </fieldset>
+          <label v-else-if="isBoolean(field.key)" class="check advanced-check">
             <input
               :id="`advanced-${field.key}`"
               v-model="settings[field.key]"
@@ -538,7 +651,7 @@ async function save() {
           >
             <option value="0">0 · 宽松模式</option>
             <option value="1">1 · 仅允许 TLS 入站规则</option>
-            <option value="2">2 · TLS 入站规则使用管理员独立端口</option>
+            <option value="2">2 · 共享 TLS，独立端口仅管理员</option>
           </Select>
 
           <Select

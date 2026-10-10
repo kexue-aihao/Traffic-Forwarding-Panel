@@ -213,6 +213,19 @@
               }
             ]
           },
+          "tls_ingress_statuses": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TLSIngressStatus"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "version": {
             "format": "int64",
             "type": "integer"
@@ -576,6 +589,19 @@
               {
                 "items": {
                   "$ref": "#/components/schemas/ServiceConfig"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tls_ingresses": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SharedTLSIngress"
                 },
                 "type": "array"
               },
@@ -1470,6 +1496,17 @@
                 "type": "null"
               }
             ]
+          },
+          "shared_tls_ingress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SharedTLSIngressSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Administrator-owned entry-group TLS/TCP listener with exact SNI routing, activated by policy_version 2. listen_ip defaults to 0.0.0.0 and port to 443. Independent of business rule ownership and leases."
           },
           "tls": {
             "additionalProperties": true,
@@ -2606,6 +2643,19 @@
               {
                 "items": {
                   "$ref": "#/components/schemas/ServiceStatus"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tls_ingress_statuses": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TLSIngressStatus"
                 },
                 "type": "array"
               },
@@ -5463,6 +5513,10 @@
       "SharedTLS": {
         "additionalProperties": false,
         "properties": {
+          "ingress_id": {
+            "description": "Use group on creation to bind the group/node ingress, or its assigned ID. Mutually exclusive with parent_id. listen is server-generated; each ingress reserves a unique business SNI.",
+            "type": "string"
+          },
           "parent_id": {
             "type": "string"
           },
@@ -5472,6 +5526,51 @@
         },
         "required": [
           "server_name"
+        ],
+        "type": "object"
+      },
+      "SharedTLSIngress": {
+        "additionalProperties": false,
+        "properties": {
+          "group_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "listen": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "node_id",
+          "group_id",
+          "listen"
+        ],
+        "type": "object"
+      },
+      "SharedTLSIngressSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "listen_ip": {
+            "type": "string"
+          },
+          "port": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "listen_ip",
+          "port"
         ],
         "type": "object"
       },
@@ -5546,6 +5645,48 @@
           "diagnostics_enabled",
           "diagnostics_per_minute",
           "geo_lookup_url"
+        ],
+        "type": "object"
+      },
+      "TLSIngressStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "connections": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_reject": {
+            "type": "string"
+          },
+          "listen": {
+            "type": "string"
+          },
+          "rejected": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "routes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "group_id",
+          "listen",
+          "state",
+          "routes",
+          "connections",
+          "rejected"
         ],
         "type": "object"
       },

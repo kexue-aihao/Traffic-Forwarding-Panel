@@ -77,6 +77,9 @@ func (s *Server) groupPolicyPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	slices.SortFunc(out.Profiles, func(a, b policyPreviewProfiles) int { return strings.Compare(a.NodeID, b.NodeID) })
 	out.Notes = append(out.Notes, "Shadowsocks/VMess 只确认所选本地凭据及支持版本；Trojan 需受控业务 TLS 终止，透传 TLS 内层不可见。", "strict 要求已声明范围的能力/profile 就绪，否则规则停止；observe 只观测，不承诺阻断。", "未知应用默认允许；unknown=deny 是独立的未知流量拒绝策略，会影响普通未知业务。", "SOCKS5 UDP 需受控 TCP UDP ASSOCIATE 关联或显式选择本地结构模式；结构首部不能当作认证确认，出口不能证明原客户端控制关联。", "手工或未托管出口只能确认入口检测；出口独立检测需托管服务与双方能力/profile 就绪。")
+	if v := ingressSettings(g); v != nil && v.Enabled {
+		out.Notes = append(out.Notes, "共享 TLS 入口按业务 SNI 路由；目标证书须覆盖该域名，不提供默认目标。修改监听地址会关闭共享连接，旧端口等待节点确认后释放。")
+	}
 	if in.Advanced != nil {
 		out.Version = in.Advanced.PolicyVersion
 	}

@@ -59,14 +59,17 @@ func (s *Server) validateSharedTx(ctx context.Context, tx *sql.Tx, r contract.Ru
 			return errors.New("shared TLS parent still has children")
 		}
 		if v.ID == sharedParent(r) {
-			parentFound = v.SharedTLS != nil && sharedParent(v) == "" && v.UserID == r.UserID && v.GroupID == r.GroupID && v.Listen == r.Listen && v.Network == r.Network
+			parentFound = v.SharedTLS != nil && !managedTLS(v) && sharedParent(v) == "" && v.UserID == r.UserID && v.GroupID == r.GroupID && v.Listen == r.Listen && v.Network == r.Network
 		}
-		if r.SharedTLS != nil && v.SharedTLS != nil && v.Listen == r.Listen {
+		if r.SharedTLS != nil && v.SharedTLS != nil && (managedTLS(r) && v.SharedTLS.IngressID == r.SharedTLS.IngressID || !managedTLS(r) && v.Listen == r.Listen) {
 			count++
 			if r.SharedTLS.ServerName == v.SharedTLS.ServerName {
 				return errors.New("SNI already reserved")
 			}
 		}
+	}
+	if managedTLS(r) {
+		parentFound = true
 	}
 	if !parentFound {
 		return errors.New("shared TLS parent is unavailable or belongs to another owner/placement")

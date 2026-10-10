@@ -127,6 +127,9 @@ func (s *Server) registerNode(w http.ResponseWriter, r *http.Request) {
 				return e
 			}
 		}
+		if err := s.syncTLSIngresses(r.Context(), tx); err != nil {
+			return err
+		}
 		if s.opts.EventEmitter != nil {
 			recipients := map[string]bool{}
 			rows, e := tx.QueryContext(r.Context(), s.q(`SELECT id FROM cp_users WHERE disabled=0 AND role='admin'`))
@@ -307,6 +310,7 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 		}
 		if u.Role != "admin" {
 			node.RuleStatuses = nil
+			node.TLSIngressStatuses = nil
 			node.Services = nil
 			visible := []string{}
 			for _, id := range node.GroupIDs {
@@ -348,6 +352,14 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	if e = s.compileTLSIngresses(r.Context(), tx, &cfg, nodeInfo.Capabilities); e != nil {
+		fail(w, 500, "shared TLS configuration unavailable")
+		return
+	}
+	ingresses := map[string]contract.SharedTLSIngress{}
+	for _, v := range cfg.TLSIngresses {
+		ingresses[v.ID] = v
+	}
 	if e = tx.QueryRowContext(r.Context(), s.q(`SELECT desired_version FROM cp_nodes WHERE id=?`), node).Scan(&cfg.Version); e != nil {
 		fail(w, 500, "config unavailable")
 		return
@@ -391,6 +403,14 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		}
 		if rule.Advanced() && !contains(nodeInfo.Capabilities, "advanced-routing-v1") {
 			continue
+		}
+		if managedTLS(rule) {
+			v, ok := ingresses[rule.SharedTLS.IngressID]
+			if !ok || v.GroupID != rule.GroupID {
+				cfg.BlockedRules = append(cfg.BlockedRules, contract.BlockedRule{RuleID: rule.ID, Reason: "shared_tls_ingress_unavailable_or_capability_missing"})
+				continue
+			}
+			rule.Listen = v.Listen
 		}
 		if err := compileGroupPolicy(&rule, role, policyGroups, nodeInfo.Capabilities, nodeInfo.InspectionProfiles); err != nil {
 			cfg.BlockedRules = append(cfg.BlockedRules, contract.BlockedRule{RuleID: rule.ID, Reason: err.Error()})
@@ -500,6 +520,15 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		statusNode.Services = in.Services
+		if len(in.TLSIngressStatuses) > 100 {
+			return errors.New("too many shared TLS ingress reports")
+		}
+		for _, v := range in.TLSIngressStatuses {
+			if len(v.ID) > 64 || len(v.GroupID) > 64 || len(v.Listen) > 190 || !contains([]string{"listening", "expired"}, v.State) || v.Routes < 0 || v.Routes > 64 || v.Connections < 0 || v.Connections > 256 || !contains([]string{"", "connection_capacity", "invalid_or_timed_out_hello", "tls_sni_required", "sni_route_unavailable"}, v.LastReject) {
+				return errors.New("invalid shared TLS ingress report")
+			}
+		}
+		statusNode.TLSIngressStatuses = in.TLSIngressStatuses
 		if len(in.RuleStatuses) > 4096 {
 			return errors.New("too many rule status reports")
 		}
@@ -558,6 +587,9 @@ func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.Error == "" {
 			_, e = tx.ExecContext(r.Context(), s.q(`DELETE FROM cp_ports WHERE node_id=? AND rule_id IN(SELECT id FROM cp_rules WHERE node_id=? AND deleted=1 AND release_version<=?)`), node, node, in.AppliedVersion)
+			if e == nil {
+				_, e = tx.ExecContext(r.Context(), s.q("DELETE FROM cp_ingress_ports WHERE node_id=? AND release_version>0 AND release_version<=?"), node, in.AppliedVersion)
+			}
 		}
 		return e
 	})

@@ -2,7 +2,7 @@
 
 Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP、secure-direct 和单出口 QUIC DATAGRAM 加密承载。
 
-当前版本为正式版 `v0.1.40`。安装包、更新范围及升级注意事项见 [发布说明](docs/releases/v0.1.40.md)。本版为设备组高级设置接通 Shadowsocks、Trojan、VMess、SOCKS5 的协议嗅探与禁用，覆盖直连入口和入口→出口，并提供本地凭据准备状态、独立出口检查、业务 TLS/WS 适配及 SOCKS5 UDP 受控关联。Shadowsocks/VMess 需要已知本地凭据，Trojan 需要受控业务 TLS 终止；部署与范围见 [协议检测交付说明](docs/protocol-sniffing-implementation.md)。需要更新面板及入口、出口 Agent，并显式启用相应高级检测配置。保留完整高级策略、直连 UDP 与单出口 QUIC DATAGRAM；Linux 跨机吞吐/P99、5% 性能预算和 24 小时稳定性尚未验收。已实现内容见 [实施状态](docs/implementation-status.md)，完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持已有 Docker 安装自动备份并升级。Cyber 按用户要求跳过；生产容量、公网和真实支付仍待验收。
+当前版本为正式版 `v0.1.41`。安装包、更新范围及升级注意事项见 [发布说明](docs/releases/v0.1.41.md)。本版新增设备组统一 TLS 共享入口，授权账户的规则可在同一入口节点复用一个 TCP 端口，通过真实业务 SNI 分流到各自目标，覆盖直连入口和入口→出口，保留独立策略、租约与计费。先更新面板与 Agent，再在管理员设备组高级设置显式启用；默认 TLS 透传，目标证书必须覆盖业务 SNI，已有规则不自动迁移，详见 [共享入口说明](docs/shared-tls-ingress.md)。完整高级策略、条件化协议嗅探禁用、直连 UDP 与单出口 QUIC DATAGRAM 已提供，协议检测范围见 [交付说明](docs/protocol-sniffing-implementation.md)。Linux 跨机吞吐/P99、5% 性能预算和 24 小时稳定性尚未验收。已实现内容见 [实施状态](docs/implementation-status.md)，完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持已有 Docker 安装自动备份并升级。Cyber 按用户要求跳过；生产容量、公网和真实支付仍待验收。
 
 ## 本机启动
 
@@ -102,6 +102,7 @@ npm run build
 npx playwright install
 npm test
 npm run test:live
+npm run test:tls-ingress
 ```
 
 前端需 Node >=22.12，推荐 Node 24；运行时仅 Vue、vue-router 和本地 Inter。标准、构建资产要求与浏览器测试说明见 [前端开发](web/README.md)。live 测试编译独立面板并使用随机 SQLite 库，模拟 Agent 上报；真实转发由 Go 集成测试单独验证。

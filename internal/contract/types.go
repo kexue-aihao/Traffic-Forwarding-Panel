@@ -72,25 +72,27 @@ type Group struct {
 // GroupAdvanced mirrors the optional device-group settings exposed by the
 // reference panel. The UI edits JSONC; the API validates structured JSON.
 type GroupAdvanced struct {
-	PolicyVersion     int               `json:"policy_version,omitempty"`
-	Inspection        *InspectionPolicy `json:"inspection,omitempty"`
-	AllowedHost       []string          `json:"allowed_host,omitempty"`
-	BlockedHost       []string          `json:"blocked_host,omitempty"`
-	BlockedPath       []string          `json:"blocked_path,omitempty"`
-	BlockedProtocol   []string          `json:"blocked_protocol,omitempty"`
-	TLSInboundPolicy  int               `json:"tls_inbound_policy,omitempty"`
-	TLSRejectEmptySNI bool              `json:"tls_reject_empty_sni,omitempty"`
-	DisableUDP        bool              `json:"disable_udp,omitempty"`
-	UDPOverTCP        bool              `json:"udp_over_tcp,omitempty"`
-	IPv6Group         []string          `json:"ipv6_group,omitempty"`
-	MaxFail           int               `json:"max_fail"`
-	FailTimeoutSec    int               `json:"fail_timout_sec"`
-	ReverseGroup      []string          `json:"reverse_group,omitempty"`
-	Protocol          string            `json:"protocol,omitempty"`
-	TLS               map[string]any    `json:"tls,omitempty"`
+	SharedTLSIngress  *SharedTLSIngressSettings `json:"shared_tls_ingress,omitempty"`
+	PolicyVersion     int                       `json:"policy_version,omitempty"`
+	Inspection        *InspectionPolicy         `json:"inspection,omitempty"`
+	AllowedHost       []string                  `json:"allowed_host,omitempty"`
+	BlockedHost       []string                  `json:"blocked_host,omitempty"`
+	BlockedPath       []string                  `json:"blocked_path,omitempty"`
+	BlockedProtocol   []string                  `json:"blocked_protocol,omitempty"`
+	TLSInboundPolicy  int                       `json:"tls_inbound_policy,omitempty"`
+	TLSRejectEmptySNI bool                      `json:"tls_reject_empty_sni,omitempty"`
+	DisableUDP        bool                      `json:"disable_udp,omitempty"`
+	UDPOverTCP        bool                      `json:"udp_over_tcp,omitempty"`
+	IPv6Group         []string                  `json:"ipv6_group,omitempty"`
+	MaxFail           int                       `json:"max_fail"`
+	FailTimeoutSec    int                       `json:"fail_timout_sec"`
+	ReverseGroup      []string                  `json:"reverse_group,omitempty"`
+	Protocol          string                    `json:"protocol,omitempty"`
+	TLS               map[string]any            `json:"tls,omitempty"`
 }
 
 type Node struct {
+	TLSIngressStatuses []TLSIngressStatus        `json:"tls_ingress_statuses,omitempty"`
 	InspectionProfiles []InspectionProfileStatus `json:"inspection_profiles,omitempty"`
 	RuleStatuses       []RuleRuntimeStatus       `json:"rule_statuses,omitempty"`
 	Services           []ServiceStatus           `json:"services,omitempty"`
@@ -188,16 +190,18 @@ type Lease struct {
 }
 
 type Config struct {
-	BlockedRules    []BlockedRule   `json:"blocked_rules,omitempty"`
-	Services        []ServiceConfig `json:"services,omitempty"`
-	ContractVersion int             `json:"contract_version"`
-	NodeID          string          `json:"node_id"`
-	Version         int64           `json:"version"`
-	ValidUntil      time.Time       `json:"valid_until"`
-	Rules           []Rule          `json:"rules"`
+	TLSIngresses    []SharedTLSIngress `json:"tls_ingresses,omitempty"`
+	BlockedRules    []BlockedRule      `json:"blocked_rules,omitempty"`
+	Services        []ServiceConfig    `json:"services,omitempty"`
+	ContractVersion int                `json:"contract_version"`
+	NodeID          string             `json:"node_id"`
+	Version         int64              `json:"version"`
+	ValidUntil      time.Time          `json:"valid_until"`
+	Rules           []Rule             `json:"rules"`
 }
 
 type Ack struct {
+	TLSIngressStatuses []TLSIngressStatus        `json:"tls_ingress_statuses,omitempty"`
 	InspectionProfiles []InspectionProfileStatus `json:"inspection_profiles"`
 	RuleStatuses       []RuleRuntimeStatus       `json:"rule_statuses,omitempty"`
 	Services           []ServiceStatus           `json:"services,omitempty"`

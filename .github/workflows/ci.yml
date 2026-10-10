@@ -119,6 +119,8 @@ jobs:
         working-directory: web
       - run: npm run test:live
         working-directory: web
+      - run: npm run test:tls-ingress
+        working-directory: web
       - name: Install Caddy for HTTPS integration
         env:
           CADDY_VERSION: 2.11.4

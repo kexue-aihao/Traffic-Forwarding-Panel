@@ -27,7 +27,7 @@ func (s *Server) reserveExitPorts(ctx context.Context, tx *sql.Tx, e contract.Ex
 	}
 	for network, port := range ports {
 		var count int
-		if err = tx.QueryRowContext(ctx, s.q("SELECT (SELECT COUNT(*) FROM cp_ports WHERE node_id=? AND network=? AND port=?)+(SELECT COUNT(*) FROM cp_exit_ports WHERE node_id=? AND network=? AND port=?)"), e.NodeID, network, port, e.NodeID, network, port).Scan(&count); err != nil {
+		if err = tx.QueryRowContext(ctx, s.q("SELECT (SELECT COUNT(*) FROM cp_ports WHERE node_id=? AND network=? AND port=?)+(SELECT COUNT(*) FROM cp_exit_ports WHERE node_id=? AND network=? AND port=?)+(SELECT COUNT(*) FROM cp_ingress_ports WHERE node_id=? AND network=? AND port=?)"), e.NodeID, network, port, e.NodeID, network, port, e.NodeID, network, port).Scan(&count); err != nil {
 			return err
 		}
 		if count > 0 {

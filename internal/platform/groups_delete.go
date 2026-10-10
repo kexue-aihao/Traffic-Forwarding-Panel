@@ -111,6 +111,12 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request) {
 		if ports != 0 {
 			return fmt.Errorf("%w：转发端口尚未释放，请等待节点确认停止", errConflict)
 		}
+		if err = tx.QueryRowContext(ctx, s.q("SELECT COUNT(*) FROM cp_ingress_ports p JOIN cp_tls_ingresses i ON i.id=p.ingress_id WHERE i.group_id=?"), target).Scan(&ports); err != nil {
+			return err
+		}
+		if ports != 0 {
+			return fmt.Errorf("%w：请先关闭共享 TLS 入口并等待节点确认停止", errConflict)
+		}
 		query := "SELECT n.payload FROM cp_nodes n JOIN cp_node_groups ng ON ng.node_id=n.id WHERE ng.group_id=? ORDER BY n.id"
 		if s.Store.Dialect != "sqlite" {
 			query += " FOR UPDATE"
@@ -146,6 +152,7 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request) {
 		// Retain leases and usage facts: late usage uploads and settlement use
 		// those records independently of the removed rule tombstones.
 		for _, query := range []string{
+			"DELETE FROM cp_tls_ingresses WHERE group_id=?",
 			"DELETE FROM cp_rules WHERE group_id=? AND deleted=1",
 			"DELETE FROM cp_exit_ports WHERE exit_id IN(SELECT id FROM cp_exits WHERE group_id=?)",
 			"DELETE FROM cp_exits WHERE group_id=?",

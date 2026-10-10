@@ -42,6 +42,13 @@ export const advancedSections = [
     title: "入站 TLS 策略",
     fields: [
       {
+        key: "shared_tls_ingress",
+        label: "设备组共享 TLS 入口",
+        value: { enabled: false, listen_ip: "0.0.0.0", port: 443 },
+        description:
+          "多条 TLS/TCP 规则按业务 SNI 共用入口；无需入口证书。新规则默认共享，可选择独立端口。修改地址或关闭入口会断开共享连接。",
+      },
+      {
         key: "tls_inbound_policy",
         label: "TLS 入站策略",
         value: 0,
@@ -190,6 +197,23 @@ function normalize(value: unknown): Settings {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("额外设置参数必须是 JSON 对象。");
   const settings = value as Settings;
+  if (Object.hasOwn(settings, "shared_tls_ingress")) {
+    const v = settings.shared_tls_ingress;
+    if (!v || typeof v !== "object" || Array.isArray(v))
+      throw new Error("shared_tls_ingress 必须是 JSON 对象。");
+    const ingress = v as Settings;
+    if (
+      Object.keys(ingress).some(
+        (key) => !["enabled", "listen_ip", "port"].includes(key),
+      ) ||
+      typeof ingress.enabled !== "boolean" ||
+      typeof ingress.listen_ip !== "string" ||
+      !Number.isInteger(ingress.port) ||
+      Number(ingress.port) < 1 ||
+      Number(ingress.port) > 65535
+    )
+      throw new Error("共享入口需要启用状态、监听 IP 和 1–65535 端口。");
+  }
   if ("fail_timeout_sec" in settings) {
     if (
       "fail_timout_sec" in settings &&
