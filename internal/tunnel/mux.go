@@ -16,7 +16,10 @@ import (
 func muxConfig() *yamux.Config {
 	c := yamux.DefaultConfig()
 	c.AcceptBacklog = 256
-	c.MaxStreamWindowSize = 256 * 1024
+	// At 3 Gbit/s and 56 ms, a stream needs about 21 MB in flight. A
+	// 256 KiB window instead stops it every RTT. Yamux advertises this bound
+	// using its existing window updates and allocates receive buffers on use.
+	c.MaxStreamWindowSize = 32 << 20
 	c.ConnectionWriteTimeout = 10 * time.Second
 	c.StreamOpenTimeout = 10 * time.Second
 	c.StreamCloseTimeout = 10 * time.Second

@@ -18,7 +18,7 @@ import (
 )
 
 // Version is injected at release build time using -ldflags -X.
-var Version = "0.1.44"
+var Version = "0.1.45"
 
 func (a *Agent) upgradeKeySHA256() string {
 	if a.Upgrader == nil {

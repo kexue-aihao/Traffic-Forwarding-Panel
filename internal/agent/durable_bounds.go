@@ -72,10 +72,12 @@ func (s *Store) validateSnapshot() error {
 		pendingBytes[l.ID] += n
 	}
 	liability, rules, owners, pools := map[string]int64{}, map[string]int64{}, map[string]int64{}, map[creditPoolKey]int{}
+	ruleLimits := map[string]int64{}
 	for id, w := range s.state.Windows {
+		windowLimit, ruleLimit := w.limits()
 		l, ok := s.state.Leases[w.LeaseID]
 		_, retired := s.state.Retired[w.LeaseID]
-		if !ok || retired || w.ID != id || len(w.ID) != 32 || w.RuleID == "" || w.UserID == "" || w.Closed || w.Capacity <= 0 || w.Capacity > creditWindowSize || w.Confirmed < 0 || w.Confirmed > w.Capacity || w.Confirmed > 0 && w.Sequence == 0 || w.Sequence == ^uint64(0) || w.StartedAt.IsZero() || !w.Until.After(w.StartedAt) || w.Until.After(l.ExpiresAt) {
+		if !ok || retired || w.ID != id || len(w.ID) != 32 || w.RuleID == "" || w.UserID == "" || w.Closed || w.Capacity <= 0 || w.Capacity > windowLimit || w.Confirmed < 0 || w.Confirmed > w.Capacity || w.Confirmed > 0 && w.Sequence == 0 || w.Sequence == ^uint64(0) || w.StartedAt.IsZero() || !w.Until.After(w.StartedAt) || w.Until.After(l.ExpiresAt) {
 			return errors.New("invalid durable credit window")
 		}
 		left := w.Capacity - w.Confirmed
@@ -84,10 +86,16 @@ func (s *Store) validateSnapshot() error {
 		}
 		liability[l.ID] += left
 		rules[w.RuleID] += left
+		ruleLimits[w.RuleID] = max(ruleLimits[w.RuleID], ruleLimit)
 		owners[w.UserID] += left
 		pools[creditKey(w.RuleID, w.Upload)]++
-		if rules[w.RuleID] > maxRuleCredits || owners[w.UserID] > maxAccountCredits || pools[creditKey(w.RuleID, w.Upload)] > 2 {
+		if owners[w.UserID] > maxAccountCredits || pools[creditKey(w.RuleID, w.Upload)] > 2 {
 			return errors.New("durable credit responsibility exceeds bounds")
+		}
+	}
+	for rule, total := range rules {
+		if total > ruleLimits[rule] {
+			return errors.New("durable credit responsibility exceeds rule bound")
 		}
 	}
 	return nil

@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -36,6 +37,7 @@ type Agent struct {
 	usageMu         sync.Mutex
 	configMu        sync.Mutex
 	probeMu         sync.Mutex
+	prefetchMu      sync.Mutex
 	probeBootRetry  time.Time
 }
 
@@ -77,6 +79,12 @@ func (a *Agent) request(ctx context.Context, method, path string, body, out any)
 	return nil
 }
 func (a *Agent) Run(ctx context.Context) error {
+	// A failed candidate must remain readable by the previous supervisor's
+	// rollback binary. Grow windows only after the supervisor commits health
+	// and removes the activation journal, including after an interrupted start.
+	if a.Upgrader != nil {
+		a.Store.pauseTCPGrowth.Store(true)
+	}
 	u, e := url.Parse(a.URL)
 	if e != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1"))) {
 		return errors.New("panel requires HTTPS (HTTP permitted only on loopback)")
@@ -141,14 +149,24 @@ func (a *Agent) Run(ctx context.Context) error {
 	var workers sync.WaitGroup
 	var usageHealthy, probeHealthy atomic.Bool
 	workers.Go(func() {
-		a.runSync(workersCtx, "usage", time.Second, a.Store.usageWake, func(ctx context.Context) error {
+		a.runSync(workersCtx, "usage", time.Second, a.Store.usageWake, 25*time.Millisecond, func(ctx context.Context) error {
 			err := a.syncUsage(ctx)
 			usageHealthy.Store(err == nil)
 			return err
 		})
 	})
 	workers.Go(func() {
-		a.runSync(workersCtx, "probe", interval, nil, func(ctx context.Context) error {
+		a.runSync(workersCtx, "lease prefetch", 100*time.Millisecond, a.Store.leaseWake, 10*time.Millisecond, func(ctx context.Context) error {
+			if a.Upgrader != nil && a.Store.pauseTCPGrowth.Load() {
+				if _, err := os.Stat(a.Upgrader.Journal); errors.Is(err, os.ErrNotExist) {
+					a.Store.pauseTCPGrowth.Store(false)
+				}
+			}
+			return a.syncPrefetch(ctx)
+		})
+	})
+	workers.Go(func() {
+		a.runSync(workersCtx, "probe", interval, nil, 0, func(ctx context.Context) error {
 			err := a.syncProbe(ctx)
 			probeHealthy.Store(err == nil)
 			return err
@@ -170,6 +188,19 @@ func (a *Agent) Run(ctx context.Context) error {
 		case <-a.Store.configWake:
 		}
 		if e = a.syncConfig(ctx); e != nil {
+			var status *httpStatusError
+			if errors.As(e, &status) && status.method == "POST" && status.path == "/agent/ack" && status.status == http.StatusConflict {
+				// Prefetch/retirement can advance desired_version between GET
+				// and ACK. Refresh promptly instead of delaying the pipeline a
+				// whole second; retain a small backoff for repeated conflicts.
+				wake(a.Store.configWake)
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(10 * time.Millisecond):
+				}
+				continue
+			}
 			log.Printf("agent config: %v", e)
 			// Do not let a failing endpoint spin on repeated wakeups.
 			select {
@@ -190,7 +221,8 @@ func (a *Agent) Step(ctx context.Context) error {
 		afterErr = a.syncUsage(ctx)
 	}
 	probeErr := a.syncProbe(ctx)
-	return errors.Join(usageErr, configErr, afterErr, probeErr)
+	prefetchErr := a.syncPrefetch(ctx)
+	return errors.Join(usageErr, configErr, afterErr, probeErr, prefetchErr)
 }
 
 func (a *Agent) syncConfig(ctx context.Context) error {
@@ -207,6 +239,10 @@ func (a *Agent) syncConfig(ctx context.Context) error {
 		ack.Error = applyErr.Error()
 	}
 	ackErr := a.request(ctx, "POST", "/agent/ack", ack, nil)
+	var status *httpStatusError
+	if errors.As(ackErr, &status) && status.status == http.StatusConflict {
+		wake(a.Store.configWake)
+	}
 	if applyErr == nil {
 		a.Store.requestUsage()
 	}
@@ -225,6 +261,15 @@ func (a *Agent) syncUsage(ctx context.Context) error {
 	}
 	errs = append(errs, a.flush(ctx))
 	errs = append(errs, a.retire(ctx))
+	return errors.Join(errs...)
+}
+
+// Lease prefetch must not queue behind a slow usage POST or retirement. Its
+// own worker can provision the next allocation while the current one is spent.
+func (a *Agent) syncPrefetch(ctx context.Context) error {
+	a.prefetchMu.Lock()
+	defer a.prefetchMu.Unlock()
+	var errs []error
 	for _, request := range a.Store.prefetches() {
 		var result struct {
 			LeaseID string `json:"lease_id"`
@@ -271,10 +316,11 @@ func (a *Agent) sendProbe(ctx context.Context, p contract.Probe) error {
 	return err
 }
 
-func (a *Agent) runSync(ctx context.Context, name string, interval time.Duration, wake <-chan struct{}, syncOnce func(context.Context) error) {
+func (a *Agent) runSync(ctx context.Context, name string, interval time.Duration, wake <-chan struct{}, spacing time.Duration, syncOnce func(context.Context) error) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for ctx.Err() == nil {
+		started := time.Now()
 		if err := syncOnce(ctx); err != nil {
 			log.Printf("agent %s: %v", name, err)
 			select {
@@ -283,6 +329,17 @@ func (a *Agent) runSync(ctx context.Context, name string, interval time.Duration
 			case <-tick.C:
 			}
 			continue
+		}
+		// Coalesce a busy stream's notifications into bounded batches instead
+		// of issuing a database transaction for every completed credit window.
+		if delay := spacing - time.Since(started); delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
 		select {
 		case <-ctx.Done():

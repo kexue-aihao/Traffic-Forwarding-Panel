@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -72,23 +73,34 @@ func (c *obfsConn) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
-	obfuscated, err := c.strategy.ObfuscateWrite(p)
+	// Built-in encoders append directly to the connection's scratch buffer.
+	// This avoids allocating and then copying a second full payload per frame.
+	var frame []byte
+	var err error
+	if encoder, ok := c.strategy.(interface {
+		appendObfuscated([]byte, []byte) ([]byte, error)
+	}); ok {
+		c.writeFrame = slices.Grow(c.writeFrame[:0], 4)[:4]
+		frame, err = encoder.appendObfuscated(c.writeFrame, p)
+	} else {
+		var obfuscated []byte
+		obfuscated, err = c.strategy.ObfuscateWrite(p)
+		if err == nil {
+			if len(obfuscated) == 0 || len(obfuscated) > maxObfuscatedFrame {
+				return 0, errors.New("invalid obfuscation frame length")
+			}
+			frame = slices.Grow(c.writeFrame[:0], 4+len(obfuscated))[:4+len(obfuscated)]
+			copy(frame[4:], obfuscated)
+		}
+	}
 	if err != nil {
 		return 0, err
 	}
-
-	if len(obfuscated) == 0 || len(obfuscated) > maxObfuscatedFrame {
+	if len(frame) <= 4 || len(frame)-4 > maxObfuscatedFrame {
 		return 0, errors.New("invalid obfuscation frame length")
 	}
-	// Keep the existing wire framing, but send the header and payload in one
-	// TLS write. Reuse scratch under writeMu instead of allocating per frame.
-	n := 4 + len(obfuscated)
-	if cap(c.writeFrame) < n {
-		c.writeFrame = make([]byte, n)
-	}
-	frame := c.writeFrame[:n]
-	binary.BigEndian.PutUint32(frame[:4], uint32(len(obfuscated)))
-	copy(frame[4:], obfuscated)
+	c.writeFrame = frame
+	binary.BigEndian.PutUint32(frame[:4], uint32(len(frame)-4))
 	if err = writeAll(c.Conn, frame); err != nil {
 		return 0, err
 	}
@@ -108,6 +120,10 @@ type RandomPaddingObfs struct {
 }
 
 func (o *RandomPaddingObfs) ObfuscateWrite(p []byte) ([]byte, error) {
+	return o.appendObfuscated(nil, p)
+}
+
+func (o *RandomPaddingObfs) appendObfuscated(dst, p []byte) ([]byte, error) {
 	if len(p) > maxUint16Payload {
 		return nil, errors.New("padding payload too large")
 	}
@@ -123,7 +139,9 @@ func (o *RandomPaddingObfs) ObfuscateWrite(p []byte) ([]byte, error) {
 	padLen := o.minPad + int(padBig.Int64())
 
 	total := 2 + len(p) + padLen
-	buf := make([]byte, total)
+	start := len(dst)
+	dst = slices.Grow(dst, total)[:start+total]
+	buf := dst[start:]
 
 	binary.BigEndian.PutUint16(buf[0:2], uint16(len(p)))
 	copy(buf[2:], p)
@@ -132,7 +150,7 @@ func (o *RandomPaddingObfs) ObfuscateWrite(p []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return buf, nil
+	return dst, nil
 }
 
 func (o *RandomPaddingObfs) DeobfuscateRead(p []byte) ([]byte, error) {
@@ -200,6 +218,10 @@ const (
 )
 
 func (o *TLSTrafficMimicObfs) ObfuscateWrite(p []byte) ([]byte, error) {
+	return o.appendObfuscated(nil, p)
+}
+
+func (o *TLSTrafficMimicObfs) appendObfuscated(dst, p []byte) ([]byte, error) {
 	if len(p) == 0 {
 		return nil, errors.New("empty payload")
 	}
@@ -208,14 +230,16 @@ func (o *TLSTrafficMimicObfs) ObfuscateWrite(p []byte) ([]byte, error) {
 	}
 
 	totalLen := 5 + len(p)
-	buf := make([]byte, totalLen)
+	start := len(dst)
+	dst = slices.Grow(dst, totalLen)[:start+totalLen]
+	buf := dst[start:]
 
 	buf[0] = tlsRecordTypeAppData
 	binary.BigEndian.PutUint16(buf[1:3], tlsVersion1_2)
 	binary.BigEndian.PutUint16(buf[3:5], uint16(len(p)))
 	copy(buf[5:], p)
 
-	return buf, nil
+	return dst, nil
 }
 
 func (o *TLSTrafficMimicObfs) DeobfuscateRead(p []byte) ([]byte, error) {

@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,8 +24,9 @@ import (
 // a large finite lease isolates the data path from control-plane renewal.
 func BenchmarkSecureDirectDownload(b *testing.B) {
 	pair, roots := ingressTestCertificate(b)
-	for _, mode := range []string{"tcp_unmetered", "secure_direct_unmetered", "secure_direct_metered", "secure_direct_metered_3ms"} {
+	for _, mode := range []string{"tcp_unmetered", "secure_direct_unmetered", "secure_direct_metered", "secure_direct_metered_3ms", "secure_direct_controlled", "secure_direct_controlled_100ms", "secure_direct_controlled_3ms_100ms"} {
 		b.Run(mode, func(b *testing.B) {
+			controlled := strings.HasPrefix(mode, "secure_direct_controlled")
 			origin, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				b.Fatal(err)
@@ -67,6 +72,40 @@ func BenchmarkSecureDirectDownload(b *testing.B) {
 					if err = runtime.Apply(cfg, true); err != nil {
 						b.Fatal(err)
 					}
+					if controlled {
+						server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+							switch req.URL.Path {
+							case "/api/v1/agent/config":
+								json.NewEncoder(w).Encode(cfg)
+							case "/api/v1/agent/usage":
+								if strings.HasSuffix(mode, "100ms") {
+									select {
+									case <-time.After(100 * time.Millisecond):
+									case <-req.Context().Done():
+										return
+									}
+								}
+								var batch contract.UsageBatch
+								if err := json.NewDecoder(req.Body).Decode(&batch); err != nil {
+									w.WriteHeader(http.StatusBadRequest)
+									return
+								}
+								ids := make([]string, 0, len(batch.Records))
+								for _, u := range batch.Records {
+									ids = append(ids, u.ID)
+								}
+								json.NewEncoder(w).Encode(map[string]any{"accepted": ids})
+							default:
+								w.WriteHeader(http.StatusNoContent)
+							}
+						}))
+						defer server.Close()
+						agent := &Agent{Store: store, Runtime: runtime, URL: server.URL, HTTP: server.Client(), PollInterval: time.Hour}
+						ctx, cancel := context.WithCancel(context.Background())
+						finished := make(chan error, 1)
+						go func() { finished <- agent.Run(ctx) }()
+						defer func() { cancel(); <-finished }()
+					}
 					client, err = net.Dial("tcp", rule.Listen)
 				}
 			}
@@ -86,6 +125,7 @@ func BenchmarkSecureDirectDownload(b *testing.B) {
 			defer peer.Close()
 			payload := bytes.Repeat([]byte("continuous-download"), 2048)[:32*1024]
 			received := make([]byte, len(payload))
+			var largestGap time.Duration
 			run := func(count int) error {
 				client.SetDeadline(time.Now().Add(time.Minute))
 				peer.SetDeadline(time.Now().Add(time.Minute))
@@ -108,6 +148,7 @@ func BenchmarkSecureDirectDownload(b *testing.B) {
 					}
 					sent <- nil
 				}()
+				previous := time.Now()
 				for range count {
 					if _, e := io.ReadFull(client, received); e != nil {
 						peer.Close()
@@ -118,6 +159,11 @@ func BenchmarkSecureDirectDownload(b *testing.B) {
 						peer.Close()
 						<-sent
 						return fmt.Errorf("corrupt payload")
+					}
+					if controlled {
+						now := time.Now()
+						largestGap = max(largestGap, now.Sub(previous))
+						previous = now
 					}
 				}
 				return <-sent
@@ -133,7 +179,7 @@ func BenchmarkSecureDirectDownload(b *testing.B) {
 				store.fault = func(point string) error {
 					if point == "sync_before" {
 						syncStart = time.Now()
-						if mode == "secure_direct_metered_3ms" {
+						if strings.Contains(mode, "3ms") {
 							// Simulate a slower WAL volume without changing durability.
 							time.Sleep(3 * time.Millisecond)
 						}
@@ -148,11 +194,15 @@ func BenchmarkSecureDirectDownload(b *testing.B) {
 			}
 			b.SetBytes(int64(len(payload)))
 			b.ReportAllocs()
+			largestGap = 0
 			b.ResetTimer()
 			if err = run(b.N); err != nil {
 				b.Fatal(err)
 			}
 			b.StopTimer()
+			if controlled {
+				b.ReportMetric(float64(largestGap.Microseconds())/1000, "max-read-gap-ms")
+			}
 			if store != nil {
 				store.mu.Lock()
 				store.fault = nil

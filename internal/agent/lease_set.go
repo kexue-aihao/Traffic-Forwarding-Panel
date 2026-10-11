@@ -59,6 +59,7 @@ func (s *Store) prefetches() []leasePrefetch {
 		previous := s.rates[r.ID]
 		current := leaseRateSample{at: now, used: map[string]int64{}, rate: previous.rate}
 		var delta int64
+		var first time.Time
 		for _, l := range ruleLeases(r) {
 			if l == nil {
 				continue
@@ -68,13 +69,23 @@ func (s *Store) prefetches() []leasePrefetch {
 			for _, c := range s.credits {
 				if c.window.LeaseID == l.ID {
 					total += c.used - c.window.Confirmed
+					if first.IsZero() || c.window.StartedAt.Before(first) {
+						first = c.window.StartedAt
+					}
 				}
 			}
 			s.creditMu.Unlock()
 			current.used[l.ID] = total
 			if old, ok := previous.used[l.ID]; ok {
 				delta += max(0, total-old)
+			} else if previous.at.IsZero() {
+				delta += total
 			}
+		}
+		// The first active window already provides a rate sample. Waiting for
+		// two usage uploads can exhaust a 16 MiB initial lease before prefetch.
+		if previous.at.IsZero() && !first.IsZero() {
+			previous.at = first
 		}
 		if !previous.at.IsZero() && now.Sub(previous.at) >= 10*time.Millisecond {
 			measured := float64(delta) / now.Sub(previous.at).Seconds()

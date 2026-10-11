@@ -12,6 +12,8 @@ import (
 const creditWindowSize int64 = 256 << 10
 const maxRuleCredits int64 = 1 << 20
 const maxAccountCredits int64 = 8 << 20
+const maxTCPCreditWindow int64 = 2 << 20
+const maxTCPRuleCredits int64 = 4 << 20
 const tcpCreditIdleTimeout = time.Second
 
 var errCreditUnavailable = errors.New("persisted credit unavailable")
@@ -32,6 +34,14 @@ type creditWindow struct {
 	StartedAt time.Time `json:"started_at"`
 	Until     time.Time `json:"until"`
 	Closed    bool      `json:"closed,omitempty"`
+	TCP       bool      `json:"tcp,omitempty"`
+}
+
+func (w creditWindow) limits() (window, rule int64) {
+	if w.TCP {
+		return maxTCPCreditWindow, maxTCPRuleCredits
+	}
+	return creditWindowSize, maxRuleCredits
 }
 
 type liveCredit struct {
@@ -44,6 +54,11 @@ type liveCredit struct {
 type creditPoolKey struct {
 	rule   string
 	upload bool
+}
+
+type tcpCreditTarget struct {
+	size int64
+	last time.Time
 }
 
 func creditKey(rule string, up bool) creditPoolKey { return creditPoolKey{rule, up} }
@@ -93,6 +108,15 @@ func (s *Store) TryCreditCharge(r contract.Rule, until time.Time, up bool, n int
 		return errLeaseUnavailable
 	}
 	var remaining int64
+	target := creditWindowSize
+	adaptive := r.Network == "tcp" && !s.pauseTCPGrowth.Load()
+	if adaptive {
+		previous := s.tcpCreditTargets[k]
+		if now.Sub(previous.last) < tcpCreditIdleTimeout {
+			target = max(target, previous.size)
+		}
+	}
+	spendable := 0
 	var candidates [2]*liveCredit
 	eligible := candidates[:0]
 	for _, c := range s.creditPools[k] {
@@ -106,6 +130,18 @@ func (s *Store) TryCreditCharge(r contract.Rule, until time.Time, up bool, n int
 			continue
 		}
 		left := c.window.Capacity - c.used
+		if left > 0 {
+			spendable++
+		}
+		if adaptive {
+			target = max(target, c.window.Capacity)
+			// Grow only after real demand, keeping idle and small-lease rules
+			// cheap. Two persisted windows cover a slow sync without delaying
+			// every 256 KiB of a high-throughput stream.
+			if c.used >= creditWindowSize && now.Sub(c.window.StartedAt) < 100*time.Millisecond {
+				target = max(target, min(maxTCPCreditWindow, 4*c.window.Capacity))
+			}
+		}
 		remaining += left
 		eligible = append(eligible, c)
 	}
@@ -113,25 +149,35 @@ func (s *Store) TryCreditCharge(r contract.Rule, until time.Time, up bool, n int
 	if admitted {
 		needed := int64(n)
 		for _, c := range eligible {
+			before := c.window.Capacity - c.used
 			debit := min(needed, c.window.Capacity-c.used)
 			c.used += debit
 			if debit > 0 {
 				c.last = now.UTC()
+				if adaptive && c.used >= creditWindowSize && now.Sub(c.window.StartedAt) < 100*time.Millisecond {
+					target = max(target, min(maxTCPCreditWindow, 4*c.window.Capacity))
+				}
 			}
 			needed -= debit
+			if before > 0 && c.used == c.window.Capacity {
+				spendable--
+			}
 			if needed == 0 {
 				break
 			}
 		}
 		remaining -= int64(n)
 	}
-	refill := remaining < creditWindowSize && !s.refilling[k]
+	if adaptive && admitted && n > 0 {
+		s.tcpCreditTargets[k] = tcpCreditTarget{size: target, last: now}
+	}
+	refill := (!admitted || spendable < 2) && remaining < target && !s.refilling[k]
 	if refill {
 		s.refilling[k] = true
 	}
 	s.creditMu.Unlock()
 	if refill {
-		req := &stateRequest{event: stateEvent{Kind: "credit_reserve"}, rule: r, until: until, upload: up, n: n, done: make(chan error, 1)}
+		req := &stateRequest{event: stateEvent{Kind: "credit_reserve"}, rule: r, until: until, upload: up, n: n, creditSize: target, done: make(chan error, 1)}
 		s.submitMu.RLock()
 		queued := false
 		if !s.closing {
@@ -233,7 +279,10 @@ func (s *Store) reserveCreditLocked(r *stateRequest, staged []stateEvent) (*stat
 				extra += e.Window.Capacity
 			}
 		}
-		if s.availableLocked(candidate, r.until, extra+1) == nil {
+		// Select a lease that can fund this debit, not merely one leftover
+		// byte. Otherwise an odd-sized upload can strand the primary tail
+		// forever while a fully funded standby allocation is already present.
+		if s.availableLocked(candidate, r.until, extra+max(int64(1), int64(r.n))) == nil {
 			r.rule = candidate
 			break
 		}
@@ -269,12 +318,35 @@ func (s *Store) reserveCreditLocked(r *stateRequest, staged []stateEvent) (*stat
 			userTotal += left
 		}
 	}
-	// Closed windows will be removed before the new reservations are applied.
-	// Keep their budget/liability in the calculation until sync: this is
-	// conservative and avoids exposing any tentative accounting to readers.
+	// Progress precedes reservations in the same durable batch. Account for
+	// its release of rule/account liability; spent lease budget is still
+	// covered by Used plus the old liability below until the batch is synced.
 	for _, e := range staged {
-		if e.Kind == "credit_progress" && e.Window.Closed && e.Window.RuleID == r.rule.ID && e.Window.Upload == r.upload {
-			count--
+		if e.Kind != "credit_progress" {
+			continue
+		}
+		w := e.Window
+		old, ok := s.state.Windows[w.ID]
+		if !ok {
+			continue
+		}
+		released := w.Confirmed - old.Confirmed
+		if w.Closed {
+			released = old.Capacity - old.Confirmed
+		}
+		if w.RuleID == r.rule.ID {
+			ruleTotal -= released
+			if w.Upload == r.upload {
+				if w.Closed {
+					count--
+				}
+				if w.LeaseID == r.rule.Lease.ID {
+					directionTotal -= released
+				}
+			}
+		}
+		if w.UserID == owner {
+			userTotal -= released
 		}
 	}
 	var stagedLease int64
@@ -302,7 +374,14 @@ func (s *Store) reserveCreditLocked(r *stateRequest, staged []stateEvent) (*stat
 	if count >= 2 {
 		return nil, nil
 	}
-	capacity := min(creditWindowSize, max(int64(r.n), (r.rule.Lease.Bytes-1)/4+1), maxRuleCredits-ruleTotal, maxAccountCredits-userTotal, r.rule.Lease.Bytes-s.state.Used[r.rule.Lease.ID]-s.creditLiabilityLocked(r.rule.Lease.ID)-stagedLease)
+	windowLimit, ruleLimit := creditWindowSize, maxRuleCredits
+	if r.rule.Network == "tcp" && !s.pauseTCPGrowth.Load() {
+		// A small allocation retains the original window sizing. Larger
+		// windows never enlarge the finite lease or shared account liability.
+		windowLimit = min(maxTCPCreditWindow, max(creditWindowSize, r.creditSize), max(creditWindowSize, r.rule.Lease.Bytes/16))
+		ruleLimit = maxTCPRuleCredits
+	}
+	capacity := min(windowLimit, max(int64(r.n), (r.rule.Lease.Bytes-1)/4+1), ruleLimit-ruleTotal, maxAccountCredits-userTotal, r.rule.Lease.Bytes-s.state.Used[r.rule.Lease.ID]-s.creditLiabilityLocked(r.rule.Lease.ID)-stagedLease)
 	if r.creditPrime {
 		remaining := r.rule.Lease.Bytes - s.state.Used[r.rule.Lease.ID]
 		half := remaining / 2
@@ -321,7 +400,7 @@ func (s *Store) reserveCreditLocked(r *stateRequest, staged []stateEvent) (*stat
 	if e != nil {
 		return nil, e
 	}
-	w := creditWindow{ID: id, UserID: owner, RuleID: r.rule.ID, LeaseID: r.rule.Lease.ID, Upload: r.upload, Capacity: capacity, StartedAt: time.Now().UTC(), Until: minTime(r.until, r.rule.Lease.ExpiresAt)}
+	w := creditWindow{ID: id, UserID: owner, RuleID: r.rule.ID, LeaseID: r.rule.Lease.ID, Upload: r.upload, Capacity: capacity, StartedAt: time.Now().UTC(), Until: minTime(r.until, r.rule.Lease.ExpiresAt), TCP: r.rule.Network == "tcp"}
 	l := *r.rule.Lease
 	return &stateEvent{Kind: "credit_reserve", Window: &w, Lease: &l}, nil
 }
@@ -361,6 +440,11 @@ func (s *Store) creditProgressLocked(trigger stateEvent) ([]stateEvent, error) {
 	}
 	s.creditMu.Lock()
 	defer s.creditMu.Unlock()
+	for key, target := range s.tcpCreditTargets {
+		if time.Since(target.last) >= tcpCreditIdleTimeout {
+			delete(s.tcpCreditTargets, key)
+		}
+	}
 	ids := make([]string, 0, len(s.state.Windows))
 	for id := range s.state.Windows {
 		ids = append(ids, id)
@@ -411,7 +495,11 @@ func (s *Store) creditUsage(w creditWindow, n int64, kind string, end time.Time)
 
 func (s *Store) validateCreditEvent(e stateEvent) error {
 	w := e.Window
-	if w == nil || len(w.ID) != 32 || w.RuleID == "" || w.UserID == "" || w.Capacity <= 0 || w.Capacity > creditWindowSize || w.Confirmed < 0 || w.Confirmed > w.Capacity || w.StartedAt.IsZero() || !w.Until.After(w.StartedAt) {
+	if w == nil {
+		return errors.New("missing credit window")
+	}
+	windowLimit, ruleLimit := w.limits()
+	if len(w.ID) != 32 || w.RuleID == "" || w.UserID == "" || w.Capacity <= 0 || w.Capacity > windowLimit || w.Confirmed < 0 || w.Confirmed > w.Capacity || w.StartedAt.IsZero() || !w.Until.After(w.StartedAt) {
 		return errors.New("invalid credit window")
 	}
 	if e.Kind == "credit_reserve" {
@@ -441,7 +529,7 @@ func (s *Store) validateCreditEvent(e stateEvent) error {
 				userTotal += left
 			}
 		}
-		if count >= 2 || w.Capacity > maxRuleCredits-ruleTotal || w.Capacity > maxAccountCredits-userTotal {
+		if count >= 2 || w.Capacity > ruleLimit-ruleTotal || w.Capacity > maxAccountCredits-userTotal {
 			return errors.New("credit reservation exceeds responsibility bounds")
 		}
 		if w.Capacity > e.Lease.Bytes-s.state.Used[w.LeaseID]-s.creditLiabilityLocked(w.LeaseID) || w.Until.After(e.Lease.ExpiresAt) || len(s.state.Pending)+len(s.state.Windows) >= MaxPendingRecords {
@@ -449,7 +537,7 @@ func (s *Store) validateCreditEvent(e stateEvent) error {
 		}
 	} else {
 		old, ok := s.state.Windows[w.ID]
-		if !ok || w.LeaseID != old.LeaseID || w.RuleID != old.RuleID || w.UserID != old.UserID || w.Upload != old.Upload || w.Capacity != old.Capacity || !w.StartedAt.Equal(old.StartedAt) || !w.Until.Equal(old.Until) || w.Sequence != old.Sequence+1 || w.Confirmed < old.Confirmed {
+		if !ok || w.LeaseID != old.LeaseID || w.RuleID != old.RuleID || w.UserID != old.UserID || w.Upload != old.Upload || w.TCP != old.TCP || w.Capacity != old.Capacity || !w.StartedAt.Equal(old.StartedAt) || !w.Until.Equal(old.Until) || w.Sequence != old.Sequence+1 || w.Confirmed < old.Confirmed {
 			return errors.New("invalid credit progress")
 		}
 		delta := w.Confirmed - old.Confirmed
@@ -471,6 +559,9 @@ func (s *Store) applyCreditEvent(e stateEvent) error {
 	}
 	w := *e.Window
 	if e.Kind == "credit_reserve" {
+		if w.Capacity > creditWindowSize {
+			s.expandedCredits = true
+		}
 		s.state.Leases[w.LeaseID] = *e.Lease
 		s.state.Windows[w.ID] = w
 		s.creditMu.Lock()
@@ -618,9 +709,17 @@ func (s *Store) rebalanceCreditsLocked(r *stateRequest) error {
 		}
 	}
 	hasWindows := len(pool) > 0 || len(s.creditPools[creditKey(r.rule.ID, !r.upload)]) > 0
+	var unused int64
+	for _, up := range []bool{true, false} {
+		for _, c := range s.creditPools[creditKey(r.rule.ID, up)] {
+			if !c.closed {
+				unused += c.window.Capacity - c.used
+			}
+		}
+	}
 	rebalance := hasWindows && remaining < int64(r.n)
 	s.creditMu.Unlock()
-	if !rebalance {
+	if !rebalance || unused == 0 {
 		return nil
 	}
 	// A missing directional window can be filled from unused lease budget.
@@ -638,7 +737,11 @@ func (s *Store) rebalanceCreditsLocked(r *stateRequest) error {
 				userTotal += left
 			}
 		}
-		if int64(r.n) <= maxRuleCredits-ruleTotal && int64(r.n) <= maxAccountCredits-userTotal {
+		ruleLimit := maxRuleCredits
+		if r.rule.Network == "tcp" {
+			ruleLimit = maxTCPRuleCredits
+		}
+		if int64(r.n) <= ruleLimit-ruleTotal && int64(r.n) <= maxAccountCredits-userTotal {
 			for _, l := range ruleLeases(r.rule) {
 				if l == nil {
 					continue
@@ -672,6 +775,9 @@ func (s *Store) recoverCredits() error {
 	sort.Strings(ids)
 	for _, id := range ids {
 		w := s.state.Windows[id]
+		if w.Capacity > creditWindowSize {
+			s.expandedCredits = true
+		}
 		w.Sequence++
 		w.Closed = true
 		delta := w.Capacity - w.Confirmed

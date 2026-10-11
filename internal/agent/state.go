@@ -51,6 +51,7 @@ type stateRequest struct {
 	upload      bool
 	n           int
 	creditPrime bool
+	creditSize  int64
 	done        chan error
 }
 type Store struct {
@@ -72,13 +73,17 @@ type Store struct {
 	changed          chan struct{}
 	usageWake        chan struct{}
 	configWake       chan struct{}
+	leaseWake        chan struct{}
 	creditMu         sync.Mutex // Never held across disk I/O.
 	credits          map[string]*liveCredit
 	creditPools      map[creditPoolKey][]*liveCredit
 	refilling        map[creditPoolKey]bool
+	tcpCreditTargets map[creditPoolKey]tcpCreditTarget
 	fastFailed       atomic.Bool
+	pauseTCPGrowth   atomic.Bool
 	rates            map[string]leaseRateSample
 	nextHistoryPrune time.Time
+	expandedCredits  bool
 	// Test hooks run under mu, and are nil in production.
 	fault    func(string) error
 	writeWAL func([]byte) (int, error)
@@ -89,7 +94,7 @@ func OpenStore(path string) (*Store, error) {
 	if e != nil {
 		return nil, e
 	}
-	s := &Store{path: absolute, queue: make(chan *stateRequest, maxStoreQueue), done: make(chan struct{}), changed: make(chan struct{}), usageWake: make(chan struct{}, 1), configWake: make(chan struct{}, 1), credits: map[string]*liveCredit{}, creditPools: map[creditPoolKey][]*liveCredit{}, refilling: map[creditPoolKey]bool{}}
+	s := &Store{path: absolute, queue: make(chan *stateRequest, maxStoreQueue), done: make(chan struct{}), changed: make(chan struct{}), usageWake: make(chan struct{}, 1), configWake: make(chan struct{}, 1), leaseWake: make(chan struct{}, 1), credits: map[string]*liveCredit{}, creditPools: map[creditPoolKey][]*liveCredit{}, refilling: map[creditPoolKey]bool{}, tcpCreditTargets: map[creditPoolKey]tcpCreditTarget{}}
 	if e = os.MkdirAll(filepath.Dir(s.path), 0700); e != nil {
 		return nil, e
 	}
@@ -123,9 +128,28 @@ func OpenStore(path string) (*Store, error) {
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
 		s.fastFailed.Store(true)
-		s.closeErr = s.submit(&stateRequest{event: stateEvent{Kind: "credit_close"}})
+		// Stop new submissions first and settle after every already queued
+		// request. A late refill must not publish another window after close.
 		s.submitMu.Lock()
 		s.closing = true
+		settle := &stateRequest{event: stateEvent{Kind: "credit_close"}, done: make(chan error, 1)}
+		s.queue <- settle
+		s.submitMu.Unlock()
+		s.closeErr = <-settle.done
+		// Older Agents understand the unchanged format but enforce smaller
+		// windows. Remove expanded-window history after a clean settlement so
+		// a normal binary rollback can read the current ledger safely.
+		if s.closeErr == nil {
+			s.mu.Lock()
+			expanded := s.expandedCredits
+			s.mu.Unlock()
+			if expanded {
+				checkpoint := &stateRequest{event: stateEvent{Kind: "checkpoint"}, done: make(chan error, 1)}
+				s.queue <- checkpoint
+				s.closeErr = <-checkpoint.done
+			}
+		}
+		s.submitMu.Lock()
 		close(s.queue)
 		s.submitMu.Unlock()
 		<-s.done
@@ -579,7 +603,10 @@ func wake(ch chan struct{}) {
 	}
 }
 
-func (s *Store) requestUsage() { wake(s.usageWake) }
+func (s *Store) requestUsage() {
+	wake(s.usageWake)
+	wake(s.leaseWake)
+}
 
 func (s *Store) notifyChangedLocked() {
 	s.changedMu.Lock()
@@ -619,7 +646,21 @@ func (s *Store) renewals() []string {
 		s.creditMu.Unlock()
 		low := used > 0 && l.Bytes-used <= min(l.Bytes/8, 64<<10)
 		if r.LeasePipeline && r.StandbyLease != nil {
-			low = used >= l.Bytes
+			// Leave enough tail for one relay read; waiting for byte-exact
+			// exhaustion strands odd-sized remainders and prevents promotion.
+			low = used > 0 && l.Bytes-used < 32<<10
+			standbyUsed := s.state.Used[r.StandbyLease.ID]
+			s.creditMu.Lock()
+			for _, c := range s.credits {
+				if c.window.LeaseID == r.StandbyLease.ID {
+					standbyUsed += c.used - c.window.Confirmed
+				}
+			}
+			s.creditMu.Unlock()
+			// Spending the standby proves that the flow has already switched.
+			// Return any primary remainder, including idle opposite-direction
+			// reservations, and let the panel promote/prefetch the next lease.
+			low = low || standbyUsed > 0
 		}
 		if low || !now.Add(15*time.Second).Before(minTime(s.state.Config.ValidUntil, l.ExpiresAt)) {
 			ids = append(ids, l.ID)

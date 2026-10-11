@@ -135,7 +135,7 @@ func TestPrefetchConflictRefreshesConfigButDoesNotHideForbidden(t *testing.T) {
 			}))
 			defer srv.Close()
 			a := Agent{Store: s, URL: srv.URL, HTTP: srv.Client()}
-			err := a.syncUsage(context.Background())
+			err := a.syncPrefetch(context.Background())
 			if status == http.StatusForbidden {
 				if err == nil {
 					t.Fatal("authorization failure hidden")
