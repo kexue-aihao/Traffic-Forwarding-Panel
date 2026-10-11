@@ -18,9 +18,46 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 	if err := s.refreshExits(ctx, node); err != nil {
 		return err
 	}
+	// Discover owners before the transaction so MySQL's first consistent read
+	// happens after the owner and node locks. Prefetch and rule saves take those
+	// locks before rules and entitlements; the opposite order can deadlock or
+	// overwrite a standby that was published while refresh waited for a lock.
+	owners := []string{}
+	knownOwners := map[string]bool{}
+	if s.Store.Dialect != "sqlite" {
+		rows, err := s.Store.DB.QueryContext(ctx, s.q("SELECT DISTINCT user_id FROM cp_rules WHERE node_id=? AND deleted=0 ORDER BY user_id"), node)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var owner string
+			if err = rows.Scan(&owner); err != nil {
+				rows.Close()
+				return err
+			}
+			owners = append(owners, owner)
+			knownOwners[owner] = true
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+	}
 	return s.Store.Write(ctx, storage.Critical, func(tx *sql.Tx) error {
+		for _, owner := range owners {
+			var lockedOwner string
+			// Disabled owners still need to be read so their rules can be skipped.
+			if err := tx.QueryRowContext(ctx, s.q("SELECT id FROM cp_users WHERE id=? FOR UPDATE"), owner).Scan(&lockedOwner); err != nil {
+				return err
+			}
+		}
 		var nodeRaw string
-		if e := tx.QueryRowContext(ctx, s.q("SELECT payload FROM cp_nodes WHERE id=?"), node).Scan(&nodeRaw); e != nil {
+		nodeQuery := "SELECT payload FROM cp_nodes WHERE id=?"
+		if s.Store.Dialect != "sqlite" {
+			nodeQuery += " FOR UPDATE"
+		}
+		if e := tx.QueryRowContext(ctx, s.q(nodeQuery), node).Scan(&nodeRaw); e != nil {
 			return e
 		}
 		var info contract.Node
@@ -50,6 +87,12 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 			if e = json.Unmarshal([]byte(rp), &it.rule); e != nil {
 				rows.Close()
 				return e
+			}
+			if s.Store.Dialect != "sqlite" && !knownOwners[it.rule.UserID] {
+				// A new owner's rule appeared during lock acquisition. Retry from
+				// a fresh inventory rather than taking another owner lock too late.
+				rows.Close()
+				return errConflict
 			}
 			if e = json.Unmarshal([]byte(gp), &it.group); e != nil {
 				rows.Close()
@@ -209,6 +252,15 @@ func (s *Server) retireLease(w http.ResponseWriter, r *http.Request) {
 	}
 	node := r.Context().Value(nodeKey{}).(string)
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
+		if s.Store.Dialect != "sqlite" {
+			// Refresh and prefetch lock the node before commercial quota. Take
+			// that lock here too; refunding first and publishing last can form
+			// an entitlement/node deadlock with a concurrent configuration GET.
+			var lockedNode string
+			if err := tx.QueryRowContext(r.Context(), s.q("SELECT id FROM cp_nodes WHERE id=? FOR UPDATE"), node).Scan(&lockedNode); err != nil {
+				return err
+			}
+		}
 		var owner, ent string
 		var used int64
 		query := `SELECT node_id,entitlement_id,bytes_used FROM cp_rule_leases WHERE id=?`

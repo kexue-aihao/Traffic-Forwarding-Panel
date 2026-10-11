@@ -354,8 +354,15 @@ func (s *Server) nodeConfig(ctx context.Context, node string) (contract.Config, 
 	if json.Unmarshal([]byte(nodePayload), &nodeInfo) != nil {
 		return cfg, errors.New("config unavailable")
 	}
-	// Snapshot transaction prevents an old rule set being labeled with a newer version.
-	tx, e := s.Store.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelSerializable})
+	// Snapshot transaction prevents an old rule set being labeled with a newer
+	// version. MySQL SERIALIZABLE turns these reads into shared locks, reversing
+	// the owner/node order of lease writers. REPEATABLE READ retains one MVCC
+	// snapshot without blocking a concurrent prefetch or retirement.
+	isolation := sql.LevelSerializable
+	if s.Store.Dialect == "mysql" {
+		isolation = sql.LevelRepeatableRead
+	}
+	tx, e := s.Store.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: isolation})
 	if e != nil {
 		return cfg, errors.New("config unavailable")
 	}
