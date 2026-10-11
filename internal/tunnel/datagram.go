@@ -701,6 +701,8 @@ type DatagramServer struct {
 	IdleTimeout   time.Duration
 	mu            sync.Mutex
 	listener      *quic.Listener
+	transport     *quic.Transport
+	socket        *net.UDPConn
 	conns         map[*quic.Conn]struct{}
 	closed        bool
 	slots         chan struct{}
@@ -727,11 +729,23 @@ func (s *DatagramServer) Listen(address string) error {
 	listenerTLS.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
 		return s.tlsMaterial.Load(), nil
 	}
-	l, e := quic.ListenAddr(address, listenerTLS, datagramConfig())
+	udpAddress, e := net.ResolveUDPAddr("udp", address)
 	if e != nil {
 		return e
 	}
+	socket, e := net.ListenUDP("udp", udpAddress)
+	if e != nil {
+		return e
+	}
+	transport := &quic.Transport{Conn: socket}
+	l, e := transport.Listen(listenerTLS, datagramConfig())
+	if e != nil {
+		transport.Close()
+		socket.Close()
+		return e
+	}
 	s.listener = l
+	s.transport, s.socket = transport, socket
 	s.conns = map[*quic.Conn]struct{}{}
 	s.slots = make(chan struct{}, 64)
 	s.targets = make(chan struct{}, 32)
@@ -788,14 +802,27 @@ func (s *DatagramServer) Addr() net.Addr {
 func (s *DatagramServer) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
 	s.closed = true
 	for q := range s.conns {
 		q.CloseWithError(0, "closed")
 	}
+	// Listener.Close leaves accepted QUIC connections and their UDP socket
+	// alive. Own the transport and socket so disabling an exit releases its
+	// port synchronously, including sessions still draining close packets.
+	var err error
 	if s.listener != nil {
-		return s.listener.Close()
+		err = s.listener.Close()
 	}
-	return nil
+	if s.transport != nil {
+		err = errors.Join(err, s.transport.Close())
+	}
+	if s.socket != nil {
+		err = errors.Join(err, s.socket.Close())
+	}
+	return err
 }
 func (s *DatagramServer) handle(q *quic.Conn) {
 	defer func() { <-s.slots; q.CloseWithError(0, "closed"); s.mu.Lock(); delete(s.conns, q); s.mu.Unlock() }()

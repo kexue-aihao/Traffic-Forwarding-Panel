@@ -99,6 +99,29 @@ func TestDatagramBindFailureIsSynchronous(t *testing.T) {
 	}
 }
 
+func TestDatagramCloseReleasesUDPPortWithActiveConnection(t *testing.T) {
+	s, p, tc, target := datagramFixture(t)
+	flow, err := p.Dial(t.Context(), tc, s.Addr().String(), "localhost", s.Token, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flow.Close()
+	address := s.Addr().String()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A disabled managed exit must be able to restore the same port immediately,
+	// even while the peer still holds its former QUIC session.
+	replacement, err := net.ListenPacket("udp", address)
+	if err != nil {
+		t.Fatalf("closed datagram server retained UDP port: %v", err)
+	}
+	defer replacement.Close()
+	if err := s.Close(); err != nil {
+		t.Fatalf("repeated close: %v", err)
+	}
+}
+
 func TestDatagramMissingFragmentDoesNotBlockLaterPacket(t *testing.T) {
 	s, p, tc, target := datagramFixture(t)
 	ctx := context.Background()
