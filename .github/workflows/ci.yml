@@ -61,6 +61,8 @@ jobs:
         run: go test -race ./internal/agent -run '^TestInteractiveShellRetainsDirectoryResizesAndInterrupts$' -count=50 -timeout=5m
       - name: Repeat concurrent TLS routing with two CPUs
         run: GOMAXPROCS=2 go test -race ./internal/agent -run '^TestTLSIngressConcurrentRoutes$' -count=100 -timeout=3m
+      - name: Repeat TLS route revocation and connection capacity cleanup
+        run: GOMAXPROCS=2 go test -race ./internal/agent -run '^TestTLSIngressIsolationAndHotRoutes$' -count=100 -timeout=3m
       - run: go test -race ./...
       - name: Verify independent Xray protocol clients
         run: |

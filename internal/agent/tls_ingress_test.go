@@ -398,6 +398,26 @@ func TestTLSIngressIsolationAndHotRoutes(t *testing.T) {
 			if e := exchange(ac, "other-limit-changed"); e != nil {
 				t.Fatal("other account limit change closed this stream", e)
 			}
+			// Client EOF can precede the revoked relay's deferred slot release.
+			// Wait for that teardown before testing a new connection under the
+			// one-connection limit; otherwise a correct capacity rejection races
+			// this handshake, particularly under the Linux race detector.
+			r.mu.Lock()
+			pool := r.pools[limitOwner(b)]
+			r.mu.Unlock()
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				pool.mu.Lock()
+				active := pool.connections
+				pool.mu.Unlock()
+				if active == 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("revoked route retained %d account connection slots", active)
+				}
+				time.Sleep(time.Millisecond)
+			}
 			bc = dial("b.example.com", 'b')
 			cfg.Version++
 			cfg.Rules = []contract.Rule{a}
