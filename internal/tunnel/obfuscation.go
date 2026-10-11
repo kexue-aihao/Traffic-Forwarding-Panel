@@ -24,10 +24,12 @@ type Obfuscator interface {
 // obfsConn wraps net.Conn with transparent obfuscation between TLS and Session layers
 type obfsConn struct {
 	net.Conn
-	strategy Obfuscator
-	readMu   sync.Mutex
-	writeMu  sync.Mutex
-	readBuf  []byte
+	strategy   Obfuscator
+	readMu     sync.Mutex
+	writeMu    sync.Mutex
+	readBuf    []byte
+	readFrame  []byte
+	writeFrame []byte
 }
 
 const maxObfuscatedFrame = 1 << 20
@@ -45,7 +47,10 @@ func (c *obfsConn) Read(p []byte) (int, error) {
 		if n == 0 || n > maxObfuscatedFrame {
 			return 0, errors.New("invalid obfuscation frame length")
 		}
-		frame := make([]byte, n)
+		if cap(c.readFrame) < int(n) {
+			c.readFrame = make([]byte, n)
+		}
+		frame := c.readFrame[:n]
 		if _, err := io.ReadFull(c.Conn, frame); err != nil {
 			return 0, err
 		}
@@ -75,12 +80,16 @@ func (c *obfsConn) Write(p []byte) (int, error) {
 	if len(obfuscated) == 0 || len(obfuscated) > maxObfuscatedFrame {
 		return 0, errors.New("invalid obfuscation frame length")
 	}
-	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(obfuscated)))
-	if err = writeAll(c.Conn, header[:]); err != nil {
-		return 0, err
+	// Keep the existing wire framing, but send the header and payload in one
+	// TLS write. Reuse scratch under writeMu instead of allocating per frame.
+	n := 4 + len(obfuscated)
+	if cap(c.writeFrame) < n {
+		c.writeFrame = make([]byte, n)
 	}
-	if err = writeAll(c.Conn, obfuscated); err != nil {
+	frame := c.writeFrame[:n]
+	binary.BigEndian.PutUint32(frame[:4], uint32(len(obfuscated)))
+	copy(frame[4:], obfuscated)
+	if err = writeAll(c.Conn, frame); err != nil {
 		return 0, err
 	}
 

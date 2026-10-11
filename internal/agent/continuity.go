@@ -134,8 +134,11 @@ func (b *binding) chargeCurrent(ctx context.Context, id, network string, up bool
 			return b.runtime.Store.TryUDPCharge(rule, until, up, n)
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, renewalWait)
-	defer cancel()
+	var cancel context.CancelFunc
+	if network != "tcp" {
+		ctx, cancel = context.WithTimeout(ctx, renewalWait)
+		defer cancel()
+	}
 	for {
 		progress := b.runtime.Store.changes()
 		rule, until, changed, err := b.liveRule(ctx, id)
@@ -154,6 +157,10 @@ func (b *binding) chargeCurrent(ctx context.Context, id, network string, up bool
 		// A shared UDP listener must not wait on one peer's allocation.
 		if network == "udp" {
 			return err
+		}
+		if cancel == nil {
+			ctx, cancel = context.WithTimeout(ctx, renewalWait)
+			defer cancel()
 		}
 		if err := waitCreditMeter(ctx, changed, progress); err != nil {
 			return err

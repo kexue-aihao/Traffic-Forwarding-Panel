@@ -84,6 +84,10 @@ func (c *Collector) Sample(ctx context.Context, nodeID string) contract.Probe {
 	if v, e := host.UptimeWithContext(ctx); e == nil {
 		p.UptimeSeconds = &v
 	}
+	if v, e := host.BootTimeWithContext(ctx); e == nil && v > 0 {
+		booted := time.Unix(int64(v), 0).UTC()
+		p.BootedAt = &booted
+	}
 	if v, e := load.AvgWithContext(ctx); e == nil {
 		p.Load1 = &v.Load1
 	}

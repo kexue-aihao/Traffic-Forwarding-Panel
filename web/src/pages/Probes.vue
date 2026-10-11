@@ -19,6 +19,7 @@ const AgentUpgrade = defineAsyncComponent(
 );
 import ProbeMeter from "../components/ProbeMeter.vue";
 import ProbeConnections from "../components/ProbeConnections.vue";
+import ProbeUptime from "../components/ProbeUptime.vue";
 import { adminSite, state, notice } from "../core/state";
 import Select from "../components/Select.vue";
 import {
@@ -52,6 +53,7 @@ interface Probe {
   swap_used: string | null;
   swap_total: string | null;
   uptime_seconds: string | null;
+  booted_at?: string | null;
   public_ips?: ProbeIP[];
   // 以下字段由控制面补齐：节点名、所属设备组和位置图标。
   node_name?: string;
@@ -122,11 +124,6 @@ function percent(used: string | null, total: string | null) {
   return used !== null && total !== null && Number(total) > 0
     ? (Number(used) / Number(total)) * 100
     : null;
-}
-function uptime(value: string | null) {
-  if (value === null) return "未知";
-  const seconds = Number(value);
-  return `${Math.floor(seconds / 86400)} 天 ${Math.floor((seconds % 86400) / 3600)} 小时`;
 }
 function status(p: Probe) {
   return p.online === false
@@ -320,7 +317,7 @@ onMounted(() => {
   void load();
   ticker = setInterval(() => {
     now.value = Date.now();
-  }, 5000);
+  }, 3000);
 });
 onUnmounted(() => {
   alive = false;
@@ -488,7 +485,7 @@ onUnmounted(() => {
           </ProbeConnections>
           <div class="probe-cell probe-uptime">
             <span class="probe-label">开机时长</span>
-            <strong>{{ uptime(p.uptime_seconds) }}</strong>
+            <ProbeUptime :probe="p" :now="now" :status="status(p)" />
           </div>
           <div class="metrics probe-network probe-traffic">
             <span class="probe-label">流量</span>

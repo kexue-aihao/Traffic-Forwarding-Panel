@@ -205,8 +205,6 @@ func (s *Store) hasSpendableCredit(r contract.Rule, until time.Time) bool {
 }
 
 func (s *Store) reserveCreditLocked(r *stateRequest, staged []stateEvent) (*stateEvent, error) {
-	k := creditKey(r.rule.ID, r.upload)
-	defer func() { s.creditMu.Lock(); delete(s.refilling, k); s.creditMu.Unlock() }()
 	if s.state.Config.NodeID != "" {
 		current := false
 		for _, rule := range s.state.Config.Rules {
@@ -231,7 +229,7 @@ func (s *Store) reserveCreditLocked(r *stateRequest, staged []stateEvent) (*stat
 		candidate.Lease = l
 		var extra int64
 		for _, e := range staged {
-			if e.Window.LeaseID == l.ID {
+			if e.Kind == "credit_reserve" && e.Window.LeaseID == l.ID {
 				extra += e.Window.Capacity
 			}
 		}
@@ -271,8 +269,19 @@ func (s *Store) reserveCreditLocked(r *stateRequest, staged []stateEvent) (*stat
 			userTotal += left
 		}
 	}
+	// Closed windows will be removed before the new reservations are applied.
+	// Keep their budget/liability in the calculation until sync: this is
+	// conservative and avoids exposing any tentative accounting to readers.
+	for _, e := range staged {
+		if e.Kind == "credit_progress" && e.Window.Closed && e.Window.RuleID == r.rule.ID && e.Window.Upload == r.upload {
+			count--
+		}
+	}
 	var stagedLease int64
 	for _, e := range staged {
+		if e.Kind != "credit_reserve" {
+			continue
+		}
 		w := e.Window
 		if w.RuleID == r.rule.ID {
 			ruleTotal += w.Capacity
@@ -531,57 +540,54 @@ func (s *Store) commitCreditEventsLocked(events []stateEvent) error {
 	return e
 }
 
-func (s *Store) processCreditsLocked(r *stateRequest) error {
-	events, e := s.creditProgressLocked(stateEvent{Kind: "credit_flush"})
-	if e != nil {
-		return e
-	}
-	if r.event.Kind == "credit_close" {
-		events, e = s.creditProgressLocked(r.event)
-		if e != nil {
-			return e
-		}
-	}
-	if e = s.commitCreditEventsLocked(events); e != nil {
-		return e
-	}
-	if r.event.Kind != "credit_reserve" {
-		return nil
-	}
-	if e := s.rebalanceCreditsLocked(r); e != nil {
-		return e
-	}
-	event, e := s.reserveCreditLocked(r, nil)
-	if e != nil || event == nil {
-		return e
-	}
-	return s.commitCreditEventsLocked([]stateEvent{*event})
-}
-
 func (s *Store) processCreditBatchLocked(batch []*stateRequest) {
-	if len(batch) == 1 {
-		batch[0].done <- s.processCreditsLocked(batch[0])
+	defer func() {
+		s.creditMu.Lock()
+		refilled := false
+		for _, r := range batch {
+			k := creditKey(r.rule.ID, r.upload)
+			refilled = refilled || s.refilling[k]
+			delete(s.refilling, k)
+		}
+		s.creditMu.Unlock()
+		if refilled {
+			// A busy flow can consume the published window before the writer
+			// clears the in-flight flag. Wake it to enqueue the next refill.
+			s.notifyChangedLocked()
+		}
+	}()
+	if batch[0].event.Kind != "credit_reserve" {
+		trigger := stateEvent{Kind: "credit_flush"}
+		if batch[0].event.Kind == "credit_close" {
+			trigger = batch[0].event
+		}
+		events, err := s.creditProgressLocked(trigger)
+		if err == nil {
+			err = s.commitCreditEventsLocked(events)
+		}
+		batch[0].done <- err
 		return
 	}
-	progress, e := s.creditProgressLocked(stateEvent{Kind: "credit_flush"})
-	if e == nil {
-		e = s.commitCreditEventsLocked(progress)
+	// Tiny or fully reserved leases may need to return unused directional
+	// credit first. The normal refill path combines progress and reservations
+	// into one ordered WAL append and one fsync, with no unsynced publication.
+	for _, r := range batch {
+		if err := s.rebalanceCreditsLocked(r); err != nil {
+			for _, req := range batch {
+				req.done <- err
+			}
+			return
+		}
 	}
+	events, e := s.creditProgressLocked(stateEvent{Kind: "credit_flush"})
 	if e != nil {
 		for _, r := range batch {
 			r.done <- e
 		}
 		return
 	}
-	events := []stateEvent{}
 	results := make([]error, len(batch))
 	for i, r := range batch {
-		if e := s.rebalanceCreditsLocked(r); e != nil {
-			for _, req := range batch {
-				req.done <- e
-			}
-			return
-		}
 		event, err := s.reserveCreditLocked(r, events)
 		results[i] = err
 		if err == nil && event != nil {

@@ -27,6 +27,11 @@ func TestIPObservationAndUnavailableMetrics(t *testing.T) {
 	if p.NodeID != "node" || p.SampledAt.IsZero() {
 		t.Fatal("sample identity missing")
 	}
+	if p.BootedAt != nil && p.UptimeSeconds != nil {
+		if p.BootedAt.IsZero() || p.BootedAt.After(p.SampledAt) || p.SampledAt.Sub(*p.BootedAt)-time.Duration(*p.UptimeSeconds)*time.Second > 5*time.Second {
+			t.Fatal("boot time is inconsistent with OS uptime", p.BootedAt, *p.UptimeSeconds)
+		}
+	}
 }
 
 func TestDefaultPublicIPProbe(t *testing.T) {

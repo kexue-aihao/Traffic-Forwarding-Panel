@@ -2,7 +2,7 @@
 
 Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP、secure-direct 和单出口 QUIC DATAGRAM 加密承载。
 
-当前版本为正式版 `v0.1.43`。安装包、更新范围及升级注意事项见 [发布说明](docs/releases/v0.1.43.md)。本版修复 WebSSH 复制粘贴，在探针页增加手动升级 Agent 及悬停速率查看机器 TCP/UDP 数量。Linux amd64/arm64 Agent 可自动跟随面板正式版本升级，支持签名校验和失败回滚；旧节点首次需重跑接入命令配置公钥，详见 [自动升级说明](docs/agent-auto-upgrade.md)。此前 TCP 批量计量优化和内核拥塞算法继承见 [TCP 性能说明](docs/tcp-credit-performance.md) 与 [BBR 排查说明](docs/tcp-congestion-control.md)。设备组统一 TLS 共享入口、完整高级策略、条件化协议嗅探禁用、直连 UDP 与单出口 QUIC DATAGRAM 已提供，配置与范围见 [共享入口说明](docs/shared-tls-ingress.md) 和 [协议交付说明](docs/protocol-sniffing-implementation.md)。Linux 跨机吞吐/P99、5% 性能预算和 24 小时稳定性尚未验收。已实现内容见 [实施状态](docs/implementation-status.md)，完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持已有 Docker 安装自动备份并升级。Cyber 按用户要求跳过；生产容量、公网和真实支付仍待验收。
+当前版本为正式版 `v0.1.44`。安装包、更新范围及升级注意事项见 [发布说明](docs/releases/v0.1.44.md)。本版合并 TCP 额度补充的落盘同步、减少 TLS 混淆封装开销，并在探针开机时长处增加启动时间和每三秒刷新的当前时间提示；性能对照见 [TCP 优化说明](docs/tcp-refill-performance.md)。Linux amd64/arm64 Agent 可自动跟随面板正式版本升级，支持签名校验和失败回滚；旧节点首次需重跑接入命令配置公钥，详见 [自动升级说明](docs/agent-auto-upgrade.md)。WebSSH 剪贴板、探针手动升级及 TCP/UDP 数量提示继续提供，内核拥塞算法继承见 [BBR 排查说明](docs/tcp-congestion-control.md)。设备组统一 TLS 共享入口、完整高级策略、条件化协议嗅探禁用、直连 UDP 与单出口 QUIC DATAGRAM 已提供，配置与范围见 [共享入口说明](docs/shared-tls-ingress.md) 和 [协议交付说明](docs/protocol-sniffing-implementation.md)。Linux 跨机吞吐/P99、5% 性能预算和 24 小时稳定性尚未验收。已实现内容见 [实施状态](docs/implementation-status.md)，完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持已有 Docker 安装自动备份并升级。Cyber 按用户要求跳过；生产容量、公网和真实支付仍待验收。
 
 ## 本机启动
 

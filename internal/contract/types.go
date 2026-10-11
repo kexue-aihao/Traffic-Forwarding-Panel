@@ -238,20 +238,21 @@ type IPObservation struct {
 }
 
 type Probe struct {
-	NodeID        string    `json:"node_id"`
-	Online        *bool     `json:"online,omitempty"`
-	SampledAt     time.Time `json:"sampled_at"`
-	CPUPercent    *float64  `json:"cpu_percent"`
-	MemoryUsed    *uint64   `json:"memory_used,string"`
-	MemoryTotal   *uint64   `json:"memory_total,string"`
-	DiskUsed      *uint64   `json:"disk_used,string"`
-	DiskTotal     *uint64   `json:"disk_total,string"`
-	UploadBPS     *float64  `json:"upload_bps"`
-	DownloadBPS   *float64  `json:"download_bps"`
-	UploadTotal   *uint64   `json:"upload_total,string"`
-	DownloadTotal *uint64   `json:"download_total,string"`
-	UptimeSeconds *uint64   `json:"uptime_seconds,string"`
-	Load1         *float64  `json:"load1"`
+	NodeID        string     `json:"node_id"`
+	Online        *bool      `json:"online,omitempty"`
+	SampledAt     time.Time  `json:"sampled_at"`
+	CPUPercent    *float64   `json:"cpu_percent"`
+	MemoryUsed    *uint64    `json:"memory_used,string"`
+	MemoryTotal   *uint64    `json:"memory_total,string"`
+	DiskUsed      *uint64    `json:"disk_used,string"`
+	DiskTotal     *uint64    `json:"disk_total,string"`
+	UploadBPS     *float64   `json:"upload_bps"`
+	DownloadBPS   *float64   `json:"download_bps"`
+	UploadTotal   *uint64    `json:"upload_total,string"`
+	DownloadTotal *uint64    `json:"download_total,string"`
+	UptimeSeconds *uint64    `json:"uptime_seconds,string"`
+	BootedAt      *time.Time `json:"booted_at,omitempty"`
+	Load1         *float64   `json:"load1"`
 
 	// TCP counts ESTABLISHED/CLOSE_WAIT; UDP counts local sockets (UDP has no
 	// connection state). Both cover IPv4/IPv6 in the Agent's network namespace.

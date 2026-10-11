@@ -12,6 +12,74 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
 
+type obfsFrameWriter struct {
+	bytes.Buffer
+	maxWrite int
+	calls    int
+}
+
+func (w *obfsFrameWriter) Write(p []byte) (int, error) {
+	w.calls++
+	if w.maxWrite > 0 {
+		p = p[:min(w.maxWrite, len(p))]
+	}
+	return w.Buffer.Write(p)
+}
+
+func TestObfsCombinedWritesAndReusedReadBufferPreserveWire(t *testing.T) {
+	for _, short := range []int{0, 3} {
+		w := &obfsFrameWriter{maxWrite: short}
+		c := &obfsConn{Conn: benchmarkConn{w: w}, strategy: &RandomPaddingObfs{minPad: 10, maxPad: 10}}
+		payloads := [][]byte{[]byte("first"), bytes.Repeat([]byte("long"), 8192), []byte("last")}
+		for _, payload := range payloads {
+			if n, err := c.Write(payload); err != nil || n != len(payload) {
+				t.Fatal(n, err)
+			}
+		}
+		if short == 0 && w.calls != len(payloads) {
+			t.Fatal("header emitted in separate write", w.calls)
+		}
+		// Decode with the old framing layout, independently of obfsConn.Read.
+		wire := bytes.NewReader(w.Bytes())
+		for _, payload := range payloads {
+			var header [4]byte
+			if _, err := io.ReadFull(wire, header[:]); err != nil {
+				t.Fatal(err)
+			}
+			frame := make([]byte, binary.BigEndian.Uint32(header[:]))
+			if _, err := io.ReadFull(wire, frame); err != nil {
+				t.Fatal(err)
+			}
+			plain, err := c.strategy.DeobfuscateRead(frame)
+			if err != nil || !bytes.Equal(plain, payload) {
+				t.Fatal("wire compatibility lost", err)
+			}
+		}
+		if wire.Len() != 0 {
+			t.Fatal("extra frame data")
+		}
+		// Tiny consumer reads must finish each payload before reusing scratch
+		// for the following frame, including frames that grow then shrink.
+		reader := &obfsConn{Conn: benchmarkConn{r: bytes.NewReader(w.Bytes())}, strategy: c.strategy}
+		var got bytes.Buffer
+		buf := make([]byte, 17)
+		for {
+			n, err := reader.Read(buf)
+			got.Write(buf[:n])
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		want := bytes.Join(payloads, nil)
+		if !bytes.Equal(got.Bytes(), want) {
+			t.Fatal("read buffer reuse corrupted data")
+		}
+	}
+}
+
 func TestObfsConnHandlesFragmentedFrames(t *testing.T) {
 	left, right := net.Pipe()
 	defer left.Close()

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
@@ -29,6 +30,169 @@ func reserveTCP(t *testing.T, s *Store, r contract.Rule, until time.Time, up boo
 	t.Helper()
 	if err := s.submit(&stateRequest{event: stateEvent{Kind: "credit_reserve"}, rule: r, until: until, upload: up}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTCPRefillCombinesProgressAndReservationWithoutPublishingUnsyncedCredit(t *testing.T) {
+	s, _, rule, cfg := tcpCreditBinding(t, 4<<20)
+	reserveTCP(t, s, rule, cfg.ValidUntil, true)
+	reserveTCP(t, s, rule, cfg.ValidUntil, true)
+	entered, resume := make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(resume) }) }
+	defer unblock()
+	var syncs atomic.Int64
+	s.mu.Lock()
+	s.fault = func(point string) error {
+		if point == "sync_before" && syncs.Add(1) == 1 {
+			close(entered)
+			<-resume
+		}
+		return nil
+	}
+	// Cross one window boundary and queue a refill while the writer is held.
+	for range 9 {
+		if err := s.TryCreditCharge(rule, cfg.ValidUntil, true, 32<<10); err != nil {
+			s.mu.Unlock()
+			t.Fatal(err)
+		}
+	}
+	s.mu.Unlock()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("refill never reached WAL sync")
+	}
+	// Previously synced credit remains spendable during that sync, including
+	// consumption made after the progress snapshot. The new credit cannot leak.
+	for range 7 {
+		if err := s.TryCreditCharge(rule, cfg.ValidUntil, true, 32<<10); err != nil {
+			t.Fatal("old credit blocked on refill sync", err)
+		}
+	}
+	if err := s.TryCreditCharge(rule, cfg.ValidUntil, true, 1); !errors.Is(err, errCreditUnavailable) {
+		t.Fatal("unsynced refill authorized bytes", err)
+	}
+	unblock()
+	s.mu.Lock()
+	count, confirmed := syncs.Load(), s.state.Used[rule.Lease.ID]
+	s.fault = nil
+	s.mu.Unlock()
+	if count != 1 || confirmed != 9*(32<<10) {
+		t.Fatal("refill did not settle and reserve in one sync", count, confirmed)
+	}
+	if err := s.TryCreditCharge(rule, cfg.ValidUntil, true, 0); err != nil {
+		t.Fatal("synced refill unavailable", err)
+	}
+	if err := s.FlushCredits(); err != nil {
+		t.Fatal(err)
+	}
+	if used(s, rule.Lease.ID) != 2*creditWindowSize {
+		t.Fatal("in-flight consumption was lost or counted twice")
+	}
+}
+
+func TestTCPCombinedRefillFaultRecovery(t *testing.T) {
+	for _, point := range []string{"append_before", "append_after", "sync_before", "sync_after"} {
+		t.Run(point, func(t *testing.T) {
+			s, b, rule, cfg := tcpCreditBinding(t, 4<<20)
+			reserveTCP(t, s, rule, cfg.ValidUntil, true)
+			reserveTCP(t, s, rule, cfg.ValidUntil, true)
+			s.mu.Lock()
+			s.fault = func(p string) error {
+				if p == point {
+					return errors.New("combined refill fault")
+				}
+				return nil
+			}
+			for range 9 {
+				if err := s.TryCreditCharge(rule, cfg.ValidUntil, true, 32<<10); err != nil {
+					s.mu.Unlock()
+					t.Fatal(err)
+				}
+			}
+			s.mu.Unlock()
+			// Flush is ordered after the queued refill and observes its failure.
+			if err := s.FlushCredits(); err == nil {
+				t.Fatal("storage fault ignored")
+			}
+			if err := b.chargeCurrent(context.Background(), rule.ID, "tcp", true, 1); err == nil {
+				t.Fatal("failed refill permitted more spending")
+			}
+			next := reopen(t, s)
+			want := 3 * creditWindowSize
+			if point == "append_before" {
+				want = 2 * creditWindowSize
+			}
+			if got := used(next, rule.Lease.ID); got != want {
+				t.Fatal("combined refill recovery changed liability", got, want)
+			}
+			count := len(next.Pending())
+			next = reopen(t, next)
+			if used(next, rule.Lease.ID) != want || len(next.Pending()) != count {
+				t.Fatal("combined refill recovery was not idempotent")
+			}
+		})
+	}
+}
+
+func TestTCPCombinedRefillRecoversPartialWALBatch(t *testing.T) {
+	for _, cutAfter := range []int{1, 2, 3} {
+		t.Run(fmt.Sprint(cutAfter), func(t *testing.T) {
+			s, _, rule, cfg := tcpCreditBinding(t, 4<<20)
+			reserveTCP(t, s, rule, cfg.ValidUntil, true)
+			reserveTCP(t, s, rule, cfg.ValidUntil, true)
+			s.mu.Lock()
+			s.writeWAL = func(p []byte) (int, error) {
+				// The batch contains two progress records followed by a reserve.
+				// Cut at either complete progress record or inside the reserve.
+				cut := 0
+				for i := 0; i < min(cutAfter, 2); i++ {
+					if len(p)-cut < recordHeaderSize {
+						return 0, errors.New("missing progress record")
+					}
+					cut += recordHeaderSize + int(binary.BigEndian.Uint32(p[cut+4:cut+8]))
+				}
+				if cutAfter == 3 {
+					cut += recordHeaderSize + 10
+				}
+				if cut >= len(p) {
+					return 0, errors.New("missing reservation record")
+				}
+				n, err := s.wal.Write(p[:cut])
+				if err != nil {
+					return n, err
+				}
+				return n, errors.New("partial combined refill write")
+			}
+			for range 9 {
+				if err := s.TryCreditCharge(rule, cfg.ValidUntil, true, 32<<10); err != nil {
+					s.mu.Unlock()
+					t.Fatal(err)
+				}
+			}
+			s.mu.Unlock()
+			if err := s.FlushCredits(); err == nil {
+				t.Fatal("partial write was accepted")
+			}
+			next := reopen(t, s)
+			// No complete replacement reservation survived. Spent and uncertain
+			// bytes still sum to the original two windows, for every valid prefix.
+			if got := used(next, rule.Lease.ID); got != 2*creditWindowSize {
+				t.Fatal("partial WAL batch restored or duplicated budget", got)
+			}
+			next.mu.Lock()
+			err := next.validateSnapshot()
+			next.mu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := len(next.Pending())
+			next = reopen(t, next)
+			if used(next, rule.Lease.ID) != 2*creditWindowSize || len(next.Pending()) != count {
+				t.Fatal("partial batch replay is not idempotent")
+			}
+		})
 	}
 }
 

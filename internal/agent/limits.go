@@ -127,6 +127,14 @@ func (p *resourcePool) wait(ctx context.Context, n int) error {
 }
 
 func (b *binding) charge(ctx context.Context, pool *resourcePool, v contract.Rule, up bool, n int) error {
+	if v.Network == "tcp" {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if ok, _ := pool.take(n); ok {
+			return b.chargeCurrent(ctx, v.ID, v.Network, up, n)
+		}
+	}
 	if v.Network == "udp" && v.UDP != nil && v.UDP.CreditWindows {
 		if e := ctx.Err(); e != nil {
 			return e

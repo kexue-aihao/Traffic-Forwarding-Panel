@@ -520,6 +520,8 @@ try {
     fixtureProbe.udp_connections = "0";
     fixtureProbe.sampled_at = winterUTC;
     fixtureProbe.online = undefined;
+    fixtureProbe.uptime_seconds = null;
+    delete fixtureProbe.booted_at;
     historyMode = "samples";
     historyRequests = [];
     exitEditingFixture = false;
@@ -985,6 +987,80 @@ try {
       }
       await page.setViewportSize(connectionViewport);
       await page.getByRole("heading", {name: "服务器探针", exact: true}).hover();
+
+      // Isolate a paused browser clock so the 3-second refresh boundary is
+      // deterministic, without advancing timers used by unrelated UI tests.
+      const uptimePage = await browser.newPage({timezoneId: "America/New_York"});
+      uptimePage.on("pageerror", e => errors.push(e.message));
+      try {
+        await uptimePage.clock.install({time: new Date(summerUTC)});
+        await uptimePage.clock.pauseAt(new Date(summerUTC));
+        fixtureProbe.uptime_seconds = "176430";
+        await uptimePage.goto(base + "/admin#/probes");
+        const uptimeValue = uptimePage.getByRole("group", {name: "开机时长及机器时间", exact: true}).first();
+        const timeTip = uptimePage.getByRole("tooltip");
+        await expect(uptimeValue).toHaveText("2 天 1 小时");
+        await uptimeValue.hover({force: true});
+        await expect(timeTip.locator("dd")).toHaveText(["2026-01-13 23:20:00", "2026-07-15 00:20:30"]);
+        await expect(timeTip).toContainText("按机器采样时间和开机时长估算");
+        await expect(timeTip).toContainText("上海时间 UTC+8");
+        assert.equal(await uptimeValue.getAttribute("aria-describedby"), await timeTip.getAttribute("id"));
+        await uptimePage.clock.runFor(2999);
+        await expect(timeTip.locator("dd").nth(1)).toHaveText("2026-07-15 00:20:30");
+        await uptimePage.clock.runFor(1);
+        await expect(timeTip.locator("dd")).toHaveText(["2026-01-13 23:20:00", "2026-07-15 00:20:33"]);
+        await uptimePage.clock.runFor(6000);
+        await expect(timeTip.locator("dd")).toHaveText(["2026-01-13 23:20:00", "2026-07-15 00:20:39"]);
+        // OS boot time wins over the legacy estimate. SSE updates must reach
+        // an open tooltip, including a reboot and an offline last sample.
+        fixtureProbe.booted_at = "2026-07-14T16:20:35Z";
+        fixtureProbe.uptime_seconds = "0";
+        fixtureProbe.sampled_at = "2026-07-14T16:20:39Z";
+        publishProbe();
+        await expect(uptimeValue).toHaveText("0 天 0 小时");
+        await expect(timeTip.locator("dd").nth(0)).toHaveText("2026-07-15 00:20:35");
+        await expect(timeTip).not.toContainText("估算");
+        await expect(timeTip).toContainText("在线");
+        fixtureProbe.online = false;
+        publishProbe();
+        await expect(timeTip).toContainText("离线");
+        await expect(timeTip).toContainText("保留最后上报值");
+        await uptimePage.clock.runFor(3000);
+        await expect(timeTip.locator("dd")).toHaveText(["2026-07-15 00:20:35", "2026-07-15 00:20:42"]);
+        fixtureProbe.uptime_seconds = null;
+        delete fixtureProbe.booted_at;
+        publishProbe();
+        await expect(uptimeValue).toHaveText("未知");
+        await expect(timeTip.locator("dd").nth(0)).toHaveText("未知");
+        fixtureProbe.uptime_seconds = "invalid";
+        publishProbe();
+        await expect(uptimeValue).toHaveText("未知");
+        fixtureProbe.uptime_seconds = "0";
+        publishProbe();
+        await expect(timeTip.locator("dd").nth(0)).toHaveText("2026-07-15 00:20:39");
+        await uptimePage.keyboard.press("Escape");
+        await expect(timeTip).toHaveCount(0);
+        await uptimePage.getByRole("heading", {name: "服务器探针", exact: true}).hover({force: true});
+        await uptimeValue.focus();
+        await expect(timeTip).toBeVisible();
+        for (const width of [1440, 390]) {
+          await uptimePage.setViewportSize({width, height: 1000});
+          await uptimeValue.click({force: true});
+          await expect(timeTip).toBeVisible();
+          const box = await timeTip.boundingBox();
+          assert.ok(box && box.x >= 0 && box.x + box.width <= width && box.y >= 0 && box.y + box.height <= 1000, "uptime tooltip must fit viewport");
+          if (name === "chromium") {
+            await uptimePage.screenshot({path: resolve(import.meta.dirname, `../.gocache/screens/probe-uptime-${width}.png`)});
+          }
+        }
+      } finally {
+        await uptimePage.close();
+        fixtureProbe.uptime_seconds = null;
+        fixtureProbe.sampled_at = winterUTC;
+        fixtureProbe.online = undefined;
+        delete fixtureProbe.booted_at;
+        publishProbe();
+      }
       // 视角开关：切到用户视角，机器地址换成「已隐藏」，位置图标照旧可见。
       await pickOption(page, "视角", "user");
       assert.equal(
@@ -1760,7 +1836,7 @@ try {
         [],
       );
       console.log(
-        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), native UDP exit and installer command, recovery usage audit, rule creation closes without confirmation, safe text, WebSSH clipboard, probe connection tooltip (hover, keyboard, tap, SSE, zero/unknown, stale/offline, narrow layout), probe Agent upgrade (setup, platform, signed release, task lifecycle, idempotent retry), probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, recharge in yuan with channel fee, purchase, dropdown list clicks (page, dialog, diagnostics), themes, 401 PASS`,
+        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), native UDP exit and installer command, recovery usage audit, rule creation closes without confirmation, safe text, WebSSH clipboard, probe connection tooltip (hover, keyboard, tap, SSE, zero/unknown, stale/offline, narrow layout), probe uptime tooltip (OS boot/legacy estimate, 3-second refresh, Shanghai time, SSE reboot, offline, unknown/zero, keyboard/tap, narrow layout), probe Agent upgrade (setup, platform, signed release, task lifecycle, idempotent retry), probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, recharge in yuan with channel fee, purchase, dropdown list clicks (page, dialog, diagnostics), themes, 401 PASS`,
       );
     } finally {
       await browser.close();

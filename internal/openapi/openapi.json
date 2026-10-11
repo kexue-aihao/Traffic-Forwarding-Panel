@@ -3644,6 +3644,18 @@
       "Probe": {
         "additionalProperties": false,
         "properties": {
+          "booted_at": {
+            "anyOf": [
+              {
+                "description": "Operating-system boot time in UTC. Omitted by legacy Agents or when unavailable; clients may estimate it from sampled_at minus uptime_seconds.",
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "cpu_model": {
             "anyOf": [
               {

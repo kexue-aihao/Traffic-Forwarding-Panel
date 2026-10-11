@@ -125,6 +125,7 @@ func main() {
 		wire(reflect.TypeOf(v))
 	}
 	probeFields := schemas["Probe"].(schema)["properties"].(schema)
+	probeFields["booted_at"] = nullable(schema{"type": "string", "format": "date-time", "description": "Operating-system boot time in UTC. Omitted by legacy Agents or when unavailable; clients may estimate it from sampled_at minus uptime_seconds."})
 	probeFields["tcp_connections"] = nullable(schema{"type": "string", "pattern": "^[0-9]+$", "description": "Machine TCP connections in ESTABLISHED or CLOSE_WAIT, IPv4/IPv6 combined, in the Agent network namespace. Null if unavailable or omitted by a legacy Agent."})
 	probeFields["udp_connections"] = nullable(schema{"type": "string", "pattern": "^[0-9]+$", "description": "Machine UDP sockets, IPv4/IPv6 combined, in the Agent network namespace. UDP has no established-connection state. Null if unavailable or omitted by a legacy Agent."})
 	str, num, flag := scalar("string"), scalar("integer"), scalar("boolean")

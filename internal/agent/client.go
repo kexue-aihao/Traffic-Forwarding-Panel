@@ -35,6 +35,8 @@ type Agent struct {
 	Upgrader        *Upgrader
 	usageMu         sync.Mutex
 	configMu        sync.Mutex
+	probeMu         sync.Mutex
+	probeBootRetry  time.Time
 }
 
 type httpStatusError struct {
@@ -246,7 +248,27 @@ func (a *Agent) syncUsage(ctx context.Context) error {
 
 func (a *Agent) syncProbe(ctx context.Context) error {
 	p := a.Probe.Sample(ctx, a.Store.Identity().NodeID)
-	return a.request(ctx, "POST", "/agent/probe", p, nil)
+	return a.sendProbe(ctx, p)
+}
+
+func (a *Agent) sendProbe(ctx context.Context, p contract.Probe) error {
+	a.probeMu.Lock()
+	defer a.probeMu.Unlock()
+	if time.Now().Before(a.probeBootRetry) {
+		p.BootedAt = nil
+	}
+	err := a.request(ctx, "POST", "/agent/probe", p, nil)
+	var status *httpStatusError
+	if p.BootedAt != nil && errors.As(err, &status) && status.status == http.StatusBadRequest {
+		// Older panels reject unknown JSON fields. Retry this same sample
+		// without the optional boot timestamp; cache only a successful fallback.
+		p.BootedAt = nil
+		if fallback := a.request(ctx, "POST", "/agent/probe", p, nil); fallback == nil {
+			a.probeBootRetry = time.Now().Add(5 * time.Minute)
+			return nil
+		}
+	}
+	return err
 }
 
 func (a *Agent) runSync(ctx context.Context, name string, interval time.Duration, wake <-chan struct{}, syncOnce func(context.Context) error) {
