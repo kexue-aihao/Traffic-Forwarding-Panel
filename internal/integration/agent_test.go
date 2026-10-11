@@ -192,8 +192,25 @@ func (f *fixture) purchase(key string, version int64) commerce.Entitlement {
 }
 func (f *fixture) sync() {
 	f.t.Helper()
-	if e := f.agent.Step(context.Background()); e != nil {
+	if e := f.syncContext(context.Background()); e != nil {
 		f.t.Fatalf("real Agent sync failed: %v", e)
+	}
+}
+
+func (f *fixture) syncContext(ctx context.Context) error {
+	// Independent prefetch can advance the desired configuration between
+	// GET and ACK. Match Run's refresh behavior, but fail persistent conflicts
+	// and every other error, including errors joined with a stale ACK.
+	for attempt := 0; ; attempt++ {
+		err := f.agent.Step(ctx)
+		if err == nil || err.Error() != "POST /agent/ack: HTTP 409" || attempt >= 9 {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 func freeAddress(t *testing.T, network string) string {

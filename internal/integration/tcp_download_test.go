@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -127,7 +126,7 @@ func TestContinuousTCPDownloadWithDelayedUsageAcrossLeases(t *testing.T) {
 			}
 			conn.Close()
 			// Settle while workers are still active, before Runtime.Close.
-			if err := f.agent.Step(ctx); err != nil && !strings.Contains(err.Error(), "POST /agent/ack: HTTP 409") {
+			if err := f.syncContext(ctx); err != nil {
 				t.Fatal("settlement failed", err)
 			}
 			if got := f.number("SELECT used FROM commerce_entitlements WHERE id=?", f.ent.ID); got != size+1 {
