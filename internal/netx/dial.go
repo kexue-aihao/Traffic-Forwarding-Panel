@@ -47,6 +47,8 @@ func Addresses(ctx context.Context, address string, prefer bool) ([]string, erro
 	return out, nil
 }
 func Dial(ctx context.Context, network, address string, prefer bool) (net.Conn, error) {
+	// Leave TCP_CONGESTION unset: every socket inherits its network namespace's
+	// kernel default, including the operator's BBR configuration on Linux.
 	if !prefer {
 		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, address)
 	}

@@ -97,6 +97,7 @@ func (c *Collector) Sample(ctx context.Context, nodeID string) contract.Probe {
 	if v, e := mem.SwapMemoryWithContext(ctx); e == nil {
 		p.SwapUsed, p.SwapTotal = &v.Used, &v.Total
 	}
+	p.TCPConnections, p.UDPConnections = connectionCounts(ctx)
 	if values, e := gnet.IOCountersWithContext(ctx, true); e == nil {
 		next := map[string]gnet.IOCountersStat{}
 		up, down := float64(0), float64(0)

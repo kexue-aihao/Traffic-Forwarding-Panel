@@ -4,6 +4,7 @@ import {
   chromium,
   firefox,
   webkit,
+  expect,
 } from "../web/node_modules/@playwright/test/index.mjs";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -33,7 +34,18 @@ const summerUTC = "2026-07-14T16:20:30.000Z";
 const winterUTC = "2026-01-15T16:20:30.000Z";
 let tokenExpiry = "";
 let probeOperations = [];
-let agentUpdateSettings = {enabled: true, version: 1, release_version: "0.1.42", available: true, reason: ""};
+let agentUpdateSettings = {enabled: true, version: 1, release_version: "0.1.42", available: true, reason: "", public_key_sha256: "b".repeat(64)};
+const fixtureAgentRelease = {version: "0.1.42", os: "linux", arch: "amd64", url: "https://panel.example.com/download/agent/linux/amd64", sha256: "a".repeat(64), signature: "fixture-signature"};
+let nodeAgentUpdate = {state: "requires_setup", target_version: "0.1.42", release: fixtureAgentRelease};
+let upgradeRequests = [];
+let upgradeFailureOnce = false;
+let operationAccessRequests = [];
+const probeStreams = new Set();
+function publishProbe() {
+  for (const stream of probeStreams) {
+    stream.write(`event: probes\ndata: ${JSON.stringify({ items: [fixtureProbe] })}\n\n`);
+  }
+}
 const uncertainOrder = {
   id: "uncertain-fixture",
   channel: "epay",
@@ -86,6 +98,8 @@ const fixtureProbe = {
   download_total: String(1023n * 1024n ** 3n),
   upload_bps: 1023 * 1024 ** 3,
   download_bps: 1024 ** 4,
+  tcp_connections: "42",
+  udp_connections: "0",
   load1: null,
   cpu_model: "Fixture CPU",
   swap_used: "0",
@@ -166,6 +180,8 @@ const server = createServer(async (req, res) => {
     if (path === "/auth/session") return json({ user });
     if (path === "/probes/events") {
       res.writeHead(200, { "Content-Type": "text/event-stream" });
+      probeStreams.add(res);
+      res.on("close", () => probeStreams.delete(res));
       res.write(
         `event: probes\ndata: ${JSON.stringify({ items: [fixtureProbe] })}\n\n`,
       );
@@ -178,7 +194,7 @@ const server = createServer(async (req, res) => {
       if (req.method === "PUT") agentUpdateSettings = {...agentUpdateSettings, enabled: body.enabled, version: agentUpdateSettings.version + 1};
       return json(agentUpdateSettings);
     }
-    if (path === "/nodes/n1/agent-update") return json({state: "requires_setup", target_version: "0.1.42", release: {version: "0.1.42", os: "linux", arch: "amd64", url: "https://panel.example.com/download/agent/linux/amd64", sha256: "a".repeat(64), signature: "fixture-signature"}});
+    if (path === "/nodes/n1/agent-update") return json(nodeAgentUpdate);
     if (path === "/exits" && req.method === "POST") {
       savedNativeExit = body;
       return json({ ...body, id: "exit-native", version: 1, tunnel: { ...body.tunnel, token: "" }, udp: { ...body.udp, token: "" } }, 201);
@@ -191,7 +207,24 @@ const server = createServer(async (req, res) => {
       return json({ items: auditRuleFilter && auditRuleFilter !== "r1" ? [] : items, total: auditRuleFilter && auditRuleFilter !== "r1" ? 0 : items.length });
     }
     if (path === "/nodes/n1/operations") return json({ items: probeOperations });
-    if (path === "/nodes/n1/operation-access") return json({ token: "fixture-operation-token" }, 201);
+    if (path === "/nodes/n1/operation-access") {
+      operationAccessRequests.push(body);
+      return json({ token: "fixture-operation-token" }, 201);
+    }
+    if (path === "/nodes/n1/upgrade") {
+      upgradeRequests.push(body);
+      assert.deepEqual(body.upgrade, fixtureAgentRelease);
+      assert.equal(body.access_token, "fixture-operation-token");
+      if (upgradeFailureOnce) {
+        upgradeFailureOnce = false;
+        return json({ error: "升级请求结果暂未确认" }, 409);
+      }
+      const previous = probeOperations.find(op => op.idempotency_key === body.idempotency_key);
+      if (previous) return json(previous, 201);
+      const operation = {id: `probe-op-${probeOperations.length}`, kind: "upgrade", status: "pending", upgrade: body.upgrade, idempotency_key: body.idempotency_key};
+      probeOperations.unshift(operation);
+      return json(operation, 201);
+    }
     if (["/nodes/n1/shell", "/nodes/n1/uninstall"].includes(path)) {
       const operation = { id: `probe-op-${probeOperations.length}`, kind: path.split("/").at(-1), status: "pending" };
       probeOperations.unshift(operation); return json(operation, 201);
@@ -463,7 +496,7 @@ async function pickOption(page, label, value) {
   await list.waitFor();
   await list.locator(".select-option").nth(values.indexOf(value)).click();
   await list.waitFor({ state: "detached" });
-  assert.equal(await select.inputValue(), value, `${label} 应当切到 ${value}`);
+  await expect(select, `${label} 应当切到 ${value}`).toHaveValue(value);
 }
 try {
   for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
@@ -471,7 +504,22 @@ try {
     expire = false;
     rules = [];
     node.capabilities = [];
+    node.agent_version = "0.1.36";
+    node.upgrade_key_sha256 = "";
+    node.os = "linux";
+    node.arch = "amd64";
+    nodeAgentUpdate = {state: "requires_setup", target_version: "0.1.42", release: fixtureAgentRelease};
+    agentUpdateSettings.enabled = true;
+    agentUpdateSettings.available = true;
+    agentUpdateSettings.reason = "";
+    upgradeRequests = [];
+    upgradeFailureOnce = false;
+    operationAccessRequests = [];
     probeOperations = [];
+    fixtureProbe.tcp_connections = "42";
+    fixtureProbe.udp_connections = "0";
+    fixtureProbe.sampled_at = winterUTC;
+    fixtureProbe.online = undefined;
     historyMode = "samples";
     historyRequests = [];
     exitEditingFixture = false;
@@ -879,6 +927,64 @@ try {
         "国旗应当和状态标记一样高",
       );
 
+      // Both rate displays expose real probe counters. Keep the tooltip open
+      // while an SSE sample changes, and distinguish unavailable from zero.
+      const headRate = page.locator(".probe-head-rate").first();
+      const rowRate = page.locator(".probe-rate").first();
+      const connectionsTip = page.getByRole("tooltip");
+      await headRate.hover();
+      await expect(connectionsTip).toBeVisible();
+      await expect(connectionsTip.locator("dd")).toHaveText(["42", "0"]);
+      await expect(connectionsTip).toContainText("2026-01-16 00:20:30 · 数据陈旧");
+      assert.equal(await headRate.getAttribute("aria-describedby"), await connectionsTip.getAttribute("id"));
+      await connectionsTip.hover();
+      fixtureProbe.tcp_connections = "51";
+      fixtureProbe.udp_connections = "3";
+      fixtureProbe.sampled_at = summerUTC;
+      publishProbe();
+      await expect(connectionsTip.locator("dd")).toHaveText(["51", "3"]);
+      await expect(connectionsTip).toContainText("2026-07-15 00:20:30 · 在线");
+      await page.keyboard.press("Escape");
+      await expect(connectionsTip).toHaveCount(0);
+      await page.getByRole("heading", {name: "服务器探针", exact: true}).hover();
+      await rowRate.focus();
+      await expect(connectionsTip.locator("dd")).toHaveText(["51", "3"]);
+      await page.keyboard.press("Escape");
+      await expect(connectionsTip).toHaveCount(0);
+      await rowRate.blur();
+      delete fixtureProbe.tcp_connections;
+      fixtureProbe.udp_connections = null;
+      publishProbe();
+      await rowRate.hover();
+      await expect(connectionsTip.locator("dd")).toHaveText(["未知", "未知"]);
+      await expect(connectionsTip).toContainText("旧 Agent 请先升级");
+      fixtureProbe.online = false;
+      publishProbe();
+      await expect(connectionsTip).toContainText("离线");
+      fixtureProbe.online = undefined;
+      fixtureProbe.sampled_at = winterUTC;
+      fixtureProbe.tcp_connections = "42";
+      fixtureProbe.udp_connections = "0";
+      publishProbe();
+      await expect(connectionsTip.locator("dd")).toHaveText(["42", "0"]);
+      // Tap/focus must also work at narrow widths, without clipping in the
+      // horizontally scrollable probe list.
+      const connectionViewport = page.viewportSize();
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 1000});
+        await rowRate.click();
+        await expect(connectionsTip).toBeVisible();
+        const box = await connectionsTip.boundingBox();
+        assert.ok(box && box.x >= 0 && box.x + box.width <= width && box.y >= 0 && box.y + box.height <= 1000, "connection tooltip must fit the viewport");
+        if (name === "chromium") {
+          await mkdir(resolve(import.meta.dirname, "../.gocache/screens"), {recursive: true});
+          await page.screenshot({path: resolve(import.meta.dirname, `../.gocache/screens/probe-connections-${width}.png`)});
+        }
+        await page.keyboard.press("Escape");
+        await rowRate.blur();
+      }
+      await page.setViewportSize(connectionViewport);
+      await page.getByRole("heading", {name: "服务器探针", exact: true}).hover();
       // 视角开关：切到用户视角，机器地址换成「已隐藏」，位置图标照旧可见。
       await pickOption(page, "视角", "user");
       assert.equal(
@@ -899,6 +1005,10 @@ try {
       // 能不能对机器动手也是用户视角的一部分：WebSSH 与卸载在用户视角下不存在，
       // 否则管理员预览到的不是用户真正看到的那一屏。
       assert.equal(await page.getByRole("button", { name: "WebSSH" }).count(), 0);
+      assert.equal(await page.getByRole("button", { name: "升级 Agent", exact: true }).count(), 0);
+      await headRate.hover();
+      await expect(connectionsTip.locator("dd")).toHaveText(["42", "0"]);
+      await page.keyboard.press("Escape");
       assert.equal(
         await page.getByRole("button", { name: "卸载设备", exact: true }).count(),
         0,
@@ -985,7 +1095,21 @@ try {
       const nodesRefreshed = page.waitForResponse(response => response.url().includes("/api/v1/nodes?") && response.status() === 200);
       await page.getByRole("button", { name: "重新连接", exact: true }).click();
       await nodesRefreshed;
-      await page.getByRole("button", { name: "WebSSH", exact: true }).click();
+      await page.evaluate(() => {
+        window.terminalRandomUUID = crypto.randomUUID;
+        Object.defineProperty(crypto, "randomUUID", { configurable: true, value: undefined });
+      });
+      await page.getByRole("button", { name: "升级 Agent", exact: true }).click();
+      // A closed native dialog loses its accessible role before the exit
+      // animation unmounts it. Wait for the actual element to detach so the
+      // next route interaction starts after Modal releases its navigation guard.
+      const upgradeDialog = page.locator("dialog").filter({ hasText: "升级 Agent · Fixture node" });
+      await upgradeDialog.getByText("此节点尚未初始化升级能力。", {exact: false}).waitFor();
+      await upgradeDialog.getByText("当前版本：0.1.36 · 目标版本：0.1.42", {exact: false}).waitFor();
+      assert.equal(await upgradeDialog.getByLabel("管理员密码", {exact: true}).count(), 0);
+      assert.equal(await upgradeDialog.getByRole("link", {name: "前往设备组"}).getAttribute("href"), "#/groups");
+      await upgradeDialog.getByRole("button", { name: "打开 WebSSH", exact: true }).click();
+      await upgradeDialog.waitFor({state: "detached"});
       // WebSSH 不问密码：终端直接可开，密码框不该出现。
       assert.equal(await page.getByLabel("管理员密码", { exact: true }).count(), 0, "WebSSH 不该再要管理员密码");
       await page.getByRole("button", { name: "连接", exact: true }).click();
@@ -993,6 +1117,108 @@ try {
       await page.locator(".xterm-helper-textarea").press("a");
       await page.locator(".xterm-helper-textarea").press("Control+c");
       await page.waitForFunction(() => document.querySelector(".xterm") !== null);
+      // Exercise xterm selection and paste through browser events, including
+      // environments without a Clipboard API and denied read/write permissions.
+      const terminalInput = start => terminalMessages.slice(start)
+        .filter(message => message.type === "input").map(message => message.data).join("");
+      const prompt = page.locator(".xterm-rows > div").filter({ hasText: "root@fixture:" }).first();
+      await prompt.waitFor();
+      const promptBox = await prompt.boundingBox();
+      assert.ok(promptBox);
+      await page.mouse.click(promptBox.x + 16, promptBox.y + promptBox.height / 2, { clickCount: 2 });
+      const copySelected = page.getByRole("button", { name: "复制选中", exact: true });
+      await expect(copySelected).toBeEnabled();
+      await page.evaluate(() => {
+        window.terminalClipboardWrites = [];
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+          writeText: async text => window.terminalClipboardWrites.push(text),
+          readText: async () => "printf clipboard-button",
+        } });
+      });
+      await copySelected.click();
+      await page.getByText("已复制选中文本", { exact: true }).waitFor();
+      const selectedText = await page.evaluate(() => window.terminalClipboardWrites.at(-1));
+      assert.match(selectedText, /^root/);
+      let inputStart = terminalMessages.length;
+      await page.locator(".xterm-helper-textarea").press("Control+Shift+c");
+      await expect.poll(() => page.evaluate(() => window.terminalClipboardWrites.length)).toBe(2);
+      await page.locator(".xterm-helper-textarea").press("Control+c");
+      await expect.poll(() => page.evaluate(() => window.terminalClipboardWrites.length)).toBe(3);
+      assert.equal(terminalInput(inputStart), "", "copy shortcuts must not interrupt or type into the shell");
+      const nativeCopied = await page.locator(".xterm-helper-textarea").evaluate(el => {
+        const clipboardData = new DataTransfer();
+        const event = new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData });
+        el.dispatchEvent(event);
+        return { text: event.clipboardData.getData("text/plain"), prevented: event.defaultPrevented };
+      });
+      assert.deepEqual(nativeCopied, { text: selectedText, prevented: true });
+
+      await page.evaluate(() => {
+        window.terminalExecCopy = document.execCommand;
+        document.execCommand = function(command, ...args) {
+          if (command === "copy") window.terminalFallbackCopy = {
+            text: document.activeElement.value,
+            inModal: !!document.activeElement.closest("dialog[open]"),
+          };
+          return window.terminalExecCopy.call(this, command, ...args);
+        };
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+      });
+      await copySelected.click();
+      await expect.poll(() => page.evaluate(() => window.terminalFallbackCopy?.text)).toBe(selectedText);
+      assert.equal(await page.evaluate(() => window.terminalFallbackCopy.inModal), true);
+      await page.getByText("已复制选中文本", { exact: true }).waitFor();
+      await page.evaluate(() => {
+        window.terminalFallbackCopy = undefined;
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+          writeText: async () => { throw new DOMException("denied", "NotAllowedError"); },
+          readText: async () => "printf clipboard-button",
+        } });
+      });
+      await copySelected.click();
+      await expect.poll(() => page.evaluate(() => window.terminalFallbackCopy?.text)).toBe(selectedText);
+      await page.getByText("已复制选中文本", { exact: true }).waitFor();
+
+      inputStart = terminalMessages.length;
+      await page.getByRole("button", { name: "粘贴", exact: true }).click();
+      await expect.poll(() => terminalInput(inputStart)).toBe("printf clipboard-button");
+      assert.equal(await page.getByLabel("粘贴内容", { exact: true }).count(), 0);
+      await page.evaluate(() => {
+        navigator.clipboard.readText = async () => { throw new DOMException("denied", "NotAllowedError"); };
+      });
+      await page.locator(".xterm-helper-textarea").press("Control+Shift+v");
+      await page.getByLabel("粘贴内容", { exact: true }).waitFor();
+      await expect(page.getByLabel("粘贴内容", { exact: true })).toBeFocused();
+      const pastedUnicode = "测试🌏".repeat(850);
+      inputStart = terminalMessages.length;
+      await page.getByLabel("粘贴内容", { exact: true }).fill(pastedUnicode);
+      await page.getByRole("button", { name: "粘贴到终端", exact: true }).click();
+      await expect.poll(() => terminalInput(inputStart)).toBe(pastedUnicode);
+      assert.ok(terminalMessages.slice(inputStart).filter(message => message.type === "input")
+        .every(message => Buffer.byteLength(message.data, "utf8") <= 4096));
+      assert.equal(await page.getByLabel("粘贴内容", { exact: true }).count(), 0);
+
+      await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }));
+      await page.getByRole("button", { name: "粘贴", exact: true }).click();
+      await page.getByLabel("粘贴内容", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "取消粘贴", exact: true }).click();
+      inputStart = terminalMessages.length;
+      const nativePaste = await page.locator(".xterm-helper-textarea").evaluate(el => {
+        const clipboardData = new DataTransfer();
+        const event = new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData });
+        event.clipboardData.setData("text/plain", "printf native-paste");
+        el.dispatchEvent(event);
+        return event.defaultPrevented;
+      });
+      assert.equal(nativePaste, true);
+      await expect.poll(() => terminalInput(inputStart)).toBe("printf native-paste");
+      await page.evaluate(() => {
+        document.execCommand = window.terminalExecCopy;
+        delete navigator.clipboard;
+        delete window.terminalExecCopy;
+        delete window.terminalFallbackCopy;
+        delete window.terminalClipboardWrites;
+      });
       await page.getByRole("button", { name: "断开连接", exact: true }).click();
       await page.getByRole("button", { name: "连接", exact: true }).waitFor();
       assert.ok(terminalMessages.some(message => message.type === "resize" && message.cols > 2));
@@ -1000,6 +1226,10 @@ try {
       assert.ok(terminalMessages.some(message => message.type === "input" && message.data === "\x03"));
       await page.getByRole("button", { name: "关闭对话框" }).click();
       await page.locator("dialog").waitFor({ state: "detached" });
+      await page.evaluate(() => {
+        Object.defineProperty(crypto, "randomUUID", { configurable: true, value: window.terminalRandomUUID });
+        delete window.terminalRandomUUID;
+      });
       await page.getByRole("button", { name: "卸载设备", exact: true }).click();
       await page.getByLabel("管理员密码", { exact: true }).fill("fixture-password");
       await page.getByRole("button", { name: "确认卸载此设备", exact: true }).click();
@@ -1009,6 +1239,131 @@ try {
       await page.getByText("已取消", { exact: true }).waitFor();
       await page.getByRole("button", { name: "关闭对话框" }).click();
       await page.locator("dialog").waitFor({ state: "detached" });
+      // Probe upgrades use the panel's signed artifact, including when automatic
+      // rollout is disabled. Legacy nodes must initialize the trusted updater.
+      const reloadProbeNodes = async () => {
+        const response = page.waitForResponse(item => item.url().includes("/api/v1/nodes?") && item.status() === 200);
+        await page.getByRole("button", { name: "重新连接", exact: true }).click();
+        await response;
+      };
+      const refreshUpgrade = async () => {
+        await upgradeDialog.getByRole("button", { name: "刷新升级状态", exact: true }).click();
+        await expect(upgradeDialog.getByRole("button", { name: "刷新升级状态", exact: true })).toBeEnabled();
+      };
+      node.capabilities = ["shell-v1", "uninstall-v1", "upgrade-v1"];
+      node.upgrade_key_sha256 = "c".repeat(64);
+      nodeAgentUpdate.state = "disabled";
+      agentUpdateSettings.enabled = false;
+      await reloadProbeNodes();
+      await page.getByRole("button", { name: "升级 Agent", exact: true }).click();
+      await upgradeDialog.getByText("此节点尚未初始化升级能力。", {exact: false}).waitFor();
+      assert.equal(await upgradeDialog.getByRole("button", {name: "升级到 0.1.42", exact: true}).count(), 0, "mismatched signing key cannot upgrade even when rollout is disabled");
+      await upgradeDialog.getByRole("link", { name: "前往设备组", exact: true }).click();
+      await upgradeDialog.waitFor({state: "detached"});
+      await page.waitForURL("**/admin#/groups");
+      await page.getByRole("heading", { name: "设备组", exact: true }).waitFor();
+      await page.goto(base + "/admin#/probes");
+      node.os = "windows";
+      nodeAgentUpdate.release = undefined;
+      await reloadProbeNodes();
+      await page.getByRole("button", { name: "升级 Agent", exact: true }).click();
+      await upgradeDialog.getByText("当前仅支持 Linux amd64 / arm64 节点。", {exact: true}).waitFor();
+      assert.equal(await upgradeDialog.getByText("此节点尚未初始化升级能力。", {exact: false}).count(), 0);
+      assert.equal(await upgradeDialog.getByRole("button", {name: "升级到 0.1.42", exact: true}).count(), 0);
+      await upgradeDialog.getByRole("button", { name: "关闭对话框" }).click();
+      await upgradeDialog.waitFor({state: "detached"});
+      node.os = "linux";
+      nodeAgentUpdate.release = fixtureAgentRelease;
+      node.upgrade_key_sha256 = agentUpdateSettings.public_key_sha256;
+      await reloadProbeNodes();
+      await page.getByRole("button", { name: "升级 Agent", exact: true }).click();
+      const submitUpgrade = upgradeDialog.getByRole("button", {name: "升级到 0.1.42", exact: true});
+      await submitUpgrade.waitFor();
+      await upgradeDialog.getByText("自动升级：已关闭，可手动升级", {exact: false}).waitFor();
+      assert.equal(await upgradeDialog.getByLabel("下载地址", {exact: true}).count(), 0);
+      assert.equal(await upgradeDialog.getByLabel("发布签名", {exact: true}).count(), 0);
+      agentUpdateSettings.available = false;
+      agentUpdateSettings.reason = "自动升级需要配置面板公开 HTTPS 地址";
+      await refreshUpgrade();
+      await upgradeDialog.getByText(agentUpdateSettings.reason, {exact: true}).waitFor();
+      assert.equal(await submitUpgrade.count(), 0);
+      agentUpdateSettings.available = true;
+      agentUpdateSettings.reason = "";
+      await refreshUpgrade();
+      await submitUpgrade.waitFor();
+      probeOperations.unshift({id: "busy-shell", kind: "shell", status: "running"});
+      await refreshUpgrade();
+      await upgradeDialog.getByText("设备有正在执行的运维任务，请等待任务结束。", {exact: true}).waitFor();
+      assert.equal(await submitUpgrade.count(), 0);
+      probeOperations[0].expires_at = winterUTC;
+      await refreshUpgrade();
+      await submitUpgrade.waitFor();
+      probeOperations.shift();
+      await refreshUpgrade();
+      await submitUpgrade.waitFor();
+      if (name === "chromium") {
+        await mkdir(resolve(import.meta.dirname, "../.gocache/screens"), {recursive: true});
+        const viewport = page.viewportSize();
+        for (const width of [1440, 390]) {
+          await page.setViewportSize({width, height: 1000});
+          await page.screenshot({path: resolve(import.meta.dirname, `../.gocache/screens/agent-upgrade-${width}.png`)});
+          assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "upgrade dialog overflows viewport");
+        }
+        await page.setViewportSize(viewport);
+      }
+      upgradeFailureOnce = true;
+      await upgradeDialog.getByLabel("管理员密码", {exact: true}).fill("fixture-password");
+      await submitUpgrade.click();
+      await upgradeDialog.getByText("升级请求结果暂未确认", {exact: true}).waitFor();
+      await expect(upgradeDialog.getByLabel("管理员密码", {exact: true})).toHaveValue("");
+      await upgradeDialog.getByLabel("管理员密码", {exact: true}).fill("fixture-password");
+      await expect(submitUpgrade).toBeEnabled();
+      await submitUpgrade.click();
+      await upgradeDialog.getByText("等待设备接收", {exact: true}).waitFor();
+      assert.equal(upgradeRequests.length, 2);
+      assert.equal(upgradeRequests[0].idempotency_key, upgradeRequests[1].idempotency_key, "uncertain upgrade retries must retain the request key");
+      assert.deepEqual(operationAccessRequests.at(-1), {password: "fixture-password"});
+      assert.equal(await submitUpgrade.count(), 0);
+      const manualUpgrade = probeOperations[0];
+      manualUpgrade.status = "running";
+      await refreshUpgrade();
+      await upgradeDialog.getByText("正在下载并校验升级文件", {exact: true}).waitFor();
+      manualUpgrade.status = "staged";
+      manualUpgrade.expires_at = winterUTC;
+      await refreshUpgrade();
+      await upgradeDialog.getByText("等待新版本启动和健康确认", {exact: true}).waitFor();
+      assert.equal(await submitUpgrade.count(), 0, "staged upgrade must block duplicate submissions");
+      manualUpgrade.status = "rolled_back";
+      manualUpgrade.error = "fixture-health-rollback";
+      await refreshUpgrade();
+      await upgradeDialog.getByText("新版本启动失败，已恢复旧版本", {exact: true}).waitFor();
+      await upgradeDialog.getByText("fixture-health-rollback", {exact: true}).waitFor();
+      await upgradeDialog.getByLabel("管理员密码", {exact: true}).fill("fixture-password");
+      await submitUpgrade.click();
+      await upgradeDialog.getByText("等待设备接收", {exact: true}).waitFor();
+      assert.equal(upgradeRequests.length, 3);
+      assert.notEqual(upgradeRequests[2].idempotency_key, upgradeRequests[1].idempotency_key, "a finished rollback needs a new retry key");
+      probeOperations[0].status = "succeeded";
+      node.agent_version = "0.1.42";
+      nodeAgentUpdate.state = "current";
+      await refreshUpgrade();
+      await upgradeDialog.getByText("升级完成", {exact: true}).waitFor();
+      await upgradeDialog.getByText("当前版本：0.1.42 · 目标版本：0.1.42", {exact: false}).waitFor();
+      assert.equal(await submitUpgrade.count(), 0);
+      await upgradeDialog.getByRole("button", { name: "关闭对话框" }).click();
+      await upgradeDialog.waitFor({state: "detached"});
+      probeOperations = [];
+      node.agent_version = "0.1.99";
+      nodeAgentUpdate.state = "disabled";
+      await reloadProbeNodes();
+      await page.getByRole("button", { name: "升级 Agent", exact: true }).click();
+      await upgradeDialog.getByText("当前版本较新或无法比较，请核对节点版本；不会自动降级。", {exact: true}).waitFor();
+      assert.equal(await submitUpgrade.count(), 0, "manual upgrade must not downgrade a newer Agent");
+      await upgradeDialog.getByRole("button", { name: "关闭对话框" }).click();
+      await upgradeDialog.waitFor({state: "detached"});
+      node.agent_version = "0.1.42";
+      nodeAgentUpdate.state = "current";
+      agentUpdateSettings.enabled = true;
       if (name === "chromium") {
         await mkdir(resolve(import.meta.dirname, "../.gocache/screens"), { recursive: true });
         const viewport = page.viewportSize();
@@ -1405,7 +1760,7 @@ try {
         [],
       );
       console.log(
-        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), native UDP exit and installer command, recovery usage audit, rule creation closes without confirmation, safe text, probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, recharge in yuan with channel fee, purchase, dropdown list clicks (page, dialog, diagnostics), themes, 401 PASS`,
+        `${name}: contract, CSP, login, 5 viewport widths, Shanghai display under America/New_York (summer/winter, UTC rollover, history axes, tokens), native UDP exit and installer command, recovery usage audit, rule creation closes without confirmation, safe text, WebSSH clipboard, probe connection tooltip (hover, keyboard, tap, SSE, zero/unknown, stale/offline, narrow layout), probe Agent upgrade (setup, platform, signed release, task lifecycle, idempotent retry), probe history (gaps/null/zero, keyboard, ranges, offline nodes, retry, stale response), exact money, recharge in yuan with channel fee, purchase, dropdown list clicks (page, dialog, diagnostics), themes, 401 PASS`,
       );
     } finally {
       await browser.close();

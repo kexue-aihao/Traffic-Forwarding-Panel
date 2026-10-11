@@ -274,6 +274,13 @@ Agent 诊断需 `diagnostics-v1`，只探测该节点当前有授权、已启用
 - GET /admin/telegram/payments 返回最近 100 笔人工充值意图。POST /admin/telegram/payments/{id}/confirm 要求 32 字节十六进制交易哈希；管理员须先在链上核实收款。核实、账本、通知、状态、审计在同一事务内提交；同链交易哈希跨币种不可重复入账。同订单同交易号重放不再计账。
 - payment.received 发送给启用的管理员；wallet.recharge 继续发送给充值用户。node.created、node.online、node.offline、node.recovered 覆盖新增、首次上线、离线与恢复。通知订阅在运营与任务配置 Bot Token / Chat ID。
 - 手动地址模式没有链上扫描或自动确认；需要管理员维护汇率并核实实际到账。私钥不存储在站点。
+
+## 实时探针连接数
+
+`POST /agent/probe`、`GET /probes` 及 `/probes/events` 的 Probe 增加 `tcp_connections` 和 `udp_connections`，为非负整数字符串或 `null`。统计 Agent 所在网络命名空间内整台机器的 IPv4/IPv6，不限于面板转发进程；TCP 统计 ESTABLISHED/CLOSE_WAIT，UDP 统计本地套接字，不代表 UDP 对端或转发会话数量。Linux 从 TCP `CurrEstab` 和两种地址族的 UDP `inuse` 汇总读取，避免枚举进程和所有连接。旧 Agent 省略字段、采集失败或不支持时返回 `null`，零连接返回 `"0"`。
+
+连接数随实时探针采样上报和 SSE 更新，默认每 5 秒采样，时间和在线状态沿用 `sampled_at`、`online`。前端悬停速率时显示最近样本及陈旧/离线提示；本次不新增历史聚合指标或数据库迁移。已有探针设备组授权与权益校验继续适用；需要同时更新面板和 Agent 才能显示采集值。
+
 # Telegram 忘记密码
 
 `POST /api/v1/auth/password-reset/request` 接收 `{"username":"..."}`，对不存在、未绑定、已停用及发送受限的账号统一返回 200 与相同提示。账号须通过现有 Telegram 机器人 `/login` 绑定；启用机器人后，验证码仅发送至绑定的私聊。每个账号 60 秒内最多发送一次、每小时最多五次；请求和确认接口还分别按客户端 IP 限制为每分钟五次，超限返回 429 和 `Retry-After: 60`。验证码 10 分钟有效，最多可尝试五次。

@@ -3837,6 +3837,30 @@
               }
             ]
           },
+          "tcp_connections": {
+            "anyOf": [
+              {
+                "description": "Machine TCP connections in ESTABLISHED or CLOSE_WAIT, IPv4/IPv6 combined, in the Agent network namespace. Null if unavailable or omitted by a legacy Agent.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "udp_connections": {
+            "anyOf": [
+              {
+                "description": "Machine UDP sockets, IPv4/IPv6 combined, in the Agent network namespace. UDP has no established-connection state. Null if unavailable or omitted by a legacy Agent.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "upload_bps": {
             "anyOf": [
               {
@@ -3884,6 +3908,8 @@
           "download_total",
           "uptime_seconds",
           "load1",
+          "tcp_connections",
+          "udp_connections",
           "cpu_model",
           "swap_used",
           "swap_total"

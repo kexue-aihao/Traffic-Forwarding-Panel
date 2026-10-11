@@ -22,6 +22,12 @@ const busy = ref(false);
 const connected = ref(false);
 const op = ref<Operation>();
 const terminalHost = ref<HTMLDivElement>();
+const hasSelection = ref(false);
+const clipboardStatus = ref("");
+const clipboardBusy = ref(false);
+const manualPaste = ref(false);
+const pasteText = ref("");
+const pasteInput = ref<HTMLTextAreaElement>();
 const labels: Record<string, string> = {
   pending: "等待设备接收",
   running: "设备正在执行，等待结果",
@@ -33,7 +39,13 @@ const labels: Record<string, string> = {
 const origin = location.origin;
 const supported = props.node.capabilities?.includes(props.mode + "-v1");
 const path = `/nodes/${encodeURIComponent(props.node.id)}`;
-let key = crypto.randomUUID();
+function operationKey() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+let key = operationKey();
 let socket: WebSocket | undefined;
 let terminal: Terminal | undefined;
 let fit: FitAddon | undefined;
@@ -44,6 +56,99 @@ let wasConnected = false;
 function send(message: object) {
   if (socket?.readyState === WebSocket.OPEN)
     socket.send(JSON.stringify(message));
+}
+function copyEvent(event: ClipboardEvent) {
+  const text = terminal?.getSelection();
+  if (!text || !event.clipboardData) return;
+  event.clipboardData.setData("text/plain", text);
+  event.preventDefault();
+  event.stopPropagation();
+  clipboardStatus.value = "已复制选中文本";
+}
+function copyFallback(text: string): boolean {
+  if (!terminalHost.value) return false;
+  // Keep the fallback inside the modal: elements outside an open dialog are inert.
+  const input = document.createElement("textarea");
+  const focused = document.activeElement;
+  input.value = text;
+  input.setAttribute("aria-hidden", "true");
+  Object.assign(input.style, {
+    position: "fixed",
+    opacity: "0",
+    pointerEvents: "none",
+  });
+  terminalHost.value.parentElement?.append(input);
+  try {
+    input.focus({ preventScroll: true });
+    input.select();
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    input.remove();
+    if (focused instanceof HTMLElement && focused.isConnected)
+      focused.focus({ preventScroll: true });
+  }
+}
+async function copySelection() {
+  const text = terminal?.getSelection();
+  if (!text) {
+    clipboardStatus.value = "请先选中终端里的文本";
+    return;
+  }
+  clipboardBusy.value = true;
+  let copied = false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    }
+  } catch {
+    // HTTP pages and denied clipboard permissions can still use native copying.
+  }
+  if (!copied) copied = copyFallback(text);
+  if (alive) {
+    clipboardStatus.value = copied
+      ? "已复制选中文本"
+      : "浏览器未允许复制，请选中文本后按 Ctrl+C（Mac 使用 Command+C）。";
+    clipboardBusy.value = false;
+  }
+}
+function pasteToTerminal(text: string) {
+  if (!connected.value || !terminal || !text) return;
+  // xterm applies bracketed paste and newline handling before onData chunks UTF-8.
+  terminal.paste(text);
+  terminal.focus();
+  manualPaste.value = false;
+  pasteText.value = "";
+  clipboardStatus.value = "已粘贴到终端";
+}
+function pasteEvent(event: ClipboardEvent) {
+  if (!connected.value || !event.clipboardData) return;
+  event.preventDefault();
+  event.stopPropagation();
+  pasteToTerminal(event.clipboardData.getData("text/plain"));
+}
+async function pasteClipboard() {
+  if (!connected.value || !terminal) return;
+  const target = terminal;
+  clipboardBusy.value = true;
+  try {
+    if (!navigator.clipboard?.readText)
+      throw new Error("clipboard unavailable");
+    const text = await navigator.clipboard.readText();
+    if (!alive || terminal !== target || !connected.value) return;
+    if (text) pasteToTerminal(text);
+    else clipboardStatus.value = "剪贴板没有文本";
+  } catch {
+    if (!alive || terminal !== target || !connected.value) return;
+    manualPaste.value = true;
+    clipboardStatus.value = "浏览器未允许读取剪贴板，请在下方粘贴内容。";
+    await nextTick();
+    pasteInput.value?.focus();
+  } finally {
+    if (alive) clipboardBusy.value = false;
+  }
 }
 async function refresh() {
   try {
@@ -59,7 +164,7 @@ async function refresh() {
           ["pending", "running"].includes(item.status),
       );
     if (op.value && !["pending", "running"].includes(op.value.status))
-      key = crypto.randomUUID();
+      key = operationKey();
     if (props.mode === "uninstall" && op.value?.status === "succeeded")
       emit("removed");
   } catch (e) {
@@ -87,7 +192,7 @@ async function start() {
     if (!alive) return;
     op.value = result;
     if (!["pending", "running"].includes(result.status)) {
-      key = crypto.randomUUID();
+      key = operationKey();
       throw new Error("该任务已结束，请重新操作。");
     }
     if (props.mode === "shell") await connect(result.id);
@@ -103,17 +208,43 @@ async function connect(id: string) {
   if (!terminalHost.value || !alive) return;
   terminal?.dispose();
   resize?.disconnect();
+  hasSelection.value = false;
+  clipboardStatus.value = "";
+  manualPaste.value = false;
+  pasteText.value = "";
   terminal = new Terminal({
     cursorBlink: true,
     fontSize: 14,
     scrollback: 3000,
     theme: { background: "#101820", foreground: "#e6edf3" },
   });
-  // 选中即复制：终端里的地址、密钥通常要粘到别处，再按一次复制键是多余的。
-  // 剪贴板在非安全上下文里没有，写失败也不该打断终端，所以整段吞掉异常。
   terminal.onSelectionChange(() => {
-    const text = terminal?.getSelection();
-    if (text) void navigator.clipboard?.writeText(text).catch(() => {});
+    hasSelection.value = terminal?.hasSelection() || false;
+  });
+  terminal.attachCustomKeyEventHandler((event) => {
+    const key = event.key.toLowerCase();
+    if (
+      !event.altKey &&
+      (event.ctrlKey || event.metaKey) &&
+      key === "c" &&
+      (event.shiftKey || terminal?.hasSelection())
+    ) {
+      if (event.type === "keydown") {
+        event.preventDefault();
+        void copySelection();
+      }
+      return false;
+    }
+    if (!event.altKey && event.ctrlKey && event.shiftKey && key === "v") {
+      if (event.type === "keydown") {
+        event.preventDefault();
+        void pasteClipboard();
+      }
+      return false;
+    }
+    // Let the browser deliver Ctrl+V / Command+V via the native paste event;
+    // this path also works when the Clipboard API is unavailable or denied.
+    return true;
   });
   fit = new FitAddon();
   terminal.loadAddon(fit);
@@ -150,6 +281,8 @@ async function connect(id: string) {
   };
   socket.onclose = () => {
     connected.value = false;
+    manualPaste.value = false;
+    pasteText.value = "";
     terminal?.writeln("\r\n[连接已关闭]");
     if (alive) void disconnect();
   };
@@ -184,7 +317,7 @@ async function disconnect() {
       {},
     );
     current.status = "cancelled";
-    key = crypto.randomUUID();
+    key = operationKey();
     await refresh();
   } catch (e) {
     if (alive) error.value = errorText(e);
@@ -213,7 +346,8 @@ onUnmounted(() => {
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <p v-if="mode === 'shell'" class="muted">
       通过 Agent 打开交互终端，以 Agent 服务账号运行，支持 Ctrl+C
-      和交互命令。会话最长 10 分钟；选中文本即复制到剪贴板。
+      和交互命令。会话最长 10 分钟。选中文字后点「复制选中」或按 Ctrl+Shift+C；
+      Ctrl+V 粘贴（Mac 使用 Command+C / Command+V）。
     </p>
     <p v-else class="warning">
       将停止并卸载此机器上的 Agent
@@ -221,7 +355,9 @@ onUnmounted(() => {
     </p>
     <p v-if="mode !== 'shell'" class="small muted">
       面板连不上、或 Agent 已经起不来时，在机器上以 root 执行
-      <code>bash &lt;(curl -fLsS {{ origin }}/download/agent-uninstall.sh)</code>
+      <code
+        >bash &lt;(curl -fLsS {{ origin }}/download/agent-uninstall.sh)</code
+      >
       也能卸载；那条路不会回报面板，节点记录要到「服务器」页删。
     </p>
     <p v-if="!supported" class="warning">
@@ -238,8 +374,7 @@ onUnmounted(() => {
       "
       @submit.prevent="start"
     >
-      <label
-        v-if="mode !== 'shell'"
+      <label v-if="mode !== 'shell'"
         >管理员密码<input
           v-model="password"
           type="password"
@@ -274,7 +409,40 @@ onUnmounted(() => {
       ref="terminalHost"
       class="web-terminal"
       aria-label="交互终端"
+      @copy.capture="copyEvent"
+      @paste.capture="pasteEvent"
     />
+    <div v-if="op && mode === 'shell'" class="actions">
+      <button :disabled="!hasSelection || clipboardBusy" @click="copySelection">
+        复制选中
+      </button>
+      <button :disabled="!connected || clipboardBusy" @click="pasteClipboard">
+        粘贴
+      </button>
+      <span v-if="clipboardStatus" class="small muted" role="status">
+        {{ clipboardStatus }}
+      </span>
+    </div>
+    <form
+      v-if="manualPaste && connected"
+      @submit.prevent="pasteToTerminal(pasteText)"
+    >
+      <label
+        >粘贴内容<textarea ref="pasteInput" v-model="pasteText" rows="3" />
+      </label>
+      <div class="actions">
+        <button class="primary" :disabled="!pasteText">粘贴到终端</button>
+        <button
+          type="button"
+          @click="
+            manualPaste = false;
+            pasteText = '';
+          "
+        >
+          取消粘贴
+        </button>
+      </div>
+    </form>
     <button v-if="connected" @click="disconnect">断开连接</button>
   </Modal>
 </template>

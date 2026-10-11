@@ -252,6 +252,12 @@ type Probe struct {
 	DownloadTotal *uint64   `json:"download_total,string"`
 	UptimeSeconds *uint64   `json:"uptime_seconds,string"`
 	Load1         *float64  `json:"load1"`
+
+	// TCP counts ESTABLISHED/CLOSE_WAIT; UDP counts local sockets (UDP has no
+	// connection state). Both cover IPv4/IPv6 in the Agent's network namespace.
+	TCPConnections *uint64 `json:"tcp_connections,string"`
+	UDPConnections *uint64 `json:"udp_connections,string"`
+
 	// CPU 型号是静态的，但「这台机器性能怎么样」第一个要看的就是它 ——
 	// 光有占用率回答不了「为什么这台一直满载」。
 	CPUModel  *string         `json:"cpu_model"`

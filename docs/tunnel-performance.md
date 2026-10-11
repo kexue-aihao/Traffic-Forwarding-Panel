@@ -4,6 +4,8 @@
 
 AES-GCM 算法加解密、硬件/软件实现对照及四承载持续上传/下载的补充测量见 [AES 与隧道基准](aes-tunnel-benchmark.md)。
 
+Linux TCP 连接默认沿用机器所在网络命名空间的拥塞算法，包含已有的 BBR 设置；检查系统默认值、实际 socket 和旧连接生效边界见 [TCP 拥塞算法说明](tcp-congestion-control.md)。
+
 ## 已实现
 
 - 帧头和载荷合并成一次底层写入。WSS 一帧对应一个二进制 WebSocket 消息，减少小写入；帧写缓冲和双向中继的 32 KiB 缓冲由 `sync.Pool` 复用。

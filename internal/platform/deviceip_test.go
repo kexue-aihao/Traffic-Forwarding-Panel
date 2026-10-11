@@ -209,6 +209,7 @@ func TestProbePageHidesAddressesButKeepsNodeIdentity(t *testing.T) {
 	probe := contract.Probe{
 		NodeID: node.NodeID, SampledAt: now, CPUPercent: ptr(12.5), CPUModel: ptrS("Test CPU"),
 		MemoryUsed: ptrU(1024), MemoryTotal: ptrU(4096),
+		TCPConnections: ptrU(42), UDPConnections: ptrU(0),
 		PublicIPs: []contract.IPObservation{
 			{Address: "198.51.100.7", Family: "ipv4", Source: "echo", ObservedAt: now},
 			{Address: "2001:db8::7", Family: "ipv6", Source: "echo", ObservedAt: now},
@@ -229,6 +230,9 @@ func TestProbePageHidesAddressesButKeepsNodeIdentity(t *testing.T) {
 	if len(adminEntry["group_ids"].([]any)) != 1 {
 		t.Fatalf("探针缺少设备组归属: %v", adminEntry)
 	}
+	if adminEntry["tcp_connections"] != "42" || adminEntry["udp_connections"] != "0" {
+		t.Fatalf("管理员连接数未保留（零值不能丢失）: %v", adminEntry)
+	}
 
 	raw := secret["token"].(string)
 	user := read[map[string]any](t, f.req("GET", "/probes", nil, raw), 200)
@@ -238,6 +242,9 @@ func TestProbePageHidesAddressesButKeepsNodeIdentity(t *testing.T) {
 	}
 	if userEntry["node_name"] != "hk-1" {
 		t.Fatalf("普通用户看不到节点名，无法区分设备: %v", userEntry)
+	}
+	if userEntry["tcp_connections"] != "42" || userEntry["udp_connections"] != "0" {
+		t.Fatalf("授权用户连接数未保留: %v", userEntry)
 	}
 	if userEntry["ipv4_location"].(map[string]any)["country_code"] != "HK" || userEntry["ipv6_location"].(map[string]any)["country_code"] != "JP" {
 		t.Fatalf("普通用户看不到双栈归属地: %v", userEntry)

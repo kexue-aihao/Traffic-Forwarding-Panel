@@ -2,7 +2,7 @@
 
 Go 控制面与独立 Agent，Vue 管理员后台 `/admin` 和用户前台 `/`。支持 SQLite、PostgreSQL、MySQL；提供规则配置、节点探针、钱包与套餐，以及 TLS、WS、WSS、HTTP、secure-direct 和单出口 QUIC DATAGRAM 加密承载。
 
-当前版本为正式版 `v0.1.42`。安装包、更新范围及升级注意事项见 [发布说明](docs/releases/v0.1.42.md)。本版优化 TCP 计量写盘等待，并让 Linux amd64/arm64 Agent 自动跟随面板正式版本升级，支持签名校验和失败回滚；旧节点首次需重跑接入命令配置公钥，详见 [自动升级说明](docs/agent-auto-upgrade.md) 与 [TCP 性能说明](docs/tcp-credit-performance.md)。设备组统一 TLS 共享入口、完整高级策略、条件化协议嗅探禁用、直连 UDP 与单出口 QUIC DATAGRAM 已提供，配置与范围见 [共享入口说明](docs/shared-tls-ingress.md) 和 [协议交付说明](docs/protocol-sniffing-implementation.md)。Linux 跨机吞吐/P99、5% 性能预算和 24 小时稳定性尚未验收。已实现内容见 [实施状态](docs/implementation-status.md)，完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持已有 Docker 安装自动备份并升级。Cyber 按用户要求跳过；生产容量、公网和真实支付仍待验收。
+当前版本为正式版 `v0.1.43`。安装包、更新范围及升级注意事项见 [发布说明](docs/releases/v0.1.43.md)。本版修复 WebSSH 复制粘贴，在探针页增加手动升级 Agent 及悬停速率查看机器 TCP/UDP 数量。Linux amd64/arm64 Agent 可自动跟随面板正式版本升级，支持签名校验和失败回滚；旧节点首次需重跑接入命令配置公钥，详见 [自动升级说明](docs/agent-auto-upgrade.md)。此前 TCP 批量计量优化和内核拥塞算法继承见 [TCP 性能说明](docs/tcp-credit-performance.md) 与 [BBR 排查说明](docs/tcp-congestion-control.md)。设备组统一 TLS 共享入口、完整高级策略、条件化协议嗅探禁用、直连 UDP 与单出口 QUIC DATAGRAM 已提供，配置与范围见 [共享入口说明](docs/shared-tls-ingress.md) 和 [协议交付说明](docs/protocol-sniffing-implementation.md)。Linux 跨机吞吐/P99、5% 性能预算和 24 小时稳定性尚未验收。已实现内容见 [实施状态](docs/implementation-status.md)，完整范围见 [实施计划](docs/implementation-plan.md)。安装脚本支持已有 Docker 安装自动备份并升级。Cyber 按用户要求跳过；生产容量、公网和真实支付仍待验收。
 
 ## 本机启动
 
@@ -72,7 +72,7 @@ Docker 部署也可以下载 [综合管理脚本](docs/docker-deployment.md#综�
 - [支付协议与固定版本](docs/payment/protocol-sources.md)、[支付实现边界](docs/payment/implementation-status.md)：已接入的渠道仍需分别验证真实商户；Cyber 已跳过。
 - [API 契约](docs/api-contract.md)：浏览器使用 Cookie；自动化使用独立 API Token（权限固定为所有者资源）。管理员建号后即可在「用户管理」里签发凭据交给用户：明文只在创建或重置的那一次显示，之后连管理员也取不回来，遗失只能重置；有效期可选有限时长或永久。
 - 探针页面按设备组查看，只有持有效套餐且设备属于该组的账号能看到，页面里也只有该组的机器。机器按 IP 归属地显示位置图标便于区分；普通用户看得到位置、看不到机器地址。客户脚本可用 API Token 调 `GET /online/device/ip`（单台）或 `GET /online/device/ip/list`（多台）取本组机器当前地址，机器被替换或换 IP 之后返回新值。
-- 探针采用紧凑设备列表，显示运行时长、上下行速率、累计流量及资源进度条（1024 GB = 1 TB）。管理员可点击 **WebSSH** 打开交互终端，或点击 **卸载设备** 让机器卸载 Agent；需再次验证管理员密码。更新面板后，请在旧设备上重新执行设备组接入命令更新 Agent，才能启用新功能。操作机制和卸载限制见 [实施状态](docs/implementation-status.md#探针列表webssh-与远程卸载v017)。
+- 探针采用紧凑设备列表，显示运行时长、上下行速率、累计流量及资源进度条（1024 GB = 1 TB）；悬停速率可查看机器 TCP 连接数、UDP 套接字数与采样状态，手机点击也支持。管理员可点击 **WebSSH** 打开交互终端并复制粘贴，点击 **升级 Agent** 提交升级或查看初始化说明，或点击 **卸载设备** 让机器卸载 Agent；升级和卸载需验证管理员密码。旧设备首次仍需重跑完整接入命令，新探针指标需更新 Agent 后才能上报。操作机制和卸载限制见 [实施状态](docs/implementation-status.md#探针列表webssh-与远程卸载v017)。
 - 站点金额单位是元（结算币种人民币），充值区间在站点设置里以元填写；每条支付通道可单独设置额外手续费与人民币兑 USDT 的汇率，充值界面按它算出应付金额。支付通道（网关、商户号、密钥）也在站点设置里配置，密钥只存服务端、界面不回明文。
 
 钱包以人民币整数分记账；充值后再余额购买套餐。套餐价格在后台按元填写，流量配额按 GB 填写，留空表示不限流量；服务端账本仍按整数分、字节保存。套餐支持日、周、月、年，类型下方对应有效天数、周数、月数、年数；季度和半年可用 3 个月、6 个月配置。续费立即重置周期和配额，从购买成功时间按套餐单位计算：周为 7 天，月和年使用上海时区自然月、自然年并夹紧月末及闰日。旧月套餐保持原月数。不会沿用旧到期时间，也不会在每月 1 日另送配额。

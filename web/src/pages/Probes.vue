@@ -14,7 +14,11 @@ import Icon from "../components/Icon.vue";
 const ProbeActions = defineAsyncComponent(
   () => import("../components/ProbeActions.vue"),
 );
+const AgentUpgrade = defineAsyncComponent(
+  () => import("../components/AgentUpgrade.vue"),
+);
 import ProbeMeter from "../components/ProbeMeter.vue";
+import ProbeConnections from "../components/ProbeConnections.vue";
 import { adminSite, state, notice } from "../core/state";
 import Select from "../components/Select.vue";
 import {
@@ -39,6 +43,8 @@ interface Probe {
   disk_total: string | null;
   upload_bps: number | null;
   download_bps: number | null;
+  tcp_connections?: string | null;
+  udp_connections?: string | null;
   upload_total?: string | null;
   download_total?: string | null;
   load1: number | null;
@@ -66,6 +72,10 @@ interface Node {
   id: string;
   name: string;
   capabilities?: string[];
+  agent_version?: string;
+  upgrade_key_sha256?: string;
+  os?: string;
+  arch?: string;
   // 节点列表里带的是「这个账号有权访问的」组归属，用户视角下用它认机器。
   group_ids?: string[];
 }
@@ -73,14 +83,19 @@ const nodes = ref<Node[]>([]);
 const operation = ref<{
   seq: number;
   node: Node;
-  mode: "shell" | "uninstall";
+  mode: "shell" | "uninstall" | "upgrade";
 }>();
+const operationNode = computed(
+  () =>
+    nodes.value.find((node) => node.id === operation.value?.node.id) ||
+    operation.value?.node,
+);
 const canManage = computed(() => adminSite && state.user?.role === "admin");
 // 每次 act() 换一个 seq，让 <ProbeActions> 重新挂载。Modal 只在挂载时调用
 // showModal()，复用同一个实例只会换掉 mode 这个 prop，新内容就渲染进一个从
 // 没打开过的 <dialog> 里 —— 用户看到的是「点了按钮，弹窗没出来」。
 let operationSeq = 0;
-function act(p: Probe, mode: "shell" | "uninstall") {
+function act(p: Probe, mode: "shell" | "uninstall" | "upgrade") {
   operation.value = {
     seq: ++operationSeq,
     node: nodes.value.find((n) => n.id === p.node_id) || {
@@ -89,6 +104,14 @@ function act(p: Probe, mode: "shell" | "uninstall") {
     },
     mode,
   };
+}
+function upgradeShell() {
+  if (operation.value)
+    operation.value = {
+      ...operation.value,
+      seq: ++operationSeq,
+      mode: "shell",
+    };
 }
 function removed() {
   operation.value = undefined;
@@ -391,7 +414,11 @@ onUnmounted(() => {
               >
             </p>
           </div>
-          <div class="probe-head-rate">
+          <ProbeConnections
+            :probe="p"
+            :status="status(p)"
+            class="probe-head-rate"
+          >
             <span
               ><b aria-hidden="true">↑</b
               ><span>{{ formatBytes(p.upload_bps, "/s") }}</span></span
@@ -400,7 +427,7 @@ onUnmounted(() => {
               ><b aria-hidden="true">↓</b
               ><span>{{ formatBytes(p.download_bps, "/s") }}</span></span
             >
-          </div>
+          </ProbeConnections>
         </div>
         <div class="probe-row">
           <div class="probe-cell probe-state-cell">
@@ -442,7 +469,11 @@ onUnmounted(() => {
               </span>
             </span>
           </div>
-          <div class="metrics probe-network probe-rate">
+          <ProbeConnections
+            :probe="p"
+            :status="status(p)"
+            class="metrics probe-network probe-rate"
+          >
             <span class="probe-label">速率</span>
             <div class="probe-network-values">
               <span
@@ -454,7 +485,7 @@ onUnmounted(() => {
                 ><span>{{ formatBytes(p.download_bps, "/s") }}</span></span
               >
             </div>
-          </div>
+          </ProbeConnections>
           <div class="probe-cell probe-uptime">
             <span class="probe-label">开机时长</span>
             <strong>{{ uptime(p.uptime_seconds) }}</strong>
@@ -491,6 +522,7 @@ onUnmounted(() => {
           </div>
           <div v-if="canOperate" class="probe-actions">
             <button @click="act(p, 'shell')">WebSSH</button>
+            <button @click="act(p, 'upgrade')">升级 Agent</button>
             <button class="danger" @click="act(p, 'uninstall')">
               卸载设备
             </button>
@@ -550,18 +582,27 @@ onUnmounted(() => {
     </p>
     <ProbeHistory :nodes="historyNodes" />
     <ProbeActions
-      v-if="operation"
+      v-if="operation && operation.mode !== 'upgrade'"
       :key="operation.seq"
-      :node="operation.node"
+      :node="operationNode || operation.node"
       :mode="operation.mode"
       @close="operation = undefined"
       @removed="removed"
+    />
+    <AgentUpgrade
+      v-if="operation?.mode === 'upgrade'"
+      :key="operation.seq"
+      :node="operationNode || operation.node"
+      @close="operation = undefined"
+      @shell="upgradeShell"
+      @upgraded="load"
     />
     <section class="card probe-api">
       <h2>设备地址接口</h2>
       <p class="small muted">
         给脚本用：带上管理员发给你的 API Token，就能取到本页面所选设备组当前的
-        机器地址。一台设备一条记录，记录里同时带 IPv4 与 IPv6 —— 有哪一族给哪一族。
+        机器地址。一台设备一条记录，记录里同时带 IPv4 与 IPv6 ——
+        有哪一族给哪一族。
         同一组只有一台机器时用单台接口，多台时用列表接口；机器被替换或换 IP 之后
         返回的地址会跟着变，调用方不需要改代码。
       </p>

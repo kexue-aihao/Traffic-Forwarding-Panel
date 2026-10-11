@@ -124,6 +124,9 @@ func main() {
 	for _, v := range []any{contract.SiteSettings{}, contract.Exit{}, contract.Diagnostic{}, contract.PlanLimits{}, platform.ImportPreviewItem{}, commerce.PurchaseRefund{}, commerce.UserAccount{}, contract.User{}, contract.UserCreated{}, contract.UserPasswordReset{}, contract.IdentityGroup{}, contract.Group{}, contract.Node{}, contract.Rule{}, contract.Config{}, contract.Registration{}, contract.Registered{}, contract.Ack{}, contract.Probe{}, contract.UsageBatch{}, contract.APIError{}, commerce.Plan{}, commerce.Wallet{}, commerce.Order{}, commerce.Ledger{}, commerce.Entitlement{}, commerce.AutoRenew{}, commerce.RedeemCode{}, commerce.ReferralCode{}, commerce.Commission{}, commerce.Refund{}, commerce.WebhookSubscription{}, commerce.WebhookSettings{}, alerts.Policy{}, commerce.Event{}, platform.Task{}, platform.ProbeHistoryPoint{}, contract.APIToken{}, contract.DeviceIP{}} {
 		wire(reflect.TypeOf(v))
 	}
+	probeFields := schemas["Probe"].(schema)["properties"].(schema)
+	probeFields["tcp_connections"] = nullable(schema{"type": "string", "pattern": "^[0-9]+$", "description": "Machine TCP connections in ESTABLISHED or CLOSE_WAIT, IPv4/IPv6 combined, in the Agent network namespace. Null if unavailable or omitted by a legacy Agent."})
+	probeFields["udp_connections"] = nullable(schema{"type": "string", "pattern": "^[0-9]+$", "description": "Machine UDP sockets, IPv4/IPv6 combined, in the Agent network namespace. UDP has no established-connection state. Null if unavailable or omitted by a legacy Agent."})
 	str, num, flag := scalar("string"), scalar("integer"), scalar("boolean")
 	money := schema{"type": "string", "pattern": "^-?[0-9]+$"}
 	date := schema{"type": "string", "format": "date-time"}

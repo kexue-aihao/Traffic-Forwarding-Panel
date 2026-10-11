@@ -26,6 +26,12 @@ Node >=22.12，推荐 Node 24。浏览器回归需已安装 Playwright Chromium/
 
 `test:live` 生成 16 张真实后端界面截图：`.gocache/screens/{admin|user}-{overview|commerce|account|probes}-{desktop|mobile}.png`，分别为 1440×1000、320×800。截图使用隔离测试账号，探针节点明确名为 simulated，未知指标保持未知。桌面和移动端已人工抽查字体、长值换行、对比度、主滚动区及页面可达性；不将截图视为真实节点性能或真实支付验证。
 
+WebSSH 提供「复制选中」和「粘贴」按钮，支持 Ctrl+Shift+C / Ctrl+Shift+V、选区 Ctrl+C 及原生 Ctrl+V（Mac 使用 Command+C / Command+V）。无选区 Ctrl+C 继续发送终端中断。复制优先使用 Clipboard API，失败时在当前模态框内尝试原生复制并显示结果；HTTP 或浏览器拒绝读取剪贴板时打开普通文本框，手动粘贴后发送到终端。粘贴经过 xterm 的 bracketed paste/newline 处理和按 UTF-8 字节拆分，不绕过原有 4096 字节输入限制。三浏览器 fixture 覆盖复制按钮/快捷键、原生复制/粘贴事件、剪贴板接口缺失/拒绝和长 Unicode 输入；并非真实 SSH 或系统剪贴板权限的全环境验收。
+
+探针顶部与列表中的实时速率支持悬停查看机器 TCP/UDP 数量，也可用 Tab 聚焦、手机点击查看，Esc 关闭。提示随 SSE 样本更新，展示采样时间和在线/陈旧/离线状态；TCP 为 ESTABLISHED/CLOSE_WAIT 连接，UDP 为套接字，均包含 IPv4/IPv6。未知不补零，旧 Agent 需更新后才能上报。提示浮层避开列表滚动容器裁剪，并限制在视口内。三浏览器 fixture 覆盖悬停、键盘、点击、实时更新、零/未知、状态及窄屏布局。
+
+探针列表在 WebSSH、卸载设备旁提供管理员「升级 Agent」入口。独立弹窗读取面板签名发布信息和运维任务，输入管理员密码即可升级到面板对应版本，关闭自动升级时仍可手动发起。缺少升级能力、公钥不匹配、产物/HTTPS 不可用时给出对应提示；旧节点可直接切到 WebSSH 完成首次初始化。状态轮询覆盖 pending/running/staged/succeeded/failed/rolled_back，已有活动任务阻止重复提交，结果不确定保留幂等键，已结束任务重试生成新键；普通用户预览隐藏入口。三浏览器 fixture 覆盖这些状态、签名产物选择、权限、公钥匹配、禁止降级及桌面/窄屏布局；真实下载、替换和健康回滚由 Agent/控制面回归验证。
+
 探针卡片保留本次页面的实时短趋势；历史区域调用持久化API，提供CPU/内存/磁盘/负载/上下行六指标，最近1小时、24小时、7天、30天、180天。分钟保留7天、小时保留180天；当前小时包含已落库分钟，最近1–2分钟稍后可见。缺测断线、未知不补0，图表可通过键盘逐点读取；节点/范围/指标用hash query及`router.replace`保存。可查看当前授权但离线的节点。
 
 历史fixture回归覆盖空值/零值/缺桶、取消GET与迟到响应、失败重试、节点分页、URL刷新恢复。live脚本明确向一次性SQLite库写聚合夹具，验证真实Go API、权限过滤和图表；Agent聚合/持久化正确性由Go测试验证。新增截图为`.gocache/screens/history-{desktop,mobile,mobile-chart}.png`。
