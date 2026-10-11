@@ -102,8 +102,10 @@ func TestTLSIngressAddressChangeRebindAndRollback(t *testing.T) {
 func TestTLSIngressConcurrentRoutes(t *testing.T) {
 	_, r, cfg := setup(t)
 	pair, roots := ingressTestCertificate(t)
-	ingress := contract.SharedTLSIngress{ID: "shared", NodeID: "node", GroupID: "group", Listen: ingressTestAddress(t)}
 	targets := []string{ingressTestOrigin(t, pair, 'a'), ingressTestOrigin(t, pair, 'b')}
+	// Bind the backends before selecting the ingress port, so they cannot reuse
+	// the temporary port released by ingressTestAddress during repeated runs.
+	ingress := contract.SharedTLSIngress{ID: "shared", NodeID: "node", GroupID: "group", Listen: ingressTestAddress(t)}
 	for i := 0; i < 64; i++ {
 		v := testRule(targets[i%2])
 		v.ID, v.GroupID, v.UserID, v.Listen = fmt.Sprintf("route%d", i), "group", fmt.Sprintf("owner%d", i), ingress.Listen
