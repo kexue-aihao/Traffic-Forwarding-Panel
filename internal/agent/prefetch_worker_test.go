@@ -386,3 +386,68 @@ func TestPrefetchRateSurvivesSlowRoundTripsAndIdleSamples(t *testing.T) {
 		}
 	}
 }
+
+func TestRetirementPrefetchHintPreservesLegacyJSONAndRequiresActiveTCP(t *testing.T) {
+	for _, tc := range []struct {
+		name, network string
+		used          int
+		wantHint      bool
+		idle          time.Duration
+	}{
+		{"active", "tcp", 900000, true, 0},
+		{"idle", "tcp", 0, false, 0},
+		{"tiny", "tcp", 1, false, 0},
+		{"udp", "udp", 900000, false, 0},
+		{"stale_demand", "tcp", 900000, false, 10 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, runtime, cfg := setup(t)
+			rule := testRule("127.0.0.1:1")
+			rule.Network, rule.LeasePipeline = tc.network, true
+			cfg.Rules = []contract.Rule{rule}
+			if err := runtime.Apply(cfg, true); err != nil {
+				t.Fatal(err)
+			}
+			if tc.used > 0 {
+				if err := s.Charge(rule, cfg.ValidUntil, false, tc.used); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.rates = map[string]leaseRateSample{rule.ID: {at: time.Now(), active: time.Now().Add(-tc.idle), rate: 200 << 20}}
+			if err := s.Retire(rule.Lease.ID); err != nil {
+				t.Fatal(err)
+			}
+			pending := s.Pending()
+			ids := make([]string, 0, len(pending))
+			for _, record := range pending {
+				ids = append(ids, record.ID)
+			}
+			if err := s.Confirm(ids); err != nil {
+				t.Fatal(err)
+			}
+			var called atomic.Bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called.Store(true)
+				if r.URL.Path != "/api/v1/agent/leases/retire" || r.Header.Get("X-TFP-Lease-Config") != "1" {
+					t.Error("retirement lost config negotiation")
+				}
+				if got := r.Header.Get("X-TFP-Lease-Prefetch-Budget"); (got != "") != tc.wantHint || tc.wantHint && got != "268435456" {
+					t.Error("unexpected active-demand hint", got)
+				}
+				var body map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 2 || body["lease_id"] == nil || body["used_bytes"] == nil {
+					t.Error("hint broke strict legacy JSON decoding", err, body)
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+			a := &Agent{URL: server.URL, HTTP: server.Client(), Store: s, Runtime: runtime}
+			if err := a.retire(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !called.Load() || len(s.Retirements()) != 0 {
+				t.Fatal("legacy panel response did not complete retirement")
+			}
+		})
+	}
+}

@@ -533,6 +533,9 @@ func main() {
 			operation["security"] = []any{schema{"cookieSession": []string{}}, schema{"ownerBearer": []string{}}}
 		}
 		params := []any{}
+		if r.path == "/agent/leases/retire" {
+			params = append(params, schema{"name": "X-TFP-Lease-Prefetch-Budget", "in": "header", "schema": schema{"type": "integer", "minimum": 1, "maximum": 256 << 20}, "description": "Optional raw-byte demand hint with X-TFP-Lease-Config: 1. After matching final usage is settled, refill the active TCP rule's standby during authorized promotion, within existing commercial reservation bounds. Idle, stale, invalid and unauthorized hints do not allocate; older panels ignore this header."})
+		}
 		if r.path == "/agent/leases/prefetch" || r.path == "/agent/leases/retire" {
 			params = append(params, schema{"name": "X-TFP-Lease-Config", "in": "header", "schema": schema{"const": "1"}, "description": "Optional: include the same authorized full configuration as GET /agent/config after the committed lease operation. If snapshot compilation fails, preserve the original response and retry normal polling."})
 		}

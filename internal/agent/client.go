@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -65,6 +66,9 @@ func (a *Agent) request(ctx context.Context, method, path string, body, out any)
 	if path == "/agent/leases/prefetch" || path == "/agent/leases/retire" {
 		// Older panels ignore this header and retain their original response.
 		req.Header.Set("X-TFP-Lease-Config", "1")
+	}
+	if retirement, ok := body.(leaseRetirement); ok && path == "/agent/leases/retire" && retirement.PrefetchBudget > 0 {
+		req.Header.Set("X-TFP-Lease-Prefetch-Budget", strconv.FormatInt(retirement.PrefetchBudget, 10))
 	}
 	if token := a.Store.Identity().Token; token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -433,10 +437,7 @@ func (a *Agent) retire(ctx context.Context) error {
 		if pending[id] {
 			continue
 		}
-		req := struct {
-			LeaseID string `json:"lease_id"`
-			Used    int64  `json:"used_bytes,string"`
-		}{id, used}
+		req := leaseRetirement{LeaseID: id, Used: used, PrefetchBudget: a.Store.retirementPrefetchBudget(id)}
 		var result struct {
 			Config *contract.Config `json:"config,omitempty"`
 		}

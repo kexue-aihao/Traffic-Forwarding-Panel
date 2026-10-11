@@ -18,6 +18,11 @@ var (
 	errPrefetchForbidden = errors.New("lease prefetch forbidden by current policy")
 )
 
+type leaseRefillHint struct {
+	ruleID, retiredID, successorID string
+	rawBudget                      int64
+}
+
 func (s *Server) liveLeaseTx(ctx context.Context, tx *sql.Tx, user string, l *contract.Lease) (bool, error) {
 	if l == nil || !time.Now().Before(l.ExpiresAt) {
 		return false, nil
@@ -224,10 +229,14 @@ func boundedLeaseBudget(raw int64, multiplier string) (int64, error) {
 // fail independently; preserve the committed result and let normal polling
 // retry config rather than turning this optimization into an upgrade barrier.
 func (s *Server) leaseResponseConfig(r *http.Request, node string) *contract.Config {
+	return s.leaseResponseConfigWithPrefetch(r, node, leaseRefillHint{})
+}
+
+func (s *Server) leaseResponseConfigWithPrefetch(r *http.Request, node string, hint leaseRefillHint) *contract.Config {
 	if r.Header.Get("X-TFP-Lease-Config") != "1" {
 		return nil
 	}
-	if e := s.refreshLeases(r.Context(), node); e != nil {
+	if e := s.refreshLeasesWithPrefetch(r.Context(), node, hint); e != nil {
 		return nil
 	}
 	cfg, e := s.nodeConfig(r.Context(), node)

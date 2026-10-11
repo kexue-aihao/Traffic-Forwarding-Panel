@@ -8,14 +8,42 @@ import (
 )
 
 type leaseRateSample struct {
-	at   time.Time
-	used map[string]int64
-	rate float64
+	at, active time.Time
+	used       map[string]int64
+	rate       float64
 }
 type leasePrefetch struct {
 	RuleID    string `json:"rule_id"`
 	LeaseID   string `json:"lease_id"`
 	RawBudget int64  `json:"raw_budget,string"`
+}
+
+type leaseRetirement struct {
+	LeaseID        string `json:"lease_id"`
+	Used           int64  `json:"used_bytes,string"`
+	PrefetchBudget int64  `json:"-"`
+}
+
+func leasePrefetchBudget(rate float64) int64 {
+	return int64(min(float64(256<<20), max(float64(16<<20), rate*2)))
+}
+
+// A funded standby can be promoted and replenished by the same retirement
+// response. Older panels ignore the optional header and use normal prefetch.
+func (s *Store) retirementPrefetchBudget(leaseID string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.state.Config.Rules {
+		if !r.Enabled || r.Network != "tcp" || !r.LeasePipeline || r.Lease == nil || r.Lease.ID != leaseID {
+			continue
+		}
+		demand := s.rates[r.ID]
+		if s.state.Used[leaseID] < min(int64(1<<20), r.Lease.Bytes/4) || demand.rate <= 0 || time.Since(demand.active) >= 5*time.Second {
+			return 0
+		}
+		return leasePrefetchBudget(demand.rate)
+	}
+	return 0
 }
 
 func (s *Store) beginPrefetch(request leasePrefetch) bool {
@@ -82,7 +110,7 @@ func (s *Store) prefetches() []leasePrefetch {
 		for _, used := range previous.used {
 			previousSpent += used
 		}
-		current := leaseRateSample{at: now, used: map[string]int64{}, rate: previous.rate}
+		current := leaseRateSample{at: now, active: previous.active, used: map[string]int64{}, rate: previous.rate}
 		var delta int64
 		var first time.Time
 		for _, l := range ruleLeases(r) {
@@ -106,6 +134,9 @@ func (s *Store) prefetches() []leasePrefetch {
 			} else if previous.at.IsZero() {
 				delta += total
 			}
+		}
+		if delta > 0 {
+			current.active = now
 		}
 		// The first active window already provides a rate sample. Waiting for
 		// two usage uploads can exhaust a 16 MiB initial lease before prefetch.
@@ -134,7 +165,7 @@ func (s *Store) prefetches() []leasePrefetch {
 		if r.Lease.Bytes-spent > threshold {
 			continue
 		}
-		budget := int64(min(float64(256<<20), max(float64(16<<20), current.rate*2)))
+		budget := leasePrefetchBudget(current.rate)
 		out = append(out, leasePrefetch{RuleID: r.ID, LeaseID: r.Lease.ID, RawBudget: budget})
 	}
 	for id := range s.rates {

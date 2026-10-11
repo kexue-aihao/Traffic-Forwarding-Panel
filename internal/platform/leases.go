@@ -8,6 +8,7 @@ import (
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/storage"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -15,6 +16,13 @@ import (
 // Allocation and publication share one transaction. Failures preserve the old
 // configuration and never create an unmetered rule.
 func (s *Server) refreshLeases(ctx context.Context, node string) error {
+	return s.refreshLeasesWithPrefetch(ctx, node, leaseRefillHint{})
+}
+
+// Refill only the actively retired rule, within the same policy-checked
+// refresh that promotes its standby. Allocation still uses the commercial
+// transaction and its existing per-lease, per-account and outstanding bounds.
+func (s *Server) refreshLeasesWithPrefetch(ctx context.Context, node string, hint leaseRefillHint) error {
 	if err := s.refreshExits(ctx, node); err != nil {
 		return err
 	}
@@ -160,6 +168,13 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 				}
 			}
 			if valid {
+				if pipeline && rule.ID == hint.ruleID && rule.Lease.ID == hint.successorID {
+					refilled, err := s.refillStandbyTx(ctx, tx, &rule, g, hint.rawBudget)
+					if err != nil {
+						return err
+					}
+					leaseChanged = leaseChanged || refilled
+				}
 				if legacyLimits || leaseChanged {
 					res, err := tx.ExecContext(ctx, s.q(`UPDATE cp_rules SET payload=? WHERE id=? AND version=? AND deleted=0`), strJSON(rule), rule.ID, rule.Version)
 					if err != nil {
@@ -222,6 +237,11 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 					return e
 				}
 			}
+			if allowed && pipeline && retiredPrimary && rule.ID == hint.ruleID && oldLease.ID == hint.retiredID {
+				if _, err := s.refillStandbyTx(ctx, tx, &rule, g, hint.rawBudget); err != nil {
+					return err
+				}
+			}
 			res, e := tx.ExecContext(ctx, s.q(`UPDATE cp_rules SET payload=? WHERE id=? AND version=? AND deleted=0`), strJSON(rule), rule.ID, rule.Version)
 			if e != nil {
 				return e
@@ -238,6 +258,23 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 		return e
 	})
 }
+
+func (s *Server) refillStandbyTx(ctx context.Context, tx *sql.Tx, rule *contract.Rule, group contract.Group, rawBudget int64) (bool, error) {
+	if rawBudget <= 0 || rawBudget > 256<<20 || rule.Network != "tcp" || rule.Lease == nil || rule.StandbyLease != nil {
+		return false, nil
+	}
+	budget, err := boundedLeaseBudget(rawBudget, leaseMultiplier(*rule, group))
+	if err != nil {
+		return false, err
+	}
+	standby, err := s.allocateStandbyTx(ctx, tx, *rule, leaseMultiplier(*rule, group), budget)
+	if err != nil || standby == nil {
+		return false, err
+	}
+	rule.StandbyLease = standby
+	return true, nil
+}
+
 func (s *Server) retireLease(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		LeaseID string `json:"lease_id"`
@@ -251,6 +288,14 @@ func (s *Server) retireLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	node := r.Context().Value(nodeKey{}).(string)
+	// This is an optional optimization, not a reason to reject a valid final
+	// settlement. Malformed/out-of-range hints and idle retirements are ignored.
+	rawBudget, _ := strconv.ParseInt(r.Header.Get("X-TFP-Lease-Prefetch-Budget"), 10, 64)
+	if rawBudget < 1 || rawBudget > 256<<20 || in.Used == 0 || r.Header.Get("X-TFP-Lease-Config") != "1" {
+		rawBudget = 0
+	}
+	var ruleID string
+	var hint leaseRefillHint
 	e := s.Store.Write(r.Context(), storage.Critical, func(tx *sql.Tx) error {
 		if s.Store.Dialect != "sqlite" {
 			// Refresh and prefetch lock the node before commercial quota. Take
@@ -263,11 +308,11 @@ func (s *Server) retireLease(w http.ResponseWriter, r *http.Request) {
 		}
 		var owner, ent string
 		var used int64
-		query := `SELECT node_id,entitlement_id,bytes_used FROM cp_rule_leases WHERE id=?`
+		query := `SELECT node_id,entitlement_id,bytes_used,rule_id FROM cp_rule_leases WHERE id=?`
 		if s.Store.Dialect != "sqlite" {
 			query += " FOR UPDATE"
 		}
-		if e := tx.QueryRowContext(r.Context(), s.q(query), in.LeaseID).Scan(&owner, &ent, &used); e != nil {
+		if e := tx.QueryRowContext(r.Context(), s.q(query), in.LeaseID).Scan(&owner, &ent, &used, &ruleID); e != nil {
 			return e
 		}
 		if owner != node || used != in.Used {
@@ -283,6 +328,20 @@ func (s *Server) retireLease(w http.ResponseWriter, r *http.Request) {
 		}
 		if !errors.Is(e, sql.ErrNoRows) {
 			return e
+		}
+		if rawBudget > 0 {
+			var raw string
+			err := tx.QueryRowContext(r.Context(), s.q("SELECT payload FROM cp_rules WHERE id=? AND node_id=? AND deleted=0"), ruleID, node).Scan(&raw)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			var rule contract.Rule
+			if err == nil && json.Unmarshal([]byte(raw), &rule) == nil && rule.Lease != nil && rule.Lease.ID == in.LeaseID {
+				hint = leaseRefillHint{ruleID: ruleID, retiredID: in.LeaseID, rawBudget: rawBudget}
+				if rule.StandbyLease != nil {
+					hint.successorID = rule.StandbyLease.ID
+				}
+			}
 		}
 		if ent != "admin-test" {
 			if s.opts.RetireLease == nil {
@@ -302,7 +361,7 @@ func (s *Server) retireLease(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "retirement requires matching persisted usage and valid lease")
 		return
 	}
-	if cfg := s.leaseResponseConfig(r, node); cfg != nil {
+	if cfg := s.leaseResponseConfigWithPrefetch(r, node, hint); cfg != nil {
 		reply(w, http.StatusOK, map[string]any{"config": cfg})
 		return
 	}
