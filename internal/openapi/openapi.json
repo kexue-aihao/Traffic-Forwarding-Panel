@@ -2434,6 +2434,18 @@
         ],
         "type": "object"
       },
+      "LeaseConfiguration": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/Config"
+          }
+        },
+        "required": [
+          "config"
+        ],
+        "type": "object"
+      },
       "LeasePrefetch": {
         "additionalProperties": false,
         "properties": {
@@ -2458,6 +2470,9 @@
       "LeasePrefetched": {
         "additionalProperties": false,
         "properties": {
+          "config": {
+            "$ref": "#/components/schemas/Config"
+          },
           "lease_id": {
             "type": "string"
           }
@@ -7461,6 +7476,16 @@
     "/agent/leases/prefetch": {
       "post": {
         "operationId": "post_agent_leases_prefetch",
+        "parameters": [
+          {
+            "description": "Optional: include the same authorized full configuration as GET /agent/config after the committed lease operation. If snapshot compilation fails, preserve the original response and retry normal polling.",
+            "in": "header",
+            "name": "X-TFP-Lease-Config",
+            "schema": {
+              "const": "1"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7510,6 +7535,16 @@
     "/agent/leases/retire": {
       "post": {
         "operationId": "post_agent_leases_retire",
+        "parameters": [
+          {
+            "description": "Optional: include the same authorized full configuration as GET /agent/config after the committed lease operation. If snapshot compilation fails, preserve the original response and retry normal polling.",
+            "in": "header",
+            "name": "X-TFP-Lease-Config",
+            "schema": {
+              "const": "1"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7521,6 +7556,16 @@
           "required": true
         },
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaseConfiguration"
+                }
+              }
+            },
+            "description": "Committed retirement with an optional complete configuration snapshot"
+          },
           "204": {
             "description": "Success"
           },

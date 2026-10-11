@@ -1,8 +1,10 @@
 package agent
 
 import (
-	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
+	"math"
 	"time"
+
+	"github.com/kexue-aihao/Traffic-Forwarding-Panel/internal/contract"
 )
 
 type leaseRateSample struct {
@@ -14,6 +16,25 @@ type leasePrefetch struct {
 	RuleID    string `json:"rule_id"`
 	LeaseID   string `json:"lease_id"`
 	RawBudget int64  `json:"raw_budget,string"`
+}
+
+func (s *Store) beginPrefetch(request leasePrefetch) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, retired := s.state.Retired[request.LeaseID]; retired {
+		return false
+	}
+	if s.prefetching == nil {
+		s.prefetching = map[string]string{}
+	}
+	s.prefetching[request.RuleID] = request.LeaseID
+	return true
+}
+
+func (s *Store) endPrefetch(request leasePrefetch) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.prefetching, request.RuleID)
 }
 
 func ruleLeases(r contract.Rule) []*contract.Lease {
@@ -57,6 +78,10 @@ func (s *Store) prefetches() []leasePrefetch {
 		}
 		active[r.ID] = true
 		previous := s.rates[r.ID]
+		var previousSpent int64
+		for _, used := range previous.used {
+			previousSpent += used
+		}
 		current := leaseRateSample{at: now, used: map[string]int64{}, rate: previous.rate}
 		var delta int64
 		var first time.Time
@@ -84,12 +109,15 @@ func (s *Store) prefetches() []leasePrefetch {
 		}
 		// The first active window already provides a rate sample. Waiting for
 		// two usage uploads can exhaust a 16 MiB initial lease before prefetch.
-		if previous.at.IsZero() && !first.IsZero() {
+		if (previous.at.IsZero() || previousSpent == 0 && delta > 0) && !first.IsZero() {
 			previous.at = first
 		}
 		if !previous.at.IsZero() && now.Sub(previous.at) >= 10*time.Millisecond {
 			measured := float64(delta) / now.Sub(previous.at).Seconds()
-			current.rate = max(measured, previous.rate*0.8)
+			// Decay by elapsed time, not polling frequency. At 100 ms polls,
+			// the old 0.8 factor erased most demand during a few slow control
+			// round trips, shrinking the next lease and amplifying each stall.
+			current.rate = max(measured, previous.rate*math.Exp(-now.Sub(previous.at).Seconds()/5))
 		}
 		s.rates[r.ID] = current
 		_, retired := s.state.Retired[r.Lease.ID]

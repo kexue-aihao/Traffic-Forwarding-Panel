@@ -334,60 +334,62 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 		fail(w, 409, "lease refresh unavailable or entitlement exhausted")
 		return
 	}
-	var nodePayload string
-	if err := s.Store.DB.QueryRowContext(r.Context(), s.q("SELECT payload FROM cp_nodes WHERE id=?"), node).Scan(&nodePayload); err != nil {
-		fail(w, 500, "config unavailable")
+	cfg, e := s.nodeConfig(r.Context(), node)
+	if e != nil {
+		fail(w, 500, e.Error())
 		return
+	}
+	reply(w, 200, cfg)
+}
+
+// nodeConfig compiles one authorized snapshot for normal config reads and
+// optional lease responses; never construct partial policy updates on Agents.
+func (s *Server) nodeConfig(ctx context.Context, node string) (contract.Config, error) {
+	cfg := contract.Config{ContractVersion: contract.Version, NodeID: node, ValidUntil: time.Now().UTC().Add(24 * time.Hour), Rules: []contract.Rule{}}
+	var nodePayload string
+	if err := s.Store.DB.QueryRowContext(ctx, s.q("SELECT payload FROM cp_nodes WHERE id=?"), node).Scan(&nodePayload); err != nil {
+		return cfg, errors.New("config unavailable")
 	}
 	var nodeInfo contract.Node
 	if json.Unmarshal([]byte(nodePayload), &nodeInfo) != nil {
-		fail(w, 500, "config unavailable")
-		return
+		return cfg, errors.New("config unavailable")
 	}
-	cfg := contract.Config{ContractVersion: contract.Version, NodeID: node, ValidUntil: time.Now().UTC().Add(24 * time.Hour), Rules: []contract.Rule{}}
 	// Snapshot transaction prevents an old rule set being labeled with a newer version.
-	tx, e := s.Store.DB.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelSerializable})
+	tx, e := s.Store.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelSerializable})
 	if e != nil {
-		fail(w, 500, "config unavailable")
-		return
+		return cfg, errors.New("config unavailable")
 	}
 	defer tx.Rollback()
-	if e = s.compileTLSIngresses(r.Context(), tx, &cfg, nodeInfo.Capabilities); e != nil {
-		fail(w, 500, "shared TLS configuration unavailable")
-		return
+	if e = s.compileTLSIngresses(ctx, tx, &cfg, nodeInfo.Capabilities); e != nil {
+		return cfg, errors.New("shared TLS configuration unavailable")
 	}
 	ingresses := map[string]contract.SharedTLSIngress{}
 	for _, v := range cfg.TLSIngresses {
 		ingresses[v.ID] = v
 	}
-	if e = tx.QueryRowContext(r.Context(), s.q(`SELECT desired_version FROM cp_nodes WHERE id=?`), node).Scan(&cfg.Version); e != nil {
-		fail(w, 500, "config unavailable")
-		return
+	if e = tx.QueryRowContext(ctx, s.q(`SELECT desired_version FROM cp_nodes WHERE id=?`), node).Scan(&cfg.Version); e != nil {
+		return cfg, errors.New("config unavailable")
 	}
-	policyGroups, e := loadPolicyGroups(r.Context(), tx)
+	policyGroups, e := loadPolicyGroups(ctx, tx)
 	if e != nil {
-		fail(w, 500, "config unavailable")
-		return
+		return cfg, errors.New("config unavailable")
 	}
-	rows, e := tx.QueryContext(r.Context(), s.q(`SELECT r.payload,g.payload,u.disabled,u.role,CASE WHEN EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=u.id))) THEN 1 ELSE 0 END FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
+	rows, e := tx.QueryContext(ctx, s.q(`SELECT r.payload,g.payload,u.disabled,u.role,CASE WHEN EXISTS(SELECT 1 FROM cp_group_identity_groups gig WHERE gig.group_id=r.group_id AND gig.identity_group_id=u.identity_group_id AND EXISTS(SELECT 1 FROM cp_groups owned WHERE owned.id=gig.group_id AND (owned.owner_id='' OR owned.owner_id=u.id))) THEN 1 ELSE 0 END FROM cp_rules r JOIN cp_groups g ON g.id=r.group_id JOIN cp_users u ON u.id=r.user_id WHERE r.node_id=? AND r.deleted=0`), node)
 	if e != nil {
-		fail(w, 500, "config unavailable")
-		return
+		return cfg, errors.New("config unavailable")
 	}
 	for rows.Next() {
 		var rp, gp, role string
 		var disabled, authorized int
 		if rows.Scan(&rp, &gp, &disabled, &role, &authorized) != nil {
 			rows.Close()
-			fail(w, 500, "config unavailable")
-			return
+			return cfg, errors.New("config unavailable")
 		}
 		var rule contract.Rule
 		var g contract.Group
 		if json.Unmarshal([]byte(rp), &rule) != nil || json.Unmarshal([]byte(gp), &g) != nil {
 			rows.Close()
-			fail(w, 500, "config unavailable")
-			return
+			return cfg, errors.New("config unavailable")
 		}
 		if entryPolicyDenied(g, rule) {
 			cfg.BlockedRules = append(cfg.BlockedRules, contract.BlockedRule{RuleID: rule.ID, Reason: "entry_group_policy_denied"})
@@ -439,33 +441,28 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	}
 	if e = rows.Err(); e != nil {
 		rows.Close()
-		fail(w, 500, "config unavailable")
-		return
+		return cfg, errors.New("config unavailable")
 	}
 	rows.Close()
-	top, e := s.managedTopology(r.Context(), tx)
+	top, e := s.managedTopology(ctx, tx)
 	if e != nil {
-		fail(w, 500, "service configuration unavailable")
-		return
+		return cfg, errors.New("service configuration unavailable")
 	}
 	for i := range cfg.Rules {
 		if e = compileRouteCandidates(&cfg.Rules[i], top, nodeInfo.Capabilities); e != nil {
-			fail(w, 500, "route configuration unavailable")
-			return
+			return cfg, errors.New("route configuration unavailable")
 		}
 	}
 	if contains(nodeInfo.Capabilities, "managed-services-v1") {
-		if e = s.compileManagedServices(r.Context(), tx, &cfg, top); e != nil {
-			fail(w, 500, "service configuration unavailable")
-			return
+		if e = s.compileManagedServices(ctx, tx, &cfg, top); e != nil {
+			return cfg, errors.New("service configuration unavailable")
 		}
 	}
 	if tx.Commit() != nil {
-		fail(w, 500, "config unavailable")
-		return
+		return cfg, errors.New("config unavailable")
 	}
 	cfg.Rules = filterSharedChildren(cfg.Rules)
-	reply(w, 200, cfg)
+	return cfg, nil
 }
 func (s *Server) ack(w http.ResponseWriter, r *http.Request) {
 	var in contract.Ack

@@ -62,6 +62,10 @@ func (a *Agent) request(ctx context.Context, method, path string, body, out any)
 		return e
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if path == "/agent/leases/prefetch" || path == "/agent/leases/retire" {
+		// Older panels ignore this header and retain their original response.
+		req.Header.Set("X-TFP-Lease-Config", "1")
+	}
 	if token := a.Store.Identity().Token; token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -73,7 +77,7 @@ func (a *Agent) request(ctx context.Context, method, path string, body, out any)
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return &httpStatusError{method: method, path: path, status: res.StatusCode}
 	}
-	if out != nil {
+	if out != nil && res.StatusCode != http.StatusNoContent {
 		return json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(out)
 	}
 	return nil
@@ -141,20 +145,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	if interval == 0 {
 		interval = 5 * time.Second
 	}
-	// Registration's first configuration attempt precedes probe publication.
-	if e = a.syncConfig(ctx); e != nil {
-		log.Printf("agent config: %v", e)
-	}
 	workersCtx, stopWorkers := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	var usageHealthy, probeHealthy atomic.Bool
-	workers.Go(func() {
-		a.runSync(workersCtx, "usage", time.Second, a.Store.usageWake, 25*time.Millisecond, func(ctx context.Context) error {
-			err := a.syncUsage(ctx)
-			usageHealthy.Store(err == nil)
-			return err
-		})
-	})
 	workers.Go(func() {
 		a.runSync(workersCtx, "lease prefetch", 100*time.Millisecond, a.Store.leaseWake, 10*time.Millisecond, func(ctx context.Context) error {
 			if a.Upgrader != nil && a.Store.pauseTCPGrowth.Load() {
@@ -165,6 +158,21 @@ func (a *Agent) Run(ctx context.Context) error {
 			return a.syncPrefetch(ctx)
 		})
 	})
+	defer func() { stopWorkers(); workers.Wait() }()
+	workers.Go(func() {
+		a.runSync(workersCtx, "usage", time.Second, a.Store.usageWake, 25*time.Millisecond, func(ctx context.Context) error {
+			err := a.syncUsage(ctx)
+			usageHealthy.Store(err == nil)
+			return err
+		})
+	})
+	// Cached authorized listeners can already serve traffic. Prefetch and
+	// usage settlement must run during the first GET/ACK rather than spending
+	// their finite lease while waiting for two control-plane round trips.
+	// Probes and upgrade health still follow the first config attempt.
+	if e = a.syncConfig(ctx); e != nil {
+		log.Printf("agent config: %v", e)
+	}
 	workers.Go(func() {
 		a.runSync(workersCtx, "probe", interval, nil, 0, func(ctx context.Context) error {
 			err := a.syncProbe(ctx)
@@ -172,7 +180,6 @@ func (a *Agent) Run(ctx context.Context) error {
 			return err
 		})
 	})
-	defer func() { stopWorkers(); workers.Wait() }()
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
@@ -226,11 +233,15 @@ func (a *Agent) Step(ctx context.Context) error {
 }
 
 func (a *Agent) syncConfig(ctx context.Context) error {
-	a.configMu.Lock()
-	defer a.configMu.Unlock()
 	var c contract.Config
 	if e := a.request(ctx, "GET", "/agent/config", nil, &c); e != nil {
 		return e
+	}
+	a.configMu.Lock()
+	// A lease response may already have applied a newer full snapshot while
+	// this GET was in flight. Acknowledge the current policy instead.
+	if c.Version < a.Runtime.Version() {
+		c = a.Store.Config()
 	}
 	applyErr := a.Runtime.Apply(c, true)
 	ack := contract.Ack{TLSIngressStatuses: a.Runtime.TLSIngressStatuses(), RuleStatuses: a.Runtime.PolicyStatuses(), Services: a.Runtime.Services.Statuses(), Capabilities: a.capabilities(), AgentVersion: Version, Version: c.Version, AppliedVersion: a.Runtime.Version(), UpgradeKeySHA256: a.upgradeKeySHA256()}
@@ -238,6 +249,8 @@ func (a *Agent) syncConfig(ctx context.Context) error {
 	if applyErr != nil {
 		ack.Error = applyErr.Error()
 	}
+	// Slow ACKs must not block applying a funded standby from another worker.
+	a.configMu.Unlock()
 	ackErr := a.request(ctx, "POST", "/agent/ack", ack, nil)
 	var status *httpStatusError
 	if errors.As(ackErr, &status) && status.status == http.StatusConflict {
@@ -249,13 +262,33 @@ func (a *Agent) syncConfig(ctx context.Context) error {
 	return errors.Join(applyErr, ackErr)
 }
 
+func (a *Agent) applyLeaseConfig(c *contract.Config) error {
+	if c == nil {
+		return nil
+	}
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
+	if c.Version <= a.Runtime.Version() {
+		return nil
+	}
+	// Apply performs the same identity, policy, lease and durable-state checks
+	// as a GET response. ACK remains on the normal configuration worker.
+	if e := a.Runtime.Apply(*c, true); e != nil {
+		wake(a.Store.configWake)
+		return e
+	}
+	a.Store.requestUsage()
+	wake(a.Store.configWake)
+	return nil
+}
+
 func (a *Agent) syncUsage(ctx context.Context) error {
 	a.usageMu.Lock()
 	defer a.usageMu.Unlock()
 	var errs []error
 	errs = append(errs, a.Store.FlushCredits())
 	for _, id := range a.Store.renewals() {
-		if err := a.Store.Retire(id); err != nil {
+		if err := a.Store.retireRenewal(id); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -271,8 +304,12 @@ func (a *Agent) syncPrefetch(ctx context.Context) error {
 	defer a.prefetchMu.Unlock()
 	var errs []error
 	for _, request := range a.Store.prefetches() {
+		if !a.Store.beginPrefetch(request) {
+			continue
+		}
 		var result struct {
-			LeaseID string `json:"lease_id"`
+			LeaseID string           `json:"lease_id"`
+			Config  *contract.Config `json:"config,omitempty"`
 		}
 		if e := a.request(ctx, "POST", "/agent/leases/prefetch", request, &result); e != nil {
 			var status *httpStatusError
@@ -285,8 +322,12 @@ func (a *Agent) syncPrefetch(ctx context.Context) error {
 				errs = append(errs, e)
 			}
 		} else if result.LeaseID != "" {
+			if e := a.applyLeaseConfig(result.Config); e != nil {
+				errs = append(errs, e)
+			}
 			wake(a.Store.configWake)
 		}
+		a.Store.endPrefetch(request)
 	}
 	return errors.Join(errs...)
 }
@@ -396,13 +437,19 @@ func (a *Agent) retire(ctx context.Context) error {
 			LeaseID string `json:"lease_id"`
 			Used    int64  `json:"used_bytes,string"`
 		}{id, used}
-		if e := a.request(ctx, "POST", "/agent/leases/retire", req, nil); e != nil {
+		var result struct {
+			Config *contract.Config `json:"config,omitempty"`
+		}
+		if e := a.request(ctx, "POST", "/agent/leases/retire", req, &result); e != nil {
 			errs = append(errs, e)
 			continue
 		}
 		if e := a.Store.ConfirmRetired(id); e != nil {
 			errs = append(errs, e)
 			continue
+		}
+		if e := a.applyLeaseConfig(result.Config); e != nil {
+			errs = append(errs, e)
 		}
 		wake(a.Store.configWake)
 	}

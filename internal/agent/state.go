@@ -52,6 +52,7 @@ type stateRequest struct {
 	n           int
 	creditPrime bool
 	creditSize  int64
+	renewalOnly bool
 	done        chan error
 }
 type Store struct {
@@ -82,6 +83,7 @@ type Store struct {
 	fastFailed       atomic.Bool
 	pauseTCPGrowth   atomic.Bool
 	rates            map[string]leaseRateSample
+	prefetching      map[string]string
 	nextHistoryPrune time.Time
 	expandedCredits  bool
 	// Test hooks run under mu, and are nil in production.
@@ -289,6 +291,18 @@ func (s *Store) process(batch []*stateRequest) {
 			continue
 		}
 		if r.event.Kind != "charge" {
+			if r.renewalOnly {
+				stillDue := false
+				for _, rule := range s.state.Config.Rules {
+					if rule.Lease != nil && rule.Lease.ID == r.event.LeaseID {
+						stillDue = s.renewalDueLocked(rule, time.Now())
+						break
+					}
+				}
+				if !stillDue {
+					continue
+				}
+			}
 			if e := s.validateEvent(r.event); e != nil {
 				results[i] = e
 				continue
@@ -629,44 +643,54 @@ func (s *Store) renewals() []string {
 	now := time.Now()
 	var ids []string
 	for _, r := range s.state.Config.Rules {
-		l := r.Lease
-		if !r.Enabled || l == nil {
-			continue
-		}
-		if _, retired := s.state.Retired[l.ID]; retired {
-			continue
-		}
-		used := s.state.Used[l.ID]
-		s.creditMu.Lock()
-		for _, c := range s.credits {
-			if c.window.LeaseID == l.ID {
-				used += c.used - c.window.Confirmed
-			}
-		}
-		s.creditMu.Unlock()
-		low := used > 0 && l.Bytes-used <= min(l.Bytes/8, 64<<10)
-		if r.LeasePipeline && r.StandbyLease != nil {
-			// Leave enough tail for one relay read; waiting for byte-exact
-			// exhaustion strands odd-sized remainders and prevents promotion.
-			low = used > 0 && l.Bytes-used < 32<<10
-			standbyUsed := s.state.Used[r.StandbyLease.ID]
-			s.creditMu.Lock()
-			for _, c := range s.credits {
-				if c.window.LeaseID == r.StandbyLease.ID {
-					standbyUsed += c.used - c.window.Confirmed
-				}
-			}
-			s.creditMu.Unlock()
-			// Spending the standby proves that the flow has already switched.
-			// Return any primary remainder, including idle opposite-direction
-			// reservations, and let the panel promote/prefetch the next lease.
-			low = low || standbyUsed > 0
-		}
-		if low || !now.Add(15*time.Second).Before(minTime(s.state.Config.ValidUntil, l.ExpiresAt)) {
-			ids = append(ids, l.ID)
+		if s.renewalDueLocked(r, now) {
+			ids = append(ids, r.Lease.ID)
 		}
 	}
 	return ids
+}
+
+func (s *Store) renewalDueLocked(r contract.Rule, now time.Time) bool {
+	l := r.Lease
+	if !r.Enabled || l == nil {
+		return false
+	}
+	if _, retired := s.state.Retired[l.ID]; retired {
+		return false
+	}
+	used := s.state.Used[l.ID]
+	s.creditMu.Lock()
+	for _, c := range s.credits {
+		if c.window.LeaseID == l.ID {
+			used += c.used - c.window.Confirmed
+		}
+	}
+	s.creditMu.Unlock()
+	low := used > 0 && l.Bytes-used <= min(l.Bytes/8, 64<<10)
+	if r.LeasePipeline && r.StandbyLease == nil && s.prefetching[r.ID] == l.ID {
+		// Keep the primary eligible on the panel until the in-flight
+		// standby arrives. Retiring first races a funded prefetch into a
+		// stale request and restarts the stream on a tiny initial lease.
+		low = false
+	}
+	if r.LeasePipeline && r.StandbyLease != nil {
+		// Leave enough tail for one relay read; waiting for byte-exact
+		// exhaustion strands odd-sized remainders and prevents promotion.
+		low = used > 0 && l.Bytes-used < 32<<10
+		standbyUsed := s.state.Used[r.StandbyLease.ID]
+		s.creditMu.Lock()
+		for _, c := range s.credits {
+			if c.window.LeaseID == r.StandbyLease.ID {
+				standbyUsed += c.used - c.window.Confirmed
+			}
+		}
+		s.creditMu.Unlock()
+		// Spending the standby proves that the flow has already switched.
+		// Return any primary remainder, including idle opposite-direction
+		// reservations, and let the panel promote/prefetch the next lease.
+		low = low || standbyUsed > 0
+	}
+	return low || !now.Add(15*time.Second).Before(minTime(s.state.Config.ValidUntil, l.ExpiresAt))
 }
 func randomID() (string, error) {
 	b := make([]byte, 16)
@@ -675,6 +699,12 @@ func randomID() (string, error) {
 }
 func (s *Store) Retire(id string) error {
 	return s.submit(&stateRequest{event: stateEvent{Kind: "retire", LeaseID: id}})
+}
+
+func (s *Store) retireRenewal(id string) error {
+	// A prefetch or config can arrive after the worker lists renewals. Recheck
+	// under the writer's state lock before closing credits and persisting it.
+	return s.submit(&stateRequest{event: stateEvent{Kind: "retire", LeaseID: id}, renewalOnly: true})
 }
 func (s *Store) Retirements() map[string]int64 {
 	s.mu.Lock()

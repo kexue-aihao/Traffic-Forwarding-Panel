@@ -178,7 +178,8 @@ func main() {
 	model("Audit", schema{"id": str, "user_id": str, "action": str, "target": str, "created_at": date}, "id", "user_id", "action", "target", "created_at")
 	model("RetireLease", schema{"lease_id": str, "used_bytes": money}, "lease_id", "used_bytes")
 	model("LeasePrefetch", schema{"rule_id": str, "lease_id": str, "raw_budget": money}, "rule_id", "lease_id", "raw_budget")
-	model("LeasePrefetched", schema{"lease_id": str}, "lease_id")
+	model("LeasePrefetched", schema{"lease_id": str, "config": ref("Config")}, "lease_id")
+	model("LeaseConfiguration", schema{"config": ref("Config")}, "config")
 	model("UsageAuditPage", schema{"items": array(ref("UsageRecord")), "total": num}, "items", "total")
 	model("UsageAccepted", schema{"accepted": ids}, "accepted")
 	model("RuleDiagnosticCheck", schema{"name": str, "ok": flag, "detail": str}, "name", "ok", "detail")
@@ -511,6 +512,9 @@ func main() {
 			success["content"] = schema{"application/json": schema{"schema": ref(r.response)}}
 		}
 		responses[r.status] = success
+		if r.path == "/agent/leases/retire" {
+			responses["200"] = schema{"description": "Committed retirement with an optional complete configuration snapshot", "content": schema{"application/json": schema{"schema": ref("LeaseConfiguration")}}}
+		}
 		if r.auth == "provider" {
 			success["content"] = schema{"text/plain": schema{"schema": scalar("string")}}
 		} else if r.path == "/probes/events" {
@@ -529,6 +533,9 @@ func main() {
 			operation["security"] = []any{schema{"cookieSession": []string{}}, schema{"ownerBearer": []string{}}}
 		}
 		params := []any{}
+		if r.path == "/agent/leases/prefetch" || r.path == "/agent/leases/retire" {
+			params = append(params, schema{"name": "X-TFP-Lease-Config", "in": "header", "schema": schema{"const": "1"}, "description": "Optional: include the same authorized full configuration as GET /agent/config after the committed lease operation. If snapshot compilation fails, preserve the original response and retry normal polling."})
+		}
 		for _, part := range strings.Split(r.path, "/") {
 			if strings.HasPrefix(part, "{") {
 				params = append(params, schema{"name": strings.Trim(part, "{}"), "in": "path", "required": true, "schema": scalar("string")})

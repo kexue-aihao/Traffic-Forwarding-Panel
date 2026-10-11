@@ -173,16 +173,9 @@ func (s *Server) prefetchLease(w http.ResponseWriter, r *http.Request) {
 			leaseID = rule.StandbyLease.ID
 			return nil
 		}
-		m, ok := new(big.Rat).SetString(leaseMultiplier(rule, g))
-		if !ok || m.Sign() <= 0 {
-			return errors.New("invalid multiplier")
-		}
-		b := new(big.Int).Mul(big.NewInt(in.RawBudget), m.Num())
-		b.Add(b, new(big.Int).Sub(m.Denom(), big.NewInt(1)))
-		b.Quo(b, m.Denom())
-		budget := int64(256 << 20)
-		if b.IsInt64() {
-			budget = min(budget, max(16<<20, b.Int64()))
+		budget, e := boundedLeaseBudget(in.RawBudget, leaseMultiplier(rule, g))
+		if e != nil {
+			return e
 		}
 		l, e := s.allocateStandbyTx(r.Context(), tx, rule, leaseMultiplier(rule, g), budget)
 		if e != nil || l == nil {
@@ -206,5 +199,40 @@ func (s *Server) prefetchLease(w http.ResponseWriter, r *http.Request) {
 		fail(w, status, "lease prefetch unavailable")
 		return
 	}
-	reply(w, 200, map[string]string{"lease_id": leaseID})
+	response := map[string]any{"lease_id": leaseID}
+	if cfg := s.leaseResponseConfig(r, node); cfg != nil {
+		response["config"] = cfg
+	}
+	reply(w, 200, response)
+}
+
+func boundedLeaseBudget(raw int64, multiplier string) (int64, error) {
+	m, ok := new(big.Rat).SetString(multiplier)
+	if !ok || m.Sign() <= 0 {
+		return 0, errors.New("invalid multiplier")
+	}
+	b := new(big.Int).Mul(big.NewInt(raw), m.Num())
+	b.Add(b, new(big.Int).Sub(m.Denom(), big.NewInt(1)))
+	b.Quo(b, m.Denom())
+	if !b.IsInt64() {
+		return 256 << 20, nil
+	}
+	return min(256<<20, max(16<<20, b.Int64())), nil
+}
+
+// The allocation/retirement is already committed. An optional snapshot may
+// fail independently; preserve the committed result and let normal polling
+// retry config rather than turning this optimization into an upgrade barrier.
+func (s *Server) leaseResponseConfig(r *http.Request, node string) *contract.Config {
+	if r.Header.Get("X-TFP-Lease-Config") != "1" {
+		return nil
+	}
+	if e := s.refreshLeases(r.Context(), node); e != nil {
+		return nil
+	}
+	cfg, e := s.nodeConfig(r.Context(), node)
+	if e != nil {
+		return nil
+	}
+	return &cfg
 }

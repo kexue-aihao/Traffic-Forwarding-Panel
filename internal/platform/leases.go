@@ -97,6 +97,7 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 			if legacyLimits {
 				rule.Lease.Limits = contract.ResourceLimits{}
 			}
+			retiredPrimary := false
 			valid := allowed && rule.Lease != nil && rule.Lease.ExpiresAt.After(time.Now())
 			if valid {
 				var retired int
@@ -104,6 +105,7 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 					return e
 				}
 				valid = retired == 0
+				retiredPrimary = retired != 0
 			}
 			if valid && rule.Lease.EntitlementID != "admin-test" {
 				if s.opts.LeaseCurrent == nil {
@@ -137,6 +139,17 @@ func (s *Server) refreshLeases(ctx context.Context, node string) error {
 			promoted := rule.Lease != nil
 			if allowed && s.opts.Entitlements != nil && !promoted {
 				if a, ok := s.opts.Entitlements.(interface {
+					AllocateBudgetWithMultiplier(context.Context, *sql.Tx, string, string, string, string, int64) (*contract.Lease, error)
+				}); ok && pipeline && retiredPrimary && oldLease != nil {
+					// A delayed pipeline may need a replacement before a standby
+					// is published. Preserve its learned finite budget instead of
+					// restarting a hot stream at 16 MiB on every slow round trip.
+					budget, err := boundedLeaseBudget(oldLease.Bytes, leaseMultiplier(rule, g))
+					if err != nil {
+						return err
+					}
+					rule.Lease, e = a.AllocateBudgetWithMultiplier(ctx, tx, rule.UserID, rule.ID, node, leaseMultiplier(rule, g), budget)
+				} else if a, ok := s.opts.Entitlements.(interface {
 					AllocateWithMultiplier(context.Context, *sql.Tx, string, string, string, string) (*contract.Lease, error)
 				}); ok {
 					rule.Lease, e = a.AllocateWithMultiplier(ctx, tx, rule.UserID, rule.ID, node, leaseMultiplier(rule, g))
@@ -235,6 +248,10 @@ func (s *Server) retireLease(w http.ResponseWriter, r *http.Request) {
 	})
 	if e != nil {
 		fail(w, 409, "retirement requires matching persisted usage and valid lease")
+		return
+	}
+	if cfg := s.leaseResponseConfig(r, node); cfg != nil {
+		reply(w, http.StatusOK, map[string]any{"config": cfg})
 		return
 	}
 	w.WriteHeader(204)
