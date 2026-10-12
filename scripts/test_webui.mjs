@@ -613,10 +613,40 @@ try {
         assert.deepEqual(overlaps, [], `API labels overlap at ${width}px`);
       }
       if (apiViewport) await page.setViewportSize(apiViewport);
-      await page.goto(base + "/admin#/operations");
-      await page.getByRole("heading", {name: "运营与任务", exact: true}).waitFor();
-      const rulesCard = page.locator("section.card").filter({has: page.getByRole("heading", {name: "规则导入与导出"})});
-      await rulesCard.locator("details > summary").click();
+      const rulesDialog = page.locator("dialog");
+      for (const workspace of ["/", "/admin"]) {
+        await page.goto(base + workspace + "#/operations");
+        await page.getByRole("heading", {name: "运营与任务", exact: true}).waitFor();
+        assert.equal(await page.getByRole("heading", {name: "规则导入与导出", exact: true}).count(), 0);
+        assert.equal(await page.getByLabel("规则 JSON", {exact: true}).count(), 0);
+        assert.equal(await page.getByRole("button", {name: "创建导出任务", exact: true}).count(), 0);
+
+        await page.goto(base + workspace + "#/rules");
+        await page.getByRole("heading", {name: "转发规则", exact: true}).waitFor();
+        const actionStyles = await page.locator(".page-heading button").evaluateAll(buttons => buttons.map(button => {
+          const style = getComputedStyle(button);
+          return {background: style.background, borderRadius: style.borderRadius, fontSize: style.fontSize};
+        }));
+        assert.equal(actionStyles.length, 3);
+        assert.deepEqual(actionStyles[0], actionStyles[2], "导入按钮沿用新增按钮样式");
+        assert.deepEqual(actionStyles[1], actionStyles[2], "导出按钮沿用新增按钮样式");
+        await page.getByRole("button", {name: "导出", exact: true}).click();
+        await rulesDialog.getByRole("heading", {name: "导出转发规则", exact: true}).waitFor();
+        assert.equal(new URL(page.url()).hash, "#/rules", "导出直接在规则页打开");
+        await rulesDialog.getByLabel("导出格式", {exact: true}).waitFor();
+        await rulesDialog.getByRole("button", {name: "关闭", exact: true}).click();
+        await rulesDialog.waitFor({state: "detached"});
+
+        await page.getByRole("button", {name: "导入", exact: true}).click();
+        await rulesDialog.getByRole("heading", {name: "导入转发规则", exact: true}).waitFor();
+        assert.equal(new URL(page.url()).hash, "#/rules", "导入直接在规则页打开");
+        await rulesDialog.getByLabel("规则 JSON", {exact: true}).waitFor();
+        if (workspace === "/") {
+          await rulesDialog.getByRole("button", {name: "关闭", exact: true}).click();
+          await rulesDialog.waitFor({state: "detached"});
+          assert.equal(await page.evaluate(() => document.activeElement?.textContent.trim()), "导入");
+        }
+      }
       await pickOption(page, "规则数据格式", "port-jsonl");
       await pickOption(page, "导入目标", "n1::g1");
       const sourceRules = [
@@ -624,8 +654,8 @@ try {
         {dest: ["155.117.155.225:61547", "155.117.155.35:61547"], listen_port: 35267, name: "YXJP5", proxy_protocol: 0},
       ];
       await page.getByLabel("规则 JSON", {exact: true}).fill(sourceRules.map(rule => JSON.stringify(rule)).join("\n"));
-      await rulesCard.getByRole("button", {name: "预览导入", exact: true}).click();
-      await rulesCard.getByText("第 2 条 · 将新增", {exact: true}).waitFor();
+      await rulesDialog.getByRole("button", {name: "预览导入", exact: true}).click();
+      await rulesDialog.getByText("第 2 条 · 将新增", {exact: true}).waitFor();
       assert.equal(importPreviewBody.rules.length, 2);
       assert.deepEqual(importPreviewBody.rules[0], {
         name: "YXTW1", node_id: "n1", group_id: "g1", network: "tcp", transport: "direct",
@@ -636,19 +666,32 @@ try {
         {target: "155.117.155.225:61547", weight: 1, disabled: false},
         {target: "155.117.155.35:61547", weight: 1, disabled: false},
       ]);
-      await rulesCard.getByRole("button", {name: "确认并创建导入任务", exact: true}).click();
+      await rulesDialog.getByRole("button", {name: "确认并创建导入任务", exact: true}).click();
       await page.getByText("导入任务已创建。", {exact: false}).waitFor();
       assert.equal(importedRulesBody.rules[0].proxy_protocol.send, "v2");
 
+      await rulesDialog.getByRole("button", {name: "关闭", exact: true}).click();
+      await rulesDialog.waitFor({state: "detached"});
+      await page.getByRole("button", {name: "导出", exact: true}).click();
+      await rulesDialog.getByRole("heading", {name: "导出转发规则", exact: true}).waitFor();
       await pickOption(page, "导出格式", "port-jsonl");
-      await rulesCard.getByRole("button", {name: "创建导出任务", exact: true}).click();
-      const exportRow = rulesCard.locator(".task-row").filter({hasText: "规则导出"});
+      await rulesDialog.getByRole("button", {name: "创建导出任务", exact: true}).click();
+      const exportRow = rulesDialog.locator(".task-row");
       await exportRow.getByRole("button", {name: "查看结果", exact: true}).click();
       const downloadPromise = page.waitForEvent("download");
-      await rulesCard.getByRole("button", {name: "下载 JSON Lines", exact: true}).click();
+      await rulesDialog.getByRole("button", {name: "下载 JSON Lines", exact: true}).click();
       const rulesDownload = await downloadPromise;
       assert.equal(rulesDownload.suggestedFilename(), "rules-export-fixture.jsonl");
       assert.equal(await readFile(await rulesDownload.path(), "utf8"), '{"dest":["151.242.188.224:61547"],"listen_port":57005,"name":"YXTW1","proxy_protocol":3}');
+
+      await pickOption(page, "导出格式", "panel");
+      const panelDownloadPromise = page.waitForEvent("download");
+      await rulesDialog.getByRole("button", {name: "下载 JSON", exact: true}).click();
+      const panelDownload = await panelDownloadPromise;
+      assert.equal(panelDownload.suggestedFilename(), "rules.export-export-fixture.json");
+      assert.equal(JSON.parse(await readFile(await panelDownload.path(), "utf8")).items[0].listen, ":57005");
+      await rulesDialog.getByRole("button", {name: "关闭", exact: true}).click();
+      await rulesDialog.waitFor({state: "detached"});
 
       await page.goto(base + "/admin#/api-docs");
       await page

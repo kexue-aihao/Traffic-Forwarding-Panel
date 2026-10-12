@@ -6,6 +6,7 @@ import Modal from "../components/Modal.vue";
 import NodeOperations from "../components/NodeOperations.vue";
 import OnboardPanel from "../components/OnboardPanel.vue";
 import GroupAdvanced from "../components/GroupAdvanced.vue";
+import RuleTransfer from "../components/RuleTransfer.vue";
 import { api, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
 import { displayTimeZoneLabel, formatDateTime } from "../core/format";
@@ -58,6 +59,15 @@ const busy = ref(false);
 const formError = ref("");
 const selected = ref<Row | null>(null);
 const operationNode = ref<Row | null>(null);
+const ruleTransfer = ref<"import" | "export" | null>(null);
+function openRuleTransfer(mode: "import" | "export", event: MouseEvent) {
+  if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus();
+  ruleTransfer.value = mode;
+}
+function closeRuleTransfer() {
+  ruleTransfer.value = null;
+  void load();
+}
 // 设备组页的「设备」：这台组里有哪些机器、版本与心跳怎么样，并从这里进节点运维。
 // 服务器页去掉之后这些信息落在组上 —— 机器本来就是组的成员，不是另一份清单。
 const devicesGroup = ref<Row | null>(null);
@@ -1355,16 +1365,31 @@ const labels: Record<string, string> = {
           >
         </p>
       </div>
-      <button
+      <div
         v-if="
           allowed &&
           (resource === 'rules' || (canManage && resource !== 'audit'))
         "
-        class="primary"
-        @click="open()"
+        class="actions"
       >
-        新增
-      </button>
+        <template v-if="resource === 'rules'">
+          <button
+            type="button"
+            class="primary"
+            @click="openRuleTransfer('import', $event)"
+          >
+            导入
+          </button>
+          <button
+            type="button"
+            class="primary"
+            @click="openRuleTransfer('export', $event)"
+          >
+            导出
+          </button>
+        </template>
+        <button class="primary" @click="open()">新增</button>
+      </div>
     </div>
     <p v-if="!allowed" class="card">无权访问此资源。</p>
     <template v-else
@@ -1951,6 +1976,12 @@ const labels: Record<string, string> = {
         </fieldset>
       </form>
     </Modal>
+    <RuleTransfer
+      v-if="ruleTransfer"
+      :mode="ruleTransfer"
+      @close="closeRuleTransfer"
+      @changed="load"
+    />
     <Modal
       v-if="editing"
       :title="

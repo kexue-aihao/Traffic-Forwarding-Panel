@@ -1776,6 +1776,9 @@ try {
       );
       await user.getByRole("button", { name: "删除地址", exact: true }).click();
       await user.getByText("暂无通知地址。", { exact: true }).waitFor();
+      await user.getByRole("link", { name: "转发规则", exact: true }).click();
+      await user.getByRole("button", { name: "导出", exact: true }).click();
+      await user.getByRole("heading", { name: "导出转发规则", exact: true }).waitFor();
       await user
         .getByRole("button", { name: "创建导出任务", exact: true })
         .click();
@@ -1801,6 +1804,8 @@ try {
       await user
         .getByRole("button", { name: "下载 JSON", exact: true })
         .waitFor();
+      await user.locator("dialog").getByRole("button", { name: "关闭", exact: true }).click();
+      await user.locator("dialog").waitFor({ state: "detached" });
       await user.getByRole("link", { name: "套餐与钱包", exact: true }).click();
       await user
         .getByLabel("自动续费套餐", { exact: true })
@@ -2443,8 +2448,9 @@ try {
         .waitFor();
       await admin.keyboard.press("Escape");
       await admin.locator("dialog").waitFor({ state: "detached" });
-      await user.getByRole("link", { name: "运营与任务", exact: true }).click();
-      await user.getByText("导入规则", { exact: true }).click();
+      await user.getByRole("link", { name: "转发规则", exact: true }).click();
+      await user.getByRole("button", { name: "导入", exact: true }).click();
+      await user.getByRole("heading", { name: "导入转发规则", exact: true }).waitFor();
       const importDraft = {
         name: "preview draft",
         node_id: registered.node_id,
@@ -2505,6 +2511,9 @@ try {
         await user.waitForTimeout(100);
       }
       assert.ok(updated);
+      await user.locator("dialog").getByRole("button", { name: "关闭", exact: true }).click();
+      await user.locator("dialog").waitFor({ state: "detached" });
+      await user.getByRole("row").filter({ hasText: "updated draft" }).waitFor();
       await admin
         .getByRole("link", { name: "运营与任务", exact: true })
         .click();

@@ -1,22 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import Select from "../components/Select.vue";
 import { api, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
 import { formatDateTime } from "../core/format";
-import {
-  exportPortForwardJSONL,
-  parsePortForwardJSONL,
-} from "../core/ruleFormats";
 const admin = computed(() => adminSite && state.user?.role === "admin");
-interface Task {
-  id: string;
-  kind: string;
-  status: string;
-  result?: string;
-  error?: string;
-  created_at: string;
-}
 interface Hook {
   format?: string;
   id: string;
@@ -68,8 +56,7 @@ interface Refund {
   amount_cents: string;
   reason: string;
 }
-const tasks = ref<Task[]>([]),
-  hooks = ref<Hook[]>([]),
+const hooks = ref<Hook[]>([]),
   deliveries = ref<Delivery[]>([]),
   commissions = ref<Commission[]>([]),
   codes = ref<Code[]>([]),
@@ -81,8 +68,7 @@ const error = ref(""),
   secretLabel = ref("");
 const redeem = ref(""),
   invitation = ref(""),
-  hookURL = ref(""),
-  importJSON = ref("");
+  hookURL = ref("");
 const codeForm = ref({ amount_cents: "1000", plan_id: "", max_uses: 1 });
 const rate = ref(0),
   refundOrder = ref(""),
@@ -91,25 +77,7 @@ const rate = ref(0),
   evidence = ref(""),
   commissionID = ref(""),
   commissionReason = ref("");
-const detail = ref<Task | null>(null);
-const importMode = ref("create"),
-  importFormat = ref("panel"),
-  importTarget = ref(""),
-  importTargets = ref<
-    { key: string; nodeID: string; groupID: string; label: string }[]
-  >([]),
-  importTargetsLoaded = ref(false),
-  exportFormat = ref("panel"),
-  preview = ref<
-    {
-      index: number;
-      action: string;
-      error?: string;
-      rule?: Record<string, unknown>;
-    }[]
-  >([]),
-  previewSource = ref(""),
-  hookFormat = ref("webhook"),
+const hookFormat = ref("webhook"),
   telegramToken = ref(""),
   telegramChatID = ref(""),
   purchaseID = ref(""),
@@ -118,91 +86,6 @@ const importMode = ref("create"),
   funding = ref<
     { order_id: string; amount_cents: string; refunded_cents: string }[]
   >([]);
-watch([importJSON, importMode, importFormat, importTarget], () => {
-  preview.value = [];
-  previewSource.value = "";
-});
-watch(importFormat, (format) => {
-  if (format !== "port-jsonl" || importTargetsLoaded.value) return;
-  void run(async () => {
-    const [groups, nodes] = await Promise.all([
-      choices("/groups"),
-      choices("/nodes"),
-    ]);
-    const entryGroups = new Map(
-      groups
-        .filter((group) => !group.type || group.type === "entry")
-        .map((group) => [String(group.id), String(group.name)]),
-    );
-    importTargets.value = nodes.flatMap((node) =>
-      ((node.group_ids as string[]) || [])
-        .filter((groupID) => entryGroups.has(groupID))
-        .map((groupID) => ({
-          key: `${String(node.id)}::${groupID}`,
-          nodeID: String(node.id),
-          groupID,
-          label: `${entryGroups.get(groupID)} · ${String(node.name)}`,
-        })),
-    );
-    importTargetsLoaded.value = true;
-  });
-});
-
-async function choices(path: string) {
-  const items: Record<string, unknown>[] = [];
-  for (let page = 1; ; page++) {
-    const separator = path.includes("?") ? "&" : "?";
-    const batch = await api<{
-      items: Record<string, unknown>[];
-      total: number;
-    }>(`${path}${separator}page_size=100&page=${page}`);
-    items.push(...(batch.items || []));
-    if (!batch.items.length || items.length >= batch.total) return items;
-  }
-}
-
-function importRulesFromInput(): Record<string, unknown>[] {
-  if (importFormat.value === "port-jsonl") {
-    const target = importTargets.value.find(
-      (item) => item.key === importTarget.value,
-    );
-    return parsePortForwardJSONL(
-      importJSON.value,
-      target?.nodeID || "",
-      target?.groupID || "",
-    );
-  }
-  const parsed: unknown = JSON.parse(importJSON.value);
-  const rules = Array.isArray(parsed)
-    ? parsed
-    : parsed && typeof parsed === "object" && "items" in parsed
-      ? (parsed as { items?: unknown }).items
-      : null;
-  if (!Array.isArray(rules) || !rules.length)
-    throw Error("请输入规则数组或包含 items 的导出文件内容。");
-  if (
-    rules.some(
-      (rule) => !rule || typeof rule !== "object" || Array.isArray(rule),
-    )
-  ) {
-    throw Error("规则列表中的每一项都必须是对象。");
-  }
-  return rules as Record<string, unknown>[];
-}
-
-async function previewImport() {
-  await run(async () => {
-    const rules = importRulesFromInput();
-    preview.value = (
-      await api<{ items: typeof preview.value }>(
-        "/tasks/rules/preview",
-        "POST",
-        { rules, mode: importMode.value },
-      )
-    ).items;
-    previewSource.value = importJSON.value;
-  });
-}
 async function lookupFunding() {
   await run(async () => {
     funding.value = (
@@ -348,9 +231,6 @@ async function load() {
   loading.value = true;
   error.value = "";
   const results = await Promise.allSettled([
-    api<{ items: Task[] }>("/tasks").then((x) => {
-      if (active) tasks.value = x.items || [];
-    }),
     api<{ items: Hook[] }>("/webhooks").then((x) => {
       if (active) hooks.value = x.items || [];
     }),
@@ -515,74 +395,6 @@ async function resolveCommission(action: string) {
     await load();
   });
 }
-async function exportRules() {
-  await run(async () => {
-    await api("/tasks/rules/export", "POST", {
-      idempotency_key: crypto.randomUUID(),
-    });
-    await load();
-  });
-}
-async function importRules() {
-  await run(async () => {
-    const rules = importRulesFromInput();
-    if (
-      !preview.value.length ||
-      previewSource.value !== importJSON.value ||
-      preview.value.some((x) => x.error)
-    )
-      throw Error("请先预览并修正冲突。");
-    const confirmed = rules.map((rule: Record<string, unknown>, i: number) => ({
-      ...rule,
-      version: preview.value[i]?.rule?.version || 0,
-    }));
-    const payload = { rules: confirmed, mode: importMode.value };
-    await api("/tasks/rules/import", "POST", {
-      ...payload,
-      idempotency_key: await keyFor("import", payload),
-    });
-    importJSON.value = "";
-    notice("导入任务已创建。");
-    await load();
-  });
-}
-async function viewTask(t: Task) {
-  await run(async () => {
-    detail.value = await api<Task>(`/tasks/${encodeURIComponent(t.id)}`);
-  });
-}
-async function cancelTask(t: Task) {
-  await run(async () => {
-    await api(`/tasks/${encodeURIComponent(t.id)}/cancel`, "POST", {});
-    await load();
-  });
-}
-function download() {
-  if (!detail.value?.result) return;
-  let content = detail.value.result;
-  let filename = `${detail.value.kind}-${detail.value.id}.json`;
-  let type = "application/json";
-  if (
-    detail.value.kind === "rules.export" &&
-    exportFormat.value === "port-jsonl"
-  ) {
-    try {
-      content = exportPortForwardJSONL(content);
-    } catch (e) {
-      error.value = errorText(e);
-      return;
-    }
-    filename = `rules-${detail.value.id}.jsonl`;
-    type = "application/x-ndjson";
-  }
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 async function readRefunds() {
   refunds.value =
     (
@@ -627,7 +439,7 @@ onMounted(load);
       <div>
         <p class="eyebrow">OPERATIONS</p>
         <h1>运营与任务</h1>
-        <p class="muted">兑换、邀请、通知与批量规则操作。</p>
+        <p class="muted">兑换、邀请、通知与运营管理。</p>
       </div>
       <button :disabled="loading || busy" @click="load">刷新列表</button>
     </div>
@@ -647,8 +459,9 @@ onMounted(load);
               v-model="redeem"
               required
               maxlength="128"
-              autocomplete="off" /></label
-          ><div class="form-actions">
+              autocomplete="off"
+          /></label>
+          <div class="form-actions">
             <button class="primary" :disabled="busy">兑换</button>
           </div>
         </form>
@@ -704,10 +517,12 @@ onMounted(load);
               placeholder="例如 -1001234567890 或 @频道用户名"
               required
               maxlength="128"
-              autocomplete="off" /></label
-          ><p class="small muted">
-            先在 Telegram 的 @BotFather 创建机器人，再把机器人拉入群组并授予发消息权限。Chat ID
-            可通过 Telegram Bot API 的 getUpdates 获取。
+              autocomplete="off"
+          /></label>
+          <p class="small muted">
+            先在 Telegram 的 @BotFather
+            创建机器人，再把机器人拉入群组并授予发消息权限。Chat ID 可通过
+            Telegram Bot API 的 getUpdates 获取。
           </p>
         </template>
         <label v-else
@@ -784,124 +599,6 @@ onMounted(load);
         {{ formatDateTime(e.created_at) }} ·
         {{ eventNames[e.kind] || e.kind }} · {{ eventSummary(e) }}
       </p>
-    </section>
-    <section class="card">
-      <h2>规则导入与导出</h2>
-      <p class="muted">
-        导出最多 10,000 条规则，导入最多 1,000
-        条。导出不包含隧道密钥；加密规则导入前需要补充密钥。取消保留已完成的规则。
-      </p>
-      <div class="form-grid">
-        <label
-          >导出格式<Select v-model="exportFormat" aria-label="导出格式">
-            <option value="panel">面板规则 JSON</option>
-            <option value="port-jsonl">端口转发 JSON Lines</option>
-          </Select></label
-        >
-        <div class="form-actions">
-          <button :disabled="busy" @click="exportRules">创建导出任务</button>
-        </div>
-      </div>
-      <details>
-        <summary>导入规则</summary>
-        <form @submit.prevent="previewImport">
-          <label
-            >规则数据格式<Select
-              v-model="importFormat"
-              aria-label="规则数据格式"
-            >
-              <option value="panel">面板规则 JSON</option>
-              <option value="port-jsonl">端口转发 JSON Lines</option>
-            </Select></label
-          >
-          <label v-if="importFormat === 'port-jsonl'"
-            >导入目标<Select v-model="importTarget" aria-label="导入目标">
-              <option value="">选择入口节点和设备组</option>
-              <option
-                v-for="target in importTargets"
-                :key="target.key"
-                :value="target.key"
-              >
-                {{ target.label }}
-              </option>
-            </Select></label
-          >
-          <p v-if="importFormat === 'port-jsonl'" class="small muted">
-            每行一条 TCP 规则；多个 dest 会导入为等权后端，proxy_protocol 3
-            会向目标发送 PROXY v2。
-          </p>
-          <label
-            >导入方式<Select v-model="importMode" aria-label="导入方式">
-              <option value="create">新增规则</option>
-              <option value="update_by_port">
-                按节点、协议和端口更新已有规则
-              </option>
-            </Select></label
-          >
-          <label
-            >规则 JSON<textarea
-              v-model="importJSON"
-              required
-              rows="7"
-              maxlength="1000000"
-              spellcheck="false"
-            /></label
-          ><button
-            :disabled="
-              busy || (importFormat === 'port-jsonl' && !importTargetsLoaded)
-            "
-          >
-            预览导入
-          </button>
-          <div v-if="preview.length">
-            <p v-for="item in preview" :key="item.index">
-              第 {{ item.index + 1 }} 条 ·
-              {{
-                item.error || (item.action === "update" ? "将更新" : "将新增")
-              }}
-            </p>
-            <div class="form-actions">
-              <button
-                type="button"
-                class="primary"
-                :disabled="busy || preview.some((x) => x.error)"
-                @click="importRules"
-              >
-                确认并创建导入任务
-              </button>
-            </div>
-          </div>
-        </form>
-      </details>
-      <p v-if="!tasks.length" class="muted">暂无任务。</p>
-      <div v-for="t in tasks" :key="t.id" class="task-row">
-        <span
-          >{{ t.kind === "rules.import" ? "规则导入" : "规则导出" }} ·
-          {{ status(t.status) }} · {{ formatDateTime(t.created_at) }}</span
-        ><button :disabled="busy" @click="viewTask(t)">查看结果</button
-        ><button
-          v-if="['pending', 'running'].includes(t.status)"
-          :disabled="busy"
-          @click="cancelTask(t)"
-        >
-          取消任务
-        </button>
-      </div>
-      <section v-if="detail">
-        <h3>任务结果</h3>
-        <p>{{ status(detail.status) }} {{ detail.error }}</p>
-        <pre v-if="detail.result" class="operation-result">{{
-          detail.result
-        }}</pre>
-        <button v-if="detail.result" @click="download">
-          下载
-          {{
-            detail.kind === "rules.export" && exportFormat === "port-jsonl"
-              ? "JSON Lines"
-              : "JSON"
-          }}</button
-        ><button @click="detail = null">收起</button>
-      </section>
     </section>
     <template v-if="admin">
       <section v-if="policy" class="card">
