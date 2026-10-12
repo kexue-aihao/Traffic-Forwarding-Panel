@@ -396,8 +396,8 @@ func TestTCPSharedAccountResponsibilityAndIdleCreditReclaim(t *testing.T) {
 		cfg.Rules = append(cfg.Rules, r)
 	}
 	// Each rule needs a distinct listener address for Runtime.Apply.
-	for i := range cfg.Rules {
-		cfg.Rules[i].Listen = ingressTestAddress(t)
+	for i, address := range ingressTestAddresses(t, len(cfg.Rules)) {
+		cfg.Rules[i].Listen = address
 	}
 	if err := runtime.Apply(cfg, true); err != nil {
 		t.Fatal(err)

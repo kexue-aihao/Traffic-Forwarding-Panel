@@ -168,14 +168,27 @@ func TestTLSIngressConcurrentRoutes(t *testing.T) {
 	}
 }
 func ingressTestAddress(t testing.TB) string {
+	return ingressTestAddresses(t, 1)[0]
+}
+
+func ingressTestAddresses(t testing.TB, count int) []string {
 	t.Helper()
-	l, e := net.Listen("tcp", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
+	listeners := make([]net.Listener, 0, count)
+	defer func() {
+		for _, l := range listeners {
+			_ = l.Close()
+		}
+	}()
+	addresses := make([]string, count)
+	for i := range count {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		listeners = append(listeners, l)
+		addresses[i] = l.Addr().String()
 	}
-	a := l.Addr().String()
-	l.Close()
-	return a
+	return addresses
 }
 func ingressTestOrigin(t testing.TB, pair tls.Certificate, tag byte) string {
 	t.Helper()

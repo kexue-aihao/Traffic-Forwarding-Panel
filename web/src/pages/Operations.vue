@@ -4,6 +4,10 @@ import Select from "../components/Select.vue";
 import { api, errorText } from "../core/api";
 import { adminSite, state, notice } from "../core/state";
 import { formatDateTime } from "../core/format";
+import {
+  exportPortForwardJSONL,
+  parsePortForwardJSONL,
+} from "../core/ruleFormats";
 const admin = computed(() => adminSite && state.user?.role === "admin");
 interface Task {
   id: string;
@@ -89,6 +93,13 @@ const rate = ref(0),
   commissionReason = ref("");
 const detail = ref<Task | null>(null);
 const importMode = ref("create"),
+  importFormat = ref("panel"),
+  importTarget = ref(""),
+  importTargets = ref<
+    { key: string; nodeID: string; groupID: string; label: string }[]
+  >([]),
+  importTargetsLoaded = ref(false),
+  exportFormat = ref("panel"),
   preview = ref<
     {
       index: number;
@@ -107,16 +118,81 @@ const importMode = ref("create"),
   funding = ref<
     { order_id: string; amount_cents: string; refunded_cents: string }[]
   >([]);
-watch([importJSON, importMode], () => {
+watch([importJSON, importMode, importFormat, importTarget], () => {
   preview.value = [];
   previewSource.value = "";
 });
+watch(importFormat, (format) => {
+  if (format !== "port-jsonl" || importTargetsLoaded.value) return;
+  void run(async () => {
+    const [groups, nodes] = await Promise.all([
+      choices("/groups"),
+      choices("/nodes"),
+    ]);
+    const entryGroups = new Map(
+      groups
+        .filter((group) => !group.type || group.type === "entry")
+        .map((group) => [String(group.id), String(group.name)]),
+    );
+    importTargets.value = nodes.flatMap((node) =>
+      ((node.group_ids as string[]) || [])
+        .filter((groupID) => entryGroups.has(groupID))
+        .map((groupID) => ({
+          key: `${String(node.id)}::${groupID}`,
+          nodeID: String(node.id),
+          groupID,
+          label: `${entryGroups.get(groupID)} · ${String(node.name)}`,
+        })),
+    );
+    importTargetsLoaded.value = true;
+  });
+});
+
+async function choices(path: string) {
+  const items: Record<string, unknown>[] = [];
+  for (let page = 1; ; page++) {
+    const separator = path.includes("?") ? "&" : "?";
+    const batch = await api<{
+      items: Record<string, unknown>[];
+      total: number;
+    }>(`${path}${separator}page_size=100&page=${page}`);
+    items.push(...(batch.items || []));
+    if (!batch.items.length || items.length >= batch.total) return items;
+  }
+}
+
+function importRulesFromInput(): Record<string, unknown>[] {
+  if (importFormat.value === "port-jsonl") {
+    const target = importTargets.value.find(
+      (item) => item.key === importTarget.value,
+    );
+    return parsePortForwardJSONL(
+      importJSON.value,
+      target?.nodeID || "",
+      target?.groupID || "",
+    );
+  }
+  const parsed: unknown = JSON.parse(importJSON.value);
+  const rules = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && "items" in parsed
+      ? (parsed as { items?: unknown }).items
+      : null;
+  if (!Array.isArray(rules) || !rules.length)
+    throw Error("请输入规则数组或包含 items 的导出文件内容。");
+  if (
+    rules.some(
+      (rule) => !rule || typeof rule !== "object" || Array.isArray(rule),
+    )
+  ) {
+    throw Error("规则列表中的每一项都必须是对象。");
+  }
+  return rules as Record<string, unknown>[];
+}
+
 async function previewImport() {
   await run(async () => {
-    const parsed = JSON.parse(importJSON.value);
-    const rules = Array.isArray(parsed) ? parsed : parsed.items;
-    if (!Array.isArray(rules) || !rules.length)
-      throw Error("请输入规则数组或导出文件。");
+    const rules = importRulesFromInput();
     preview.value = (
       await api<{ items: typeof preview.value }>(
         "/tasks/rules/preview",
@@ -449,14 +525,7 @@ async function exportRules() {
 }
 async function importRules() {
   await run(async () => {
-    const parsed: unknown = JSON.parse(importJSON.value);
-    const rules = Array.isArray(parsed)
-      ? parsed
-      : parsed && typeof parsed === "object" && "items" in parsed
-        ? parsed.items
-        : null;
-    if (!Array.isArray(rules) || !rules.length)
-      throw Error("请输入规则数组或包含 items 的导出文件内容。");
+    const rules = importRulesFromInput();
     if (
       !preview.value.length ||
       previewSource.value !== importJSON.value ||
@@ -490,11 +559,27 @@ async function cancelTask(t: Task) {
 }
 function download() {
   if (!detail.value?.result) return;
-  const blob = new Blob([detail.value.result], { type: "application/json" });
+  let content = detail.value.result;
+  let filename = `${detail.value.kind}-${detail.value.id}.json`;
+  let type = "application/json";
+  if (
+    detail.value.kind === "rules.export" &&
+    exportFormat.value === "port-jsonl"
+  ) {
+    try {
+      content = exportPortForwardJSONL(content);
+    } catch (e) {
+      error.value = errorText(e);
+      return;
+    }
+    filename = `rules-${detail.value.id}.jsonl`;
+    type = "application/x-ndjson";
+  }
+  const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${detail.value.kind}-${detail.value.id}.json`;
+  a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -706,10 +791,45 @@ onMounted(load);
         导出最多 10,000 条规则，导入最多 1,000
         条。导出不包含隧道密钥；加密规则导入前需要补充密钥。取消保留已完成的规则。
       </p>
-      <button :disabled="busy" @click="exportRules">创建导出任务</button>
+      <div class="form-grid">
+        <label
+          >导出格式<Select v-model="exportFormat" aria-label="导出格式">
+            <option value="panel">面板规则 JSON</option>
+            <option value="port-jsonl">端口转发 JSON Lines</option>
+          </Select></label
+        >
+        <div class="form-actions">
+          <button :disabled="busy" @click="exportRules">创建导出任务</button>
+        </div>
+      </div>
       <details>
         <summary>导入规则</summary>
         <form @submit.prevent="previewImport">
+          <label
+            >规则数据格式<Select
+              v-model="importFormat"
+              aria-label="规则数据格式"
+            >
+              <option value="panel">面板规则 JSON</option>
+              <option value="port-jsonl">端口转发 JSON Lines</option>
+            </Select></label
+          >
+          <label v-if="importFormat === 'port-jsonl'"
+            >导入目标<Select v-model="importTarget" aria-label="导入目标">
+              <option value="">选择入口节点和设备组</option>
+              <option
+                v-for="target in importTargets"
+                :key="target.key"
+                :value="target.key"
+              >
+                {{ target.label }}
+              </option>
+            </Select></label
+          >
+          <p v-if="importFormat === 'port-jsonl'" class="small muted">
+            每行一条 TCP 规则；多个 dest 会导入为等权后端，proxy_protocol 3
+            会向目标发送 PROXY v2。
+          </p>
           <label
             >导入方式<Select v-model="importMode" aria-label="导入方式">
               <option value="create">新增规则</option>
@@ -726,7 +846,13 @@ onMounted(load);
               maxlength="1000000"
               spellcheck="false"
             /></label
-          ><button :disabled="busy">预览导入</button>
+          ><button
+            :disabled="
+              busy || (importFormat === 'port-jsonl' && !importTargetsLoaded)
+            "
+          >
+            预览导入
+          </button>
           <div v-if="preview.length">
             <p v-for="item in preview" :key="item.index">
               第 {{ item.index + 1 }} 条 ·
@@ -767,7 +893,13 @@ onMounted(load);
         <pre v-if="detail.result" class="operation-result">{{
           detail.result
         }}</pre>
-        <button v-if="detail.result" @click="download">下载 JSON</button
+        <button v-if="detail.result" @click="download">
+          下载
+          {{
+            detail.kind === "rules.export" && exportFormat === "port-jsonl"
+              ? "JSON Lines"
+              : "JSON"
+          }}</button
         ><button @click="detail = null">收起</button>
       </section>
     </section>
